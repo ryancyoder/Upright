@@ -87,10 +87,10 @@ collapse that back into one try/catch. If still too quiet, raise `REVIEW_GAIN`.
 
 ## Open items
 
-**Uncommitted here:** the transcript panel was just moved from a bottom strip
-to a left column (1/3 width, full height) with the photo rail still a full-width
-row beneath. That change is in this file but was never deployed — pushing this
-repo will ship it. Verify on device.
+**Just shipped, verify on device:** the transcript panel moved from a bottom
+strip to a left column (**25%** width, full height) with the photo rail still a
+full-width row beneath. Width lives in one place — `.review-transcript`'s
+`flex`/`max-width` pair; keep the two in sync.
 
 **Not yet built**
 - Session reload / browse past sessions. `GET /sessions/:id` exists but nothing calls it.
