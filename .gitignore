@@ -1,0 +1,19 @@
+# macOS / editors
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/
+
+# Vercel
+.vercel
+
+# Local secrets — nothing here should ever be committed.
+# Supabase service-role key lives in Edge Function secrets, ASSEMBLYAI_API_KEY
+# lives in Supabase → Edge Functions → Secrets. Neither belongs in this repo.
+.env
+.env.*
+!.env.example
+
+# Field exports
+*.zip

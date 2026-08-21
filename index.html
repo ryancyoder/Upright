@@ -1,0 +1,2027 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Upright — Site Session</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  :root{
+    --ink:#eae7de; --dim:#8b887f;
+    --bg:#14140f; --bg2:#1c1c15; --line:#33322a;
+    --live:#c4432b; --live-glow:rgba(196,67,43,0.35);
+    --flat:#5a7a63;
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
+  html,body{height:100%;}
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font-family:-apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+    overflow:hidden; height:100vh; height:100dvh;
+  }
+  .frame{display:flex; flex-direction:column; height:100%;}
+
+  header{
+    flex:0 0 auto; padding:12px 16px;
+    display:flex; align-items:center; justify-content:space-between; gap:10px;
+    border-bottom:1px solid var(--line); background:var(--bg2);
+    z-index:40; position:relative;
+  }
+  .brand{font-weight:700; font-size:14px; letter-spacing:0.14em; text-transform:uppercase;}
+  .brand span{color:var(--dim); font-weight:400; letter-spacing:0.02em; text-transform:none; margin-left:8px;}
+  .head-right{display:flex; align-items:center; gap:10px;}
+  .state-pill{
+    display:flex; align-items:center; gap:7px;
+    font-size:12px; letter-spacing:0.08em; text-transform:uppercase;
+    color:var(--dim); padding:6px 12px;
+    border:1px solid var(--line); border-radius:100px; white-space:nowrap;
+  }
+  .dot{width:7px;height:7px;border-radius:50%;background:var(--dim); transition:background .2s;}
+  .state-pill.recording{color:var(--live); border-color:var(--live);}
+  .state-pill.recording .dot{background:var(--live); box-shadow:0 0 0 4px var(--live-glow); animation:pulse 1.4s infinite;}
+  .state-pill.paused{color:var(--flat); border-color:var(--flat);}
+  .state-pill.paused .dot{background:var(--flat);}
+  @keyframes pulse{0%,100%{box-shadow:0 0 0 3px var(--live-glow);}50%{box-shadow:0 0 0 7px transparent;}}
+  .end-btn{
+    padding:8px 16px; border-radius:100px;
+    border:1px solid var(--live); background:transparent; color:var(--live);
+    font-size:12px; font-weight:700; letter-spacing:0.06em; text-transform:uppercase;
+    display:none;
+  }
+  .end-btn.show{display:block;}
+
+  .stage{flex:1 1 auto; position:relative; background:#000; min-height:0;}
+  video{width:100%; height:100%; object-fit:cover; display:block;}
+
+  .tilt-readout{
+    position:absolute; bottom:12px; left:12px;
+    font-size:11px; color:rgba(234,231,222,0.55);
+    background:rgba(0,0,0,0.4); padding:5px 9px; border-radius:6px;
+    font-variant-numeric:tabular-nums; z-index:5; pointer-events:none;
+  }
+  .gps-readout{
+    position:absolute; bottom:12px; left:50%; transform:translateX(-50%);
+    font-size:11px; color:rgba(234,231,222,0.55);
+    background:rgba(0,0,0,0.4); padding:5px 9px; border-radius:6px;
+    z-index:5; pointer-events:none; white-space:nowrap;
+  }
+  .clock{
+    position:absolute; top:12px; right:12px;
+    font-size:20px; font-weight:700; font-variant-numeric:tabular-nums;
+    color:var(--live); background:rgba(0,0,0,0.45);
+    padding:6px 12px; border-radius:8px; z-index:5; display:none; pointer-events:none;
+  }
+  .clock.show{display:block;}
+  .clock.paused-style{color:var(--flat);}
+
+  /* Right-thumb pin/snap button — camera view only */
+  .snap-btn{
+    position:absolute; right:18px; bottom:80px;
+    width:76px; height:76px; border-radius:50%;
+    border:4px solid rgba(255,255,255,0.9);
+    background:rgba(196,67,43,0.85);
+    z-index:6; display:none;
+    box-shadow:0 4px 20px rgba(0,0,0,0.5);
+  }
+  .snap-btn.show{display:block;}
+  .snap-btn:active{transform:scale(0.92);}
+  .snap-flash{
+    position:absolute; inset:0; background:#fff; opacity:0;
+    pointer-events:none; z-index:7;
+  }
+  .snap-flash.go{animation:flash .25s ease-out;}
+  @keyframes flash{0%{opacity:0.8;}100%{opacity:0;}}
+  .pin-count{
+    position:absolute; right:26px; bottom:52px;
+    font-size:12px; font-weight:700; color:#fff;
+    background:rgba(0,0,0,0.55); padding:3px 10px; border-radius:100px;
+    z-index:6; display:none; pointer-events:none;
+  }
+  .pin-count.show{display:block;}
+
+  /* Map — shown when flat */
+  .mapwrap{
+    position:absolute; inset:0; z-index:10;
+    display:none; flex-direction:column;
+  }
+  .mapwrap.show{display:flex;}
+  #map{flex:1 1 auto; min-height:0; background:#0a0a08;}
+  .map-toolbar{
+    flex:0 0 auto;
+    display:flex; align-items:center; gap:8px;
+    padding:8px 12px;
+    background:var(--bg2);
+    border-top:1px solid var(--line);
+    overflow-x:auto;
+  }
+  .mt-btn{
+    padding:8px 14px; border-radius:8px;
+    border:1px solid var(--line); background:transparent; color:var(--ink);
+    font-size:13px; font-weight:600; white-space:nowrap;
+  }
+  .mt-btn.active{background:var(--ink); color:var(--bg);}
+  .mt-label{font-size:11px; color:var(--dim); white-space:nowrap;}
+  .map-toolbar input[type=range]{width:90px;}
+  .overlay-controls{display:none; align-items:center; gap:8px;}
+  .overlay-controls.show{display:flex;}
+  #planFile{display:none;}
+
+  .leaflet-container{font:inherit;}
+  .pin-popup img{width:180px; border-radius:8px; display:block; margin-bottom:6px;}
+  .pin-popup textarea{width:180px; height:44px; font-size:13px; border-radius:6px; border:1px solid #ccc; padding:4px;}
+  .pin-popup .adj{font-size:11px; color:#5a7a63; font-weight:700;}
+  .pin-popup .dlp{font-size:12px; margin-top:4px; display:inline-block;}
+
+  /* Start overlay + done panel */
+  .stage-overlay{
+    position:absolute; inset:0; z-index:20;
+    display:flex; align-items:center; justify-content:center;
+    flex-direction:column; gap:14px; padding:32px; text-align:center;
+    background:var(--bg);
+  }
+  .stage-overlay.hidden{display:none;}
+  .overlay-icon{width:52px; height:74px; border:3px solid var(--dim); border-radius:8px; position:relative;}
+  .overlay-icon::after{content:''; position:absolute; top:9px; left:50%; transform:translateX(-50%); width:16px; height:16px; border-radius:50%; border:2px solid var(--dim);}
+  .overlay-title{font-size:17px; font-weight:600; max-width:300px;}
+  .overlay-sub{font-size:13px; color:var(--dim); max-width:290px; line-height:1.5;}
+  .go-btn{
+    margin-top:6px; padding:13px 28px;
+    background:var(--ink); color:var(--bg);
+    border:none; border-radius:100px;
+    font-size:14px; font-weight:700; letter-spacing:0.04em; text-transform:uppercase;
+  }
+  .err{color:#c4432b; display:none;}
+
+  .done-panel{
+    position:absolute; inset:0; background:var(--bg); z-index:30;
+    display:none; flex-direction:column; align-items:center; justify-content:center;
+    gap:14px; padding:32px; text-align:center;
+  }
+  .done-panel.show{display:flex;}
+  .done-title{font-size:18px; font-weight:700;}
+  .done-sub{font-size:13px; color:var(--dim); max-width:300px; line-height:1.5;}
+  .done-actions{display:flex; flex-direction:column; gap:10px; width:100%; max-width:300px;}
+  .dl-btn{
+    padding:14px 20px; border-radius:12px; border:none;
+    background:var(--ink); color:var(--bg); font-size:14px; font-weight:700;
+  }
+  .dl-btn.secondary{background:transparent; color:var(--ink); border:1px solid var(--line);}
+
+  /* Annotation sidebar — camera view only */
+  .anno-bar{
+    position:absolute; left:10px; top:50%; transform:translateY(-50%);
+    display:none; flex-direction:column; gap:10px; z-index:6;
+  }
+  .anno-bar.show{display:flex;}
+  .anno-btn{
+    width:58px; height:58px; border-radius:14px;
+    border:2px solid rgba(255,255,255,0.35);
+    background:rgba(0,0,0,0.45); color:#fff;
+    display:flex; align-items:center; justify-content:center;
+    padding:0; box-shadow:0 3px 12px rgba(0,0,0,0.4);
+  }
+  .anno-btn:active{transform:scale(0.93);}
+  .anno-btn.active{border-color:#fff; background:rgba(255,255,255,0.22);}
+  .anno-btn svg{width:32px; height:32px; display:block;}
+  .anno-overlay{
+    position:absolute; left:50%; top:50%; transform:translate(-50%,-50%);
+    pointer-events:none; z-index:5; display:none;
+  }
+  .anno-overlay.show{display:block;}
+
+  /* Draw-over editor */
+  .draw-wrap{
+    position:absolute; inset:0; z-index:15; display:none;
+    flex-direction:column; background:#000;
+  }
+  .draw-wrap.show{display:flex;}
+  .draw-stage{flex:1 1 auto; position:relative; min-height:0; display:flex; align-items:center; justify-content:center;}
+  #drawCanvas{max-width:100%; max-height:100%; touch-action:none; display:block;}
+  .draw-toolbar{
+    flex:0 0 auto; display:flex; align-items:center; gap:10px;
+    padding:10px 12px; background:var(--bg2); border-top:1px solid var(--line);
+  }
+  .draw-swatches{display:flex; gap:8px;}
+  .sw{width:38px; height:38px; border-radius:50%; border:3px solid rgba(255,255,255,0.25); padding:0;}
+  .sw.active{border-color:#fff; transform:scale(1.08);}
+  .draw-spacer{flex:1 1 auto;}
+
+  /* Marker scale sliders (thumb, around shutter) */
+  .scale-track{position:absolute; width:0; height:0; z-index:6; display:none;}
+  .scale-track.show{display:block;}
+  .st-inner{
+    position:absolute; left:50%; top:50%;
+    width:150px; height:30px; border-radius:100px;
+    background:rgba(0,0,0,0.42); border:2px solid rgba(255,255,255,0.30);
+    box-shadow:0 3px 12px rgba(0,0,0,0.4);
+    touch-action:none;
+  }
+  .st-inner::after{
+    content:''; position:absolute; left:10px; right:10px; top:50%;
+    height:2px; margin-top:-1px; background:rgba(255,255,255,0.22); border-radius:2px;
+  }
+  .st-knob{
+    position:absolute; top:50%; left:50%;
+    width:30px; height:30px; border-radius:50%;
+    background:rgba(255,255,255,0.92); border:2px solid rgba(0,0,0,0.35);
+    transform:translate(-50%,-50%); pointer-events:none;
+  }
+
+  /* Photo filmstrip under the map */
+  .film-strip{
+    flex:0 0 auto; display:none; gap:8px;
+    padding:8px 10px; overflow-x:auto; overflow-y:hidden;
+    background:var(--bg2); border-top:1px solid var(--line);
+    -webkit-overflow-scrolling:touch;
+  }
+  .film-strip.show{display:flex;}
+  .film-thumb{
+    position:relative; flex:0 0 auto;
+    width:172px; height:128px; border-radius:10px; overflow:hidden;
+    border:3px solid transparent; background:#000; padding:0;
+    transition:border-color .15s, transform .15s;
+  }
+  .film-thumb img{width:100%; height:100%; object-fit:cover; display:block;}
+  .film-thumb .fnum{
+    position:absolute; left:3px; bottom:3px;
+    font-size:13px; font-weight:700; color:#fff;
+    background:rgba(0,0,0,0.65); padding:2px 9px; border-radius:100px;
+  }
+  .film-thumb.sel{border-color:var(--live); transform:scale(1.04);}
+  .film-thumb.nogps{opacity:0.55;}
+  .leaflet-marker-icon.pin-sel{
+    filter:drop-shadow(0 0 0 #c4432b) drop-shadow(0 0 6px #c4432b) drop-shadow(0 0 10px #c4432b);
+  }
+
+
+
+  /* Map annotation modes */
+  .mode-bar{
+    position:absolute; top:10px; left:50%; transform:translateX(-50%);
+    z-index:1000; display:none; align-items:center; gap:10px;
+    padding:8px 12px; border-radius:12px;
+    background:rgba(20,20,15,0.92); border:1px solid var(--line);
+    box-shadow:0 4px 18px rgba(0,0,0,0.5); max-width:94vw;
+  }
+  .mode-bar.show{display:flex;}
+  .mode-msg{font-size:13px; color:var(--ink); white-space:nowrap;}
+  .mode-msg b{color:var(--live);}
+  .mb-btn{
+    padding:7px 12px; border-radius:8px; border:1px solid var(--line);
+    background:transparent; color:var(--ink); font-size:13px; font-weight:600; white-space:nowrap;
+  }
+  .mb-btn.go{background:var(--ink); color:var(--bg); border-color:var(--ink);}
+  .measure-label{
+    background:rgba(20,20,15,0.9); border:1px solid var(--line);
+    color:var(--ink); border-radius:8px; padding:4px 8px;
+    font-size:12px; font-weight:700; white-space:pre-line; text-align:center;
+  }
+  .measure-label::before{display:none;}
+
+  /* Session review — audio-driven playback with synced silent video + photo rail */
+  .review-panel{
+    position:absolute; inset:0; background:var(--bg); z-index:35;
+    display:none; flex-direction:column;
+  }
+  .review-panel.show{display:flex;}
+  .review-head{
+    flex:0 0 auto; padding:12px 16px; display:flex; align-items:center; justify-content:space-between;
+    border-bottom:1px solid var(--line); background:var(--bg2);
+  }
+  .review-head .title{font-weight:700; font-size:14px; letter-spacing:0.1em; text-transform:uppercase;}
+  .review-close{
+    padding:7px 14px; border-radius:100px; border:1px solid var(--line);
+    background:transparent; color:var(--ink); font-size:12px; font-weight:700;
+  }
+  /* Body row: transcript column on the left, video stage filling the rest. */
+  .review-body{
+    flex:1 1 auto; display:flex; flex-direction:row; min-height:0; min-width:0;
+  }
+  .review-stage{
+    flex:1 1 auto; position:relative; background:#000; min-height:0; min-width:0;
+    display:flex; align-items:center; justify-content:center;
+  }
+  .review-stage video{width:100%; height:100%; object-fit:contain; display:block;}
+  .review-noclip{
+    position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+    color:var(--dim); font-size:13px; text-align:center; padding:24px;
+  }
+  .review-photo-rail{
+    flex:0 0 auto; display:flex; gap:8px; padding:8px 10px; overflow-x:auto;
+    background:var(--bg2); border-top:1px solid var(--line); -webkit-overflow-scrolling:touch;
+  }
+  .review-photo{
+    position:relative; flex:0 0 auto; width:96px; height:72px; border-radius:8px; overflow:hidden;
+    border:3px solid transparent; opacity:0.45; transition:opacity .15s, border-color .15s, transform .15s;
+    background:#000; padding:0;
+  }
+  .review-photo img{width:100%; height:100%; object-fit:cover; display:block;}
+  .review-photo.active{opacity:1; border-color:var(--live); transform:scale(1.05);}
+  .review-transcript{
+    flex:0 0 33.333%; max-width:33.333%; min-width:0; min-height:0;
+    display:none; flex-direction:column;
+    background:var(--bg2); border-right:1px solid var(--line);
+  }
+  .review-transcript.show{display:flex;}
+  .rt-status{padding:9px 16px; font-size:12px; color:var(--dim); display:none;}
+  .rt-list{overflow-y:auto; -webkit-overflow-scrolling:touch;}
+  /* Narrow column: stack the speaker label above the text rather than
+     losing half the width to a side-by-side label. */
+  .rt-line{
+    display:flex; flex-direction:column; gap:2px; width:100%; text-align:left;
+    background:transparent; border:none; border-left:3px solid transparent;
+    padding:8px 12px; color:var(--ink); font-size:13px; line-height:1.45;
+    overflow-wrap:anywhere;
+  }
+  .rt-line .spk{color:var(--dim); font-weight:700; font-size:10px; text-transform:uppercase; letter-spacing:0.04em;}
+  .rt-line.active{background:rgba(196,67,43,0.14); border-left-color:var(--live);}
+  .rt-line:active{background:rgba(255,255,255,0.06);}
+  .rt-retry{margin-left:8px;}
+  .review-transport{
+    flex:0 0 auto; display:flex; align-items:center; gap:10px;
+    padding:12px 16px; background:var(--bg2); border-top:1px solid var(--line);
+  }
+  .review-playbtn{
+    width:44px; height:44px; border-radius:50%; border:none; flex:0 0 auto;
+    background:var(--ink); color:var(--bg); font-size:15px; display:flex; align-items:center; justify-content:center;
+  }
+  .review-scrub{flex:1 1 auto;}
+  .review-time{font-size:12px; color:var(--dim); font-variant-numeric:tabular-nums; white-space:nowrap;}
+</style>
+</head>
+<body>
+<div class="frame">
+
+  <header>
+    <div class="brand">Upright<span>site session</span></div>
+    <div class="head-right">
+      <div class="state-pill" id="statePill"><span class="dot"></span><span id="stateText">Ready</span></div>
+      <button class="end-btn" id="endBtn">End session</button>
+    </div>
+  </header>
+
+  <div class="stage">
+    <video id="live" autoplay playsinline muted></video>
+    <div class="tilt-readout" id="tiltReadout"></div>
+    <div class="gps-readout" id="gpsReadout"></div>
+    <div class="clock" id="clock">0:00</div>
+    <div class="anno-bar" id="annoBar">
+      <button class="anno-btn" id="annoArrow" aria-label="Arrow marker"></button>
+      <button class="anno-btn" id="annoSquare" aria-label="Square marker"></button>
+      <button class="anno-btn" id="annoCircle" aria-label="Circle marker"></button>
+      <button class="anno-btn" id="annoX" aria-label="X marker"></button>
+      <button class="anno-btn" id="annoDraw" aria-label="Snap and draw">✎</button>
+      <button class="anno-btn" id="annoColor" aria-label="Marker color"></button>
+    </div>
+    <div class="anno-overlay" id="annoOverlay"></div>
+    <div class="scale-track" id="scaleX" style="right:189px; bottom:118px;">
+      <div class="st-inner" data-axis="x" style="transform:translate(-50%,-50%) rotate(0deg);"><div class="st-knob"></div></div>
+    </div>
+    <div class="scale-track" id="scaleD" style="right:150px; bottom:212px;">
+      <div class="st-inner" data-axis="d" style="transform:translate(-50%,-50%) rotate(45deg);"><div class="st-knob"></div></div>
+    </div>
+    <div class="scale-track" id="scaleY" style="right:56px; bottom:251px;">
+      <div class="st-inner" data-axis="y" style="transform:translate(-50%,-50%) rotate(-90deg);"><div class="st-knob"></div></div>
+    </div>
+    <button class="snap-btn" id="snapBtn" aria-label="Snap photo pin"></button>
+    <div class="pin-count" id="pinCount"></div>
+    <div class="snap-flash" id="snapFlash"></div>
+
+    <div class="draw-wrap" id="drawWrap">
+      <div class="draw-stage"><canvas id="drawCanvas"></canvas></div>
+      <div class="draw-toolbar">
+        <div class="draw-swatches" id="drawSwatches"></div>
+        <div class="draw-spacer"></div>
+        <button class="mt-btn" id="drawUndo">Undo</button>
+        <button class="mt-btn" id="drawClear">Clear</button>
+        <button class="mt-btn" id="drawDone">Done</button>
+      </div>
+    </div>
+    <div class="mapwrap" id="mapwrap">
+      <div id="map"></div>
+      <div class="mode-bar" id="modeBar">
+        <span class="mode-msg" id="modeMsg"></span>
+        <button class="mb-btn" id="modeUndo">Undo</button>
+        <button class="mb-btn go" id="modeDone">Finish</button>
+        <button class="mb-btn" id="modeCancel">Cancel</button>
+      </div>
+      <div class="film-strip" id="filmStrip"></div>
+      <div class="map-toolbar">
+        <button class="mt-btn" id="importPlanBtn">Import plan</button>
+        <input type="file" id="planFile" accept="image/*">
+        <div class="overlay-controls" id="overlayControls">
+          <span class="mt-label">Opacity</span><input type="range" id="opSlider" min="10" max="100" value="60">
+          <span class="mt-label">Size</span><input type="range" id="scaleSlider" min="5" max="600" value="60">
+          <span class="mt-label">Rotate</span><input type="range" id="rotSlider" min="-180" max="180" value="0">
+          <button class="mt-btn" id="lockPlanBtn">Lock</button>
+        </div>
+        <button class="mt-btn" id="exportPinsBtn">Export pins</button>
+        <button class="mt-btn" id="centerBtn">My location</button>
+        <button class="mt-btn" id="sketchBtn">Sketch</button>
+        <button class="mt-btn" id="measureBtn">Measure</button>
+        <button class="mt-btn" id="lockExtentBtn">Lock extent</button>
+      </div>
+    </div>
+
+    <div class="stage-overlay" id="startOverlay">
+      <div class="overlay-icon"></div>
+      <div class="overlay-title">Record upright, map flat</div>
+      <div class="overlay-sub">Starting a session begins continuous audio recording for the whole visit. Stand the iPad up to also record silent video — the round button snaps a photo pin at your GPS position. Lay it flat and video pauses while the site map appears; audio keeps recording throughout.</div>
+      <button class="go-btn" id="enableBtn">Start session</button>
+      <div class="overlay-sub err" id="errorMsg"></div>
+    </div>
+
+    <div class="done-panel" id="donePanel">
+      <div class="done-title">Session complete</div>
+      <div class="done-sub" id="doneSub"></div>
+      <div class="done-actions">
+        <button class="dl-btn" id="reviewBtn">Review session</button>
+        <button class="dl-btn secondary" id="dlVideo">Download audio recording</button>
+        <button class="dl-btn secondary" id="dlPins">Download session (ZIP): audio + clips + pins</button>
+        <button class="dl-btn secondary" id="newSession">Start new session</button>
+      </div>
+    </div>
+
+    <div class="review-panel" id="reviewPanel">
+      <div class="review-head">
+        <span class="title">Session review</span>
+        <button class="review-close" id="reviewClose">Close</button>
+      </div>
+      <div class="review-body">
+        <div class="review-transcript" id="reviewTranscript">
+          <div class="rt-status" id="rtStatus"></div>
+          <div class="rt-list" id="rtList"></div>
+        </div>
+        <div class="review-stage">
+          <video id="reviewVideo" muted playsinline></video>
+          <div class="review-noclip" id="reviewNoClip">No video at this point — audio continues</div>
+        </div>
+      </div>
+      <div class="review-photo-rail" id="reviewPhotoRail"></div>
+      <div class="review-transport">
+        <button class="review-playbtn" id="reviewPlayBtn">►</button>
+        <input type="range" class="review-scrub" id="reviewScrub" min="0" max="1000" value="0">
+        <span class="review-time" id="reviewTime">0:00 / 0:00</span>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet-imageoverlay-rotated@0.2.1/Leaflet.ImageOverlay.Rotated.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script>
+(function(){
+  const $ = id => document.getElementById(id);
+  const liveVideo=$('live'), startOverlay=$('startOverlay'), enableBtn=$('enableBtn'),
+        errorMsg=$('errorMsg'), statePill=$('statePill'), stateText=$('stateText'),
+        tiltReadout=$('tiltReadout'), gpsReadout=$('gpsReadout'), clockEl=$('clock'),
+        endBtn=$('endBtn'), snapBtn=$('snapBtn'), snapFlash=$('snapFlash'), pinCount=$('pinCount'),
+        mapwrap=$('mapwrap'), donePanel=$('donePanel'), doneSub=$('doneSub'),
+        dlVideo=$('dlVideo'), dlPins=$('dlPins'), newSession=$('newSession'),
+        importPlanBtn=$('importPlanBtn'), planFile=$('planFile'), overlayControls=$('overlayControls'),
+        opSlider=$('opSlider'), scaleSlider=$('scaleSlider'), rotSlider=$('rotSlider'),
+        lockPlanBtn=$('lockPlanBtn'), exportPinsBtn=$('exportPinsBtn'), centerBtn=$('centerBtn'), lockExtentBtn=$('lockExtentBtn'),
+        annoDraw=$('annoDraw'), drawWrap=$('drawWrap'), drawCanvas=$('drawCanvas'),
+        drawSwatches=$('drawSwatches'), drawUndo=$('drawUndo'), drawClear=$('drawClear'), drawDone=$('drawDone'),
+        filmStrip=$('filmStrip'), sketchBtn=$('sketchBtn'), measureBtn=$('measureBtn'),
+        modeBar=$('modeBar'), modeMsg=$('modeMsg'), modeUndo=$('modeUndo'),
+        modeDone=$('modeDone'), modeCancel=$('modeCancel'),
+        reviewBtn=$('reviewBtn'), reviewPanel=$('reviewPanel'), reviewClose=$('reviewClose'),
+        reviewVideo=$('reviewVideo'), reviewNoClip=$('reviewNoClip'), reviewPhotoRail=$('reviewPhotoRail'),
+        reviewPlayBtn=$('reviewPlayBtn'), reviewScrub=$('reviewScrub'), reviewTime=$('reviewTime'),
+        reviewTranscript=$('reviewTranscript'), rtStatus=$('rtStatus'), rtList=$('rtList');
+
+  const UPRIGHT_ON=55, UPRIGHT_OFF=35, HOLD_MS=350;
+
+  // ---------- Supabase persistence ----------
+  // Fire-and-forget: every upload/write goes through the upright-api Edge
+  // Function (holds the service-role key) so recording itself never blocks
+  // on network. Failures are logged, not surfaced — local state (arrays,
+  // in-memory blobs) stays the source of truth for the current session;
+  // Supabase is where it lands for persistence/reload.
+  const SUPABASE_URL = 'https://ktgpjizfntdfpghalukx.supabase.co';
+  const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imt0Z3BqaXpmbnRkZnBnaGFsdWt4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODU4NTY4NDEsImV4cCI6MjEwMTQzMjg0MX0.HmOI4HsibG7xaxRcrXhdC3yAefflRdeu25Je3WuaT0U';
+  const API_BASE = SUPABASE_URL + '/functions/v1/upright-api';
+
+  function apiPost(path, bodyObj){
+    return fetch(API_BASE+path, {
+      method:'POST',
+      headers:{'Authorization':'Bearer '+SUPABASE_ANON_KEY, 'Content-Type':'application/json'},
+      body: JSON.stringify(bodyObj)
+    }).then(r=> r.ok ? r.json() : Promise.reject(new Error('HTTP '+r.status)))
+      .catch(e=>{ console.warn('[upright-api] POST '+path+' failed', e); return null; });
+  }
+  // Same as apiPost but returns the server's error body instead of null, so
+  // callers that need to SHOW a failure (rather than silently ignore it) can.
+  function apiPostVerbose(path, bodyObj){
+    return fetch(API_BASE+path, {
+      method:'POST',
+      headers:{'Authorization':'Bearer '+SUPABASE_ANON_KEY, 'Content-Type':'application/json'},
+      body: JSON.stringify(bodyObj)
+    }).then(r=> r.json().catch(()=>({error:'HTTP '+r.status}))
+                 .then(body=> ({ok:r.ok, status:r.status, body})))
+      .catch(e=> ({ok:false, status:0, body:{error:String(e && e.message || e)}}));
+  }
+  function apiGet(path){
+    return fetch(API_BASE+path, {
+      method:'GET',
+      headers:{'Authorization':'Bearer '+SUPABASE_ANON_KEY}
+    }).then(r=> r.ok ? r.json() : Promise.reject(new Error('HTTP '+r.status)))
+      .catch(e=>{ console.warn('[upright-api] GET '+path+' failed', e); return null; });
+  }
+  function apiPatch(path, bodyObj){
+    return fetch(API_BASE+path, {
+      method:'PATCH',
+      headers:{'Authorization':'Bearer '+SUPABASE_ANON_KEY, 'Content-Type':'application/json'},
+      body: JSON.stringify(bodyObj)
+    }).then(r=> r.ok ? r.json() : Promise.reject(new Error('HTTP '+r.status)))
+      .catch(e=>{ console.warn('[upright-api] PATCH '+path+' failed', e); return null; });
+  }
+  function apiUpload(path, file, metaObj){
+    const form=new FormData();
+    form.append('file', file);
+    if(metaObj) form.append('meta', JSON.stringify(metaObj));
+    return fetch(API_BASE+path, {
+      method:'POST',
+      headers:{'Authorization':'Bearer '+SUPABASE_ANON_KEY},
+      body: form
+    }).then(r=> r.ok ? r.json() : Promise.reject(new Error('HTTP '+r.status)))
+      .catch(e=>{ console.warn('[upright-api] upload '+path+' failed', e); return null; });
+  }
+  function dataUrlToBlob(dataUrl){
+    const [header, b64] = dataUrl.split(',');
+    const mime = (header.match(/data:(.*?);base64/)||[])[1] || 'image/jpeg';
+    const bin = atob(b64);
+    const arr = new Uint8Array(bin.length);
+    for(let i=0;i<bin.length;i++) arr[i]=bin.charCodeAt(i);
+    return new Blob([arr], {type:mime});
+  }
+
+  let audioStream=null, videoStream=null;
+  let audioRecorder=null, videoRecorder=null;
+  let audioChunks=[];
+  let clips=[]; // {startOffset, endOffset, blob} — offsets in ms from sessionT0
+  let currentClipChunks=[], currentClipStart=null;
+  let sessionActive=false, isPausedFlat=true;
+  let candidateState=null, candidateSince=0, currentlyUpright=false;
+  let recordedMs=0, segStart=0, clockTimer=null;
+  let finalAudioBlob=null, wakeLock=null;
+  let sessionT0=null;
+  let lastFix=null, geoWatchId=null;
+  let pins=[], pinSeq=0;
+  let map=null, myMarker=null, accCircle=null, mapInited=false;
+  let sessionId=null, sessionStartedAt=null;
+  let selectedPinId=null;
+
+  function uuid(){
+    if(window.crypto && crypto.randomUUID) return crypto.randomUUID();
+    const b=new Uint8Array(16); crypto.getRandomValues(b);
+    b[6]=(b[6]&0x0f)|0x40; b[8]=(b[8]&0x3f)|0x80;
+    const h=[...b].map(x=>x.toString(16).padStart(2,'0')).join('');
+    return h.slice(0,8)+'-'+h.slice(8,12)+'-'+h.slice(12,16)+'-'+h.slice(16,20)+'-'+h.slice(20);
+  }
+
+  // ---------- state UI ----------
+  function setState(mode){
+    statePill.classList.remove('recording','paused');
+    if(mode==='recording'){
+      statePill.classList.add('recording'); stateText.textContent='Recording';
+      clockEl.classList.remove('paused-style');
+    } else if(mode==='paused'){
+      statePill.classList.add('paused'); stateText.textContent='Paused — map';
+      clockEl.classList.add('paused-style');
+    } else stateText.textContent = mode || 'Ready';
+  }
+  function totalMs(){ return sessionT0 ? Date.now()-sessionT0 : 0; }
+  function updateClock(){
+    const s=Math.floor(totalMs()/1000);
+    clockEl.textContent=Math.floor(s/60)+':'+String(s%60).padStart(2,'0');
+  }
+
+  // ---------- recording ----------
+  function pickVideoMimeType(){
+    const c=['video/mp4','video/webm;codecs=vp9','video/webm;codecs=vp8','video/webm'];
+    for(const t of c){ if(window.MediaRecorder && MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(t)) return t; }
+    return '';
+  }
+  function pickAudioMimeType(){
+    const c=['audio/mp4','audio/webm'];
+    for(const t of c){ if(window.MediaRecorder && MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(t)) return t; }
+    return '';
+  }
+  async function startCamera(){
+    // Video-only — no audio track requested, so it's silent by construction
+    // and never contends with the mic the master audio recorder is using.
+    videoStream = await navigator.mediaDevices.getUserMedia({
+      video:{facingMode:'environment', width:{ideal:1280}, height:{ideal:720}}
+    });
+    liveVideo.srcObject = videoStream;
+  }
+  async function startAudioStream(){
+    audioStream = await navigator.mediaDevices.getUserMedia({
+      audio:{
+        echoCancellation:false,  // built for call audio; can flatten level with no far-end signal to cancel
+        noiseSuppression:false,  // can suppress speech-band signal along with noise
+        autoGainControl:true     // boosts quiet input toward a target level
+      }
+    });
+  }
+  function startVideoClip(){
+    currentClipChunks=[];
+    currentClipStart = sessionT0 ? Date.now()-sessionT0 : 0;
+    const mime=pickVideoMimeType();
+    try{ videoRecorder = mime ? new MediaRecorder(videoStream,{mimeType:mime}) : new MediaRecorder(videoStream); }
+    catch(e){ videoRecorder = new MediaRecorder(videoStream); }
+    videoRecorder.ondataavailable = e => { if(e.data && e.data.size) currentClipChunks.push(e.data); };
+    videoRecorder.onstop = ()=>{
+      const endOffset = sessionT0 ? Date.now()-sessionT0 : currentClipStart;
+      const type=(currentClipChunks[0] && currentClipChunks[0].type) || videoRecorder.mimeType || 'video/webm';
+      if(currentClipChunks.length){
+        const blob=new Blob(currentClipChunks,{type});
+        clips.push({startOffset:currentClipStart, endOffset, blob});
+        apiUpload('/sessions/'+sessionId+'/clips', blob, {startOffsetMs:currentClipStart, endOffsetMs:endOffset});
+      }
+      currentClipChunks=[]; currentClipStart=null;
+    };
+    videoRecorder.start(1000);
+  }
+  function stopVideoClip(cb){
+    if(videoRecorder && videoRecorder.state!=='inactive'){
+      const rec=videoRecorder, origOnStop=rec.onstop;
+      rec.onstop = (ev)=>{ if(origOnStop) origOnStop(ev); if(cb) cb(); };
+      try{ rec.stop(); }catch(e){ if(cb) cb(); }
+    } else if(cb) cb();
+  }
+  function startSession(){
+    audioChunks=[]; clips=[]; currentClipChunks=[]; currentClipStart=null;
+    sessionId=uuid(); sessionStartedAt=new Date().toISOString();
+    sessionT0=Date.now();
+    apiPost('/sessions', { id: sessionId, startedAt: sessionStartedAt });
+
+    const amime=pickAudioMimeType();
+    try{ audioRecorder = amime ? new MediaRecorder(audioStream,{mimeType:amime}) : new MediaRecorder(audioStream); }
+    catch(e){ audioRecorder = new MediaRecorder(audioStream); }
+    audioRecorder.ondataavailable = e => { if(e.data && e.data.size) audioChunks.push(e.data); };
+    audioRecorder.onstop = finalizeSession;
+    audioRecorder.start(1000); // master audio — continuous for the whole session, never paused
+
+    sessionActive=true; isPausedFlat=true;
+    recordedMs=0; segStart=0;
+    clockEl.classList.add('show'); endBtn.classList.add('show');
+    clockTimer=setInterval(updateClock,250);
+    setState('paused'); showMap(true);
+  }
+  function resumeRec(){
+    if(!sessionActive || !isPausedFlat) return;
+    isPausedFlat=false; segStart=Date.now();
+    startVideoClip();
+    setState('recording'); showMap(false);
+    snapBtn.classList.add('show'); annoBar.classList.add('show'); refreshAnnoUI(); updatePinCount();
+  }
+  function pauseRec(){
+    if(drawWrap.classList.contains('show')) return;
+    if(!sessionActive || isPausedFlat) return;
+    isPausedFlat=true;
+    if(segStart){ recordedMs += Date.now()-segStart; segStart=0; }
+    stopVideoClip();
+    setState('paused');
+    snapBtn.classList.remove('show'); annoBar.classList.remove('show'); annoOverlay.classList.remove('show'); pinCount.classList.remove('show');
+    scaleTracks.forEach(t=>t.classList.remove('show'));
+    showMap(true);
+  }
+  function endSession(){
+    if(!sessionActive) return;
+    if(!isPausedFlat && segStart){ recordedMs += Date.now()-segStart; segStart=0; }
+    sessionActive=false; clearInterval(clockTimer);
+    const finishAudio = () => { try{ audioRecorder.stop(); }catch(e){ finalizeSession(); } };
+    if(!isPausedFlat){ stopVideoClip(finishAudio); }
+    else { finishAudio(); }
+  }
+  function finalizeSession(){
+    const atype=(audioChunks[0] && audioChunks[0].type) || 'audio/webm';
+    finalAudioBlob = audioChunks.length ? new Blob(audioChunks,{type:atype}) : null;
+    if(finalAudioBlob){
+      const sid = sessionId; // capture: sessionId is reused if a new session starts
+      apiUpload('/sessions/'+sid+'/audio', finalAudioBlob, { durationSeconds: Math.round(totalMs()/1000) })
+        .then(()=> apiPostVerbose('/sessions/'+sid+'/transcribe', {}))
+        .then(res=>{
+          if(!res || res.ok) return;
+          // Remember why it failed so Review can show it rather than silently
+          // rendering an empty panel.
+          lastTranscribeError = (res.body && res.body.error) || ('HTTP '+res.status);
+          console.warn('[upright-api] transcribe kick-off failed:', lastTranscribeError);
+        });
+    }
+    const audioSecs=Math.round(totalMs()/1000);
+    const clipSecs=Math.round(recordedMs/1000);
+    doneSub.textContent = (finalAudioBlob
+      ? `${Math.floor(audioSecs/60)}:${String(audioSecs%60).padStart(2,'0')} of continuous audio, with ${clips.length} video clip${clips.length===1?'':'s'} (${Math.floor(clipSecs/60)}:${String(clipSecs%60).padStart(2,'0')} total).`
+      : 'No audio recorded.') + (pins.length ? ` ${pins.length} photo pin${pins.length>1?'s':''} on the map.` : '');
+    dlVideo.style.display = finalAudioBlob ? 'block' : 'none';
+    reviewBtn.style.display = finalAudioBlob ? 'block' : 'none';
+    dlPins.style.display = pins.length ? 'block' : 'none';
+    showMap(false); drawWrap.classList.remove('show');
+    snapBtn.classList.remove('show'); annoBar.classList.remove('show'); annoOverlay.classList.remove('show'); pinCount.classList.remove('show');
+    scaleTracks.forEach(t=>t.classList.remove('show'));
+    donePanel.classList.add('show');
+    endBtn.classList.remove('show'); clockEl.classList.remove('show');
+    setState('Ready');
+    if(wakeLock){ wakeLock.release().catch(()=>{}); wakeLock=null; }
+  }
+  endBtn.addEventListener('click', endSession);
+
+  dlVideo.addEventListener('click', ()=>{
+    if(!finalAudioBlob) return;
+    const ext=finalAudioBlob.type.includes('mp4')?'m4a':'webm';
+    const a=document.createElement('a');
+    a.href=URL.createObjectURL(finalAudioBlob);
+    const d=new Date();
+    a.download=`session-audio-${d.getFullYear()}${String(d.getMonth()+1).padStart(2,'0')}${String(d.getDate()).padStart(2,'0')}-${String(d.getHours()).padStart(2,'0')}${String(d.getMinutes()).padStart(2,'0')}.${ext}`;
+    document.body.appendChild(a); a.click(); a.remove();
+  });
+  newSession.addEventListener('click', ()=>{
+    donePanel.classList.remove('show');
+    closeReview();
+    finalAudioBlob=null; clips=[];
+    pins.forEach(p=>{ if(p.marker && map) map.removeLayer(p.marker); });
+    pins=[]; pinSeq=0; selectedPinId=null;
+    renderStrip();
+    startSession(); requestWake();
+  });
+
+  // ---------- GPS ----------
+  function startGeo(){
+    if(!('geolocation' in navigator)) { gpsReadout.textContent='no GPS available'; return; }
+    geoWatchId = navigator.geolocation.watchPosition(pos=>{
+      lastFix = pos;
+      const acc = Math.round(pos.coords.accuracy*3.281); // feet
+      gpsReadout.textContent = `GPS ±${acc} ft`;
+      updateMyMarker();
+    }, err=>{
+      gpsReadout.textContent = 'GPS: ' + (err.code===1 ? 'denied' : 'no fix');
+    }, {enableHighAccuracy:true, maximumAge:2000, timeout:15000});
+  }
+  function updateMyMarker(){
+    if(!map || !lastFix) return;
+    const ll=[lastFix.coords.latitude, lastFix.coords.longitude];
+    if(!myMarker){
+      myMarker = L.circleMarker(ll, {radius:7, color:'#fff', weight:2, fillColor:'#2a6fd6', fillOpacity:1}).addTo(map);
+      accCircle = L.circle(ll, {radius:lastFix.coords.accuracy, color:'#2a6fd6', weight:1, fillOpacity:0.08}).addTo(map);
+    } else {
+      myMarker.setLatLng(ll);
+      accCircle.setLatLng(ll); accCircle.setRadius(lastFix.coords.accuracy);
+    }
+  }
+
+
+  // ---------- annotation markers ----------
+  const annoBar=$('annoBar'), annoOverlay=$('annoOverlay');
+  const scaleTracks=[$('scaleX'), $('scaleD'), $('scaleY')];
+  const annoBtns={arrow:$('annoArrow'), square:$('annoSquare'), circle:$('annoCircle'), x:$('annoX')};
+  const annoColorBtn=$('annoColor');
+  const ANNO_COLORS=['#e53935','#43a047','#1e88e5','#fdd835'];
+  let annoTool=null, annoDir=0, annoColorIdx=0; // dir: 0=down 1=left 2=up 3=right
+  let annoW=1, annoH=1; // marker stretch multipliers
+
+  function annoColor(){ return ANNO_COLORS[annoColorIdx]; }
+
+  // Geometry fitted to a W x H box. Stroke never stretches — sw is in real pixels.
+  function annoPaths(tool, dir, W, H, sw){
+    const m=sw/2+1, x0=m, y0=m, x1=W-m, y1=H-m, cx=W/2, cy=H/2;
+    if(tool==='circle') return [{e:{cx:cx, cy:cy, rx:Math.max(1,W/2-m), ry:Math.max(1,H/2-m)}}];
+    if(tool==='square') return [{r:{x:x0, y:y0, w:Math.max(1,W-2*m), h:Math.max(1,H-2*m)}}];
+    if(tool==='x') return [{p:[[x0,y0],[x1,y1]]}, {p:[[x1,y0],[x0,y1]]}];
+    if(tool==='arrow'){
+      const vert = (dir===0 || dir===2);
+      if(vert){
+        const hw=Math.min(W*0.34, W/2-m), hl=Math.min(H*0.30, (H-2*m)*0.45);
+        if(dir===0) return [{p:[[cx,y0],[cx,y1]]}, {p:[[cx-hw,y1-hl],[cx,y1],[cx+hw,y1-hl]]}];
+        return [{p:[[cx,y1],[cx,y0]]}, {p:[[cx-hw,y0+hl],[cx,y0],[cx+hw,y0+hl]]}];
+      }
+      const hw=Math.min(H*0.34, H/2-m), hl=Math.min(W*0.30, (W-2*m)*0.45);
+      if(dir===1) return [{p:[[x1,cy],[x0,cy]]}, {p:[[x0+hl,cy-hw],[x0,cy],[x0+hl,cy+hw]]}];
+      return [{p:[[x0,cy],[x1,cy]]}, {p:[[x1-hl,cy-hw],[x1,cy],[x1-hl,cy+hw]]}];
+    }
+    return [];
+  }
+
+  function annoSvgBox(tool, dir, color, W, H, sw){
+    const common='stroke="'+color+'" stroke-width="'+sw+'" fill="none" stroke-linecap="round" stroke-linejoin="round"';
+    const parts=annoPaths(tool, dir, W, H, sw).map(it=>{
+      if(it.e) return '<ellipse cx="'+it.e.cx+'" cy="'+it.e.cy+'" rx="'+it.e.rx+'" ry="'+it.e.ry+'" '+common+'/>';
+      if(it.r) return '<rect x="'+it.r.x+'" y="'+it.r.y+'" width="'+it.r.w+'" height="'+it.r.h+'" rx="6" '+common+'/>';
+      return '<path d="M'+it.p.map(q=>q[0]+' '+q[1]).join(' L')+'" '+common+'/>';
+    }).join('');
+    return '<svg viewBox="0 0 '+W+' '+H+'" width="'+W+'" height="'+H+'" xmlns="http://www.w3.org/2000/svg">'+parts+'</svg>';
+  }
+
+  function refreshAnnoUI(){
+    // button icons (white when inactive shape; arrow shows current dir)
+    annoBtns.arrow.innerHTML = annoSvgBox('arrow', annoDir, annoTool==='arrow'?annoColor():'#fff', 32, 32, 3.2);
+    annoBtns.square.innerHTML = annoSvgBox('square', 0, annoTool==='square'?annoColor():'#fff', 32, 32, 3.2);
+    annoBtns.circle.innerHTML = annoSvgBox('circle', 0, annoTool==='circle'?annoColor():'#fff', 32, 32, 3.2);
+    annoBtns.x.innerHTML = annoSvgBox('x', 0, annoTool==='x'?annoColor():'#fff', 32, 32, 3.2);
+    annoColorBtn.innerHTML = '<div style="width:30px;height:30px;border-radius:50%;background:'+annoColor()+';border:3px solid #fff;"></div>';
+    Object.keys(annoBtns).forEach(k=> annoBtns[k].classList.toggle('active', annoTool===k));
+    // center overlay
+    if(annoTool){
+      const base=Math.min(window.innerWidth, window.innerHeight)*0.30;
+      const sw=Math.max(3, base*0.08); // constant — does not stretch with the marker
+      annoOverlay.innerHTML = annoSvgBox(annoTool, annoDir, annoColor(),
+                                         Math.round(base*annoW), Math.round(base*annoH), sw);
+      annoOverlay.classList.add('show');
+    } else {
+      annoOverlay.classList.remove('show'); annoOverlay.innerHTML='';
+    }
+    scaleTracks.forEach(t=> t.classList.toggle('show', !!annoTool));
+  }
+
+  annoBtns.arrow.addEventListener('click', ()=>{
+    if(annoTool!=='arrow'){ annoTool='arrow'; annoDir=0; }
+    else if(annoDir<3){ annoDir++; }
+    else { annoTool=null; annoDir=0; }
+    refreshAnnoUI();
+  });
+  ['square','circle','x'].forEach(k=>{
+    annoBtns[k].addEventListener('click', ()=>{
+      annoTool = (annoTool===k) ? null : k;
+      refreshAnnoUI();
+    });
+  });
+  annoColorBtn.addEventListener('click', ()=>{
+    annoColorIdx=(annoColorIdx+1)%ANNO_COLORS.length;
+    refreshAnnoUI();
+  });
+  refreshAnnoUI();
+
+
+  // ---------- marker scale sliders ----------
+  // Each track: drag along its own axis. Centre = 1x, ends = 1/3x and 3x.
+  const ST_HALF=75, ST_RANGE=3;
+  // vec = direction of 'bigger'; sign = +1 when that matches the track's own +x
+  const ST_AXIS={ x:{vec:[1,0], sign:1}, y:{vec:[0,-1], sign:1},
+                  d:{vec:[-Math.SQRT1_2, -Math.SQRT1_2], sign:-1} };
+  const stKnobT={x:0, y:0, d:0};
+
+  function stSetKnob(axis){
+    const el=scaleTracks.find(t=>t.querySelector('.st-inner').dataset.axis===axis);
+    if(!el) return;
+    el.querySelector('.st-knob').style.left=(50 + ST_AXIS[axis].sign*stKnobT[axis]*44)+'%';
+  }
+  function tFromScale(sc){
+    return Math.max(-1, Math.min(1, Math.log(sc)/Math.log(ST_RANGE)));
+  }
+  function syncKnobs(){
+    stKnobT.x=tFromScale(annoW); stKnobT.y=tFromScale(annoH);
+    stKnobT.d=tFromScale(Math.sqrt(annoW*annoH));
+    ['x','y','d'].forEach(stSetKnob);
+  }
+
+  const ST_MIN=0.15, ST_MAX=8;
+  const clampS=v=>Math.max(ST_MIN, Math.min(ST_MAX, v));
+
+  scaleTracks.forEach(track=>{
+    const inner=track.querySelector('.st-inner');
+    const axis=inner.dataset.axis;
+    let dragging=false, dRatio=1, lastTap=0;
+    function apply(e){
+      const r=inner.getBoundingClientRect();
+      const cx=r.left+r.width/2, cy=r.top+r.height/2;
+      const v=ST_AXIS[axis].vec;
+      const proj=(e.clientX-cx)*v[0] + (e.clientY-cy)*v[1];
+      const t=Math.max(-1, Math.min(1, proj/ST_HALF));
+      const sc=Math.pow(ST_RANGE, t);
+      if(axis==='x') annoW=clampS(sc);
+      else if(axis==='y') annoH=clampS(sc);
+      else {
+        // uniform scale of whatever shape the user has dialled in:
+        // sc is the geometric mean; the aspect ratio captured on touch-down is preserved
+        const root=Math.sqrt(dRatio);
+        annoW=clampS(sc*root);
+        annoH=clampS(sc/root);
+      }
+      syncKnobs();
+      refreshAnnoUI();
+    }
+    inner.addEventListener('pointerdown', e=>{
+      e.preventDefault(); e.stopPropagation();
+      const now=Date.now();
+      if(axis==='d' && now-lastTap < 320){
+        // double tap: snap back to square, keeping the current overall size
+        lastTap=0; dragging=false;
+        const g=Math.sqrt(annoW*annoH);
+        annoW=g; annoH=g; dRatio=1;
+        syncKnobs(); refreshAnnoUI();
+        return;
+      }
+      lastTap=now;
+      if(axis==='d') dRatio = annoW/annoH;
+      dragging=true; inner.setPointerCapture(e.pointerId); apply(e);
+    });
+    inner.addEventListener('pointermove', e=>{
+      if(!dragging) return;
+      e.preventDefault(); e.stopPropagation(); apply(e);
+    });
+    ['pointerup','pointercancel'].forEach(ev=>
+      inner.addEventListener(ev, ()=>{ dragging=false; }));
+  });
+  syncKnobs();
+
+  function drawAnnoOnCanvas(ctx, cw, ch){
+    if(!annoTool) return;
+    const base=Math.min(cw,ch)*0.30;
+    const W=base*annoW, H=base*annoH;
+    const sw=Math.max(3, base*0.08); // constant stroke, independent of stretch
+    const ox=cw/2 - W/2, oy=ch/2 - H/2;
+    ctx.save();
+    ctx.translate(ox, oy);
+    ctx.strokeStyle=annoColor(); ctx.lineWidth=sw;
+    ctx.lineCap='round'; ctx.lineJoin='round';
+    annoPaths(annoTool, annoDir, W, H, sw).forEach(it=>{
+      ctx.beginPath();
+      if(it.e){ ctx.ellipse(it.e.cx, it.e.cy, it.e.rx, it.e.ry, 0, 0, Math.PI*2); }
+      else if(it.r){
+        const rr=Math.min(6, it.r.w/2, it.r.h/2);
+        if(ctx.roundRect) ctx.roundRect(it.r.x, it.r.y, it.r.w, it.r.h, rr);
+        else ctx.rect(it.r.x, it.r.y, it.r.w, it.r.h);
+      }
+      else { it.p.forEach((q,i)=> i ? ctx.lineTo(q[0],q[1]) : ctx.moveTo(q[0],q[1])); }
+      ctx.stroke();
+    });
+    ctx.restore();
+  }
+
+  // ---------- photo pin snap ----------
+  function updatePinCount(){
+    if(pins.length){ pinCount.textContent = pins.length + ' pin' + (pins.length>1?'s':''); pinCount.classList.add('show'); }
+  }
+  function capturePin(){
+    // capture frame from live video
+    const c=document.createElement('canvas');
+    c.width=liveVideo.videoWidth||1280; c.height=liveVideo.videoHeight||720;
+    const cctx=c.getContext('2d');
+    cctx.drawImage(liveVideo,0,0,c.width,c.height);
+    drawAnnoOnCanvas(cctx,c.width,c.height);
+    const photo=c.toDataURL('image/jpeg',0.8);
+    pinSeq++;
+    const pin={
+      uuid:uuid(), sessionId:sessionId,
+      id:pinSeq, photo,
+      offset: sessionT0 ? (Date.now()-sessionT0) : null,
+      lat: lastFix ? lastFix.coords.latitude : null,
+      lng: lastFix ? lastFix.coords.longitude : null,
+      acc: lastFix ? lastFix.coords.accuracy : null,
+      time:new Date().toISOString(),
+      note:'', adjusted:false, marker:null, remoteId:null
+    };
+    pins.push(pin);
+    snapFlash.classList.remove('go'); void snapFlash.offsetWidth; snapFlash.classList.add('go');
+    updatePinCount();
+    if(map && pin.lat!==null) addPinMarker(pin);
+    renderStrip();
+    apiUpload('/sessions/'+sessionId+'/photos', dataUrlToBlob(pin.photo), {
+      seq: pin.id, offsetMs: pin.offset, lat: pin.lat, lng: pin.lng, accM: pin.acc,
+      note: pin.note, takenAt: pin.time, manuallyAdjusted: pin.adjusted, hasDrawing: false
+    }).then(row=>{ if(row && row.id) pin.remoteId = row.id; });
+    return pin;
+  }
+  snapBtn.addEventListener('click', ()=>{ capturePin(); });
+
+  function addPinMarker(pin){
+    if(pin.lat===null) return;
+    const m=L.marker([pin.lat,pin.lng],{draggable:true}).addTo(map);
+    pin.marker=m;
+    m.bindPopup(()=>popupHtml(pin), {maxWidth:220});
+    m.on('dragend', ()=>{
+      const ll=m.getLatLng();
+      pin.lat=ll.lat; pin.lng=ll.lng; pin.adjusted=true;
+      m.setPopupContent(popupHtml(pin));
+      if(pin.remoteId) apiPatch('/photos/'+pin.remoteId, {lat:pin.lat, lng:pin.lng, manuallyAdjusted:true});
+    });
+    m.on('click', ()=>{
+      if(mapMode==='measure' && measurePts.length){
+        measurePts.push(L.latLng(pin.lat, pin.lng)); drawMeasureDraft(); return;
+      }
+      selectPin(pin, 'map');
+    });
+    m.on('popupopen', ()=>{
+      const ta=document.querySelector('.pin-popup textarea[data-pin="'+pin.id+'"]');
+      if(ta){
+        ta.addEventListener('input', e=>{ pin.note=e.target.value; });
+        ta.addEventListener('change', ()=>{ if(pin.remoteId) apiPatch('/photos/'+pin.remoteId, {note:pin.note}); });
+      }
+      const dl=document.querySelector('.pin-popup a[data-pindl="'+pin.id+'"]');
+      if(dl) dl.addEventListener('click', ()=>{ dl.href=pin.photo; dl.download='pin-'+pin.id+'.jpg'; });
+    });
+  }
+  function popupHtml(pin){
+    return `<div class="pin-popup">
+      <img src="${pin.photo}">
+      <div><b>Pin ${pin.id}</b> ${pin.adjusted?'<span class="adj">adjusted ✓</span>':''} ${pin.hasDrawing?'<span class="adj">drawn ✎</span>':''}</div>
+      <textarea data-pin="${pin.id}" placeholder="Note…">${pin.note||''}</textarea><br>
+      <a class="dlp" href="#" data-pindl="${pin.id}">Download photo</a>
+    </div>`;
+  }
+
+  exportPinsBtn.addEventListener('click', exportPins);
+  dlPins.addEventListener('click', exportPins);
+  async function exportPins(){
+    if(!pins.length && !sketches.length && !measures.length && !finalAudioBlob && !clips.length) return;
+    const gj={type:'FeatureCollection', features:pins.filter(p=>p.lat!==null).map(p=>({
+      type:'Feature',
+      geometry:{type:'Point', coordinates:[p.lng,p.lat]},
+      properties:{uuid:p.uuid, sessionId:p.sessionId, seq:p.id, photo:'photos/pin-'+p.id+'.jpg', note:p.note, time:p.time, offsetMs:p.offset, gpsAccuracyM:p.acc, manuallyAdjusted:p.adjusted}
+    }))};
+    sketches.forEach(sk=> gj.features.push({
+      type:'Feature',
+      geometry:{type:'LineString', coordinates:sk.latlngs.map(p=>[p.lng,p.lat])},
+      properties:{kind:'sketch', uuid:sk.uuid, sessionId:sk.sessionId,
+                  lengthFt:sk.lengthFt, colour:sk.colour, time:sk.time}
+    }));
+    measures.forEach(mz=>{
+      const ring=mz.latlngs.map(p=>[p.lng,p.lat]);
+      ring.push(ring[0]);
+      gj.features.push({
+        type:'Feature',
+        geometry:{type:'Polygon', coordinates:[ring]},
+        properties:{kind:'measure', uuid:mz.uuid, sessionId:mz.sessionId,
+                    anchorPinUuid:mz.pinUuid, anchorPinSeq:mz.pinSeq,
+                    areaSqFt:mz.areaSqFt, perimeterFt:mz.perimeterFt,
+                    colour:mz.colour, time:mz.time}
+      });
+    });
+    const zip=new JSZip();
+    zip.file('site-pins.geojson', JSON.stringify(gj,null,2));
+    const clipManifest = clips.map((c,i)=>({
+      index:i, file:'clips/clip-'+(i+1)+'.'+((c.blob&&c.blob.type.includes('mp4'))?'mp4':'webm'),
+      startOffsetMs:c.startOffset, endOffsetMs:c.endOffset
+    }));
+    zip.file('session.json', JSON.stringify({
+      sessionId: sessionId, startedAt: sessionStartedAt, pinCount: pins.length,
+      audioFile: finalAudioBlob ? ('audio.'+(finalAudioBlob.type.includes('mp4')?'m4a':'webm')) : null,
+      audioDurationSeconds: Math.round(totalMs()/1000),
+      clips: clipManifest
+    },null,2));
+    const photos=zip.folder('photos');
+    pins.forEach(p=>{
+      // dataURL -> base64 payload
+      const b64=p.photo.split(',')[1];
+      photos.file('pin-'+p.id+'.jpg', b64, {base64:true});
+    });
+    if(finalAudioBlob){
+      const ext=finalAudioBlob.type.includes('mp4')?'m4a':'webm';
+      zip.file('audio.'+ext, finalAudioBlob);
+    }
+    if(clips.length){
+      const clipsFolder=zip.folder('clips');
+      clips.forEach((c,i)=>{
+        if(!c.blob) return;
+        const ext=c.blob.type.includes('mp4')?'mp4':'webm';
+        clipsFolder.file('clip-'+(i+1)+'.'+ext, c.blob);
+      });
+    }
+    const blob=await zip.generateAsync({type:'blob'});
+    const a=document.createElement('a');
+    a.href=URL.createObjectURL(blob);
+    const d=new Date();
+    a.download=`site-session-${d.getFullYear()}${String(d.getMonth()+1).padStart(2,'0')}${String(d.getDate()).padStart(2,'0')}.zip`;
+    document.body.appendChild(a); a.click(); a.remove();
+  }
+
+
+  // ---------- session review: audio-driven playback ----------
+  // The master audio is the transport. The video pane swaps to whichever
+  // clip covers the current audio time (silent, kept in lockstep by
+  // periodically re-snapping its currentTime), and the photo rail
+  // highlights any pin within a few seconds of the playhead — several
+  // can light up at once since a photo can land inside a video clip.
+  let reviewAudio=null, reviewRAF=null, reviewClipUrls=[], reviewScrubbing=false;
+  let reviewAudioCtx=null, reviewSourceNode=null, reviewGainNode=null, reviewCompNode=null;
+  const PHOTO_WINDOW_MS = 3000;
+  const REVIEW_GAIN = 14.0; // aggressive boost — mic recordings can come back very quiet; compressor below guards against clipping
+
+  // Transcript: the master audio is also the transcript's timeline, so the
+  // transcript panel acts as a table of contents — tap a line to jump
+  // playback there, and the active line follows the playhead automatically.
+  let transcriptSegments=[], transcriptStatus='none', transcriptPollTimer=null, transcriptActiveIdx=-1;
+  let lastTranscribeError=null;
+
+  function fmtClock(sec){
+    sec = Math.max(0, Math.floor(sec||0));
+    return Math.floor(sec/60)+':'+String(sec%60).padStart(2,'0');
+  }
+
+  function openReview(){
+    if(!finalAudioBlob) return;
+    reviewClipUrls = clips.map(c=> c.blob ? URL.createObjectURL(c.blob) : null);
+    reviewAudio = new Audio(URL.createObjectURL(finalAudioBlob));
+    reviewAudio.addEventListener('loadedmetadata', ()=>{
+      reviewScrub.max = Math.max(1, Math.floor(reviewAudio.duration*10));
+      updateReviewTime();
+    });
+    reviewAudio.addEventListener('timeupdate', ()=>{ if(!reviewScrubbing) syncReviewScrub(); });
+    reviewAudio.addEventListener('play', ()=>{ reviewPlayBtn.textContent='❚❚'; reviewLoop(); });
+    reviewAudio.addEventListener('pause', ()=>{ reviewPlayBtn.textContent='►'; if(reviewRAF) cancelAnimationFrame(reviewRAF); });
+    reviewAudio.addEventListener('ended', ()=>{ reviewPlayBtn.textContent='►'; });
+    setupReviewGain();
+
+    renderReviewPhotoRail();
+    transcriptSegments=[]; transcriptActiveIdx=-1; rtList.innerHTML='';
+    pollTranscript();
+    reviewPanel.classList.add('show');
+    reviewScrub.value=0;
+    updateReviewFrame(0);
+  }
+
+  function setupReviewGain(){
+    // Route playback through Gain (boost) + Compressor (limiter) so it can
+    // exceed the element's 100% ceiling — mic recordings frequently come
+    // back very quiet otherwise. The compressor is set up as a near-limiter
+    // so pushing the gain hard doesn't produce harsh digital clipping.
+    // Reuse one AudioContext across opens (iOS caps concurrent contexts);
+    // each new <audio> element needs its own node chain.
+    if(!reviewAudioCtx){
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if(!AC) return; // no Web Audio support — falls back to plain element volume
+      reviewAudioCtx = new AC();
+    }
+    if(reviewAudioCtx.state==='suspended'){ reviewAudioCtx.resume().catch(()=>{}); }
+    // Once createMediaElementSource succeeds, the element's audio is
+    // PERMANENTLY captured by the Web Audio graph and stops reaching the
+    // normal speaker output on its own. If anything after that point throws,
+    // we must still connect straight to destination — otherwise playback
+    // goes completely silent instead of just losing the boost.
+    try{
+      reviewSourceNode = reviewAudioCtx.createMediaElementSource(reviewAudio);
+    }catch(e){ reviewSourceNode=null; return; } // not captured — element plays normally
+    try{
+      reviewGainNode = reviewAudioCtx.createGain();
+      reviewGainNode.gain.value = REVIEW_GAIN;
+      reviewCompNode = reviewAudioCtx.createDynamicsCompressor();
+      reviewCompNode.threshold.value = -50;
+      reviewCompNode.knee.value = 12;
+      reviewCompNode.ratio.value = 20;
+      reviewCompNode.attack.value = 0.003;
+      reviewCompNode.release.value = 0.25;
+      reviewSourceNode.connect(reviewGainNode).connect(reviewCompNode).connect(reviewAudioCtx.destination);
+    }catch(e){
+      // Gain/compressor setup failed after capture — fall back to a direct
+      // connection so the element is still audible, just without the boost.
+      try{ reviewSourceNode.disconnect(); }catch(e2){}
+      reviewGainNode=null; reviewCompNode=null;
+      try{ reviewSourceNode.connect(reviewAudioCtx.destination); }catch(e3){}
+    }
+  }
+
+  function closeReview(){
+    reviewPanel.classList.remove('show');
+    if(reviewAudio){ reviewAudio.pause(); reviewAudio.src=''; reviewAudio=null; }
+    if(reviewRAF) cancelAnimationFrame(reviewRAF);
+    if(reviewSourceNode){ try{ reviewSourceNode.disconnect(); }catch(e){} reviewSourceNode=null; }
+    if(reviewGainNode){ try{ reviewGainNode.disconnect(); }catch(e){} reviewGainNode=null; }
+    if(reviewCompNode){ try{ reviewCompNode.disconnect(); }catch(e){} reviewCompNode=null; }
+    reviewClipUrls.forEach(u=>{ if(u) URL.revokeObjectURL(u); });
+    reviewClipUrls=[];
+    reviewVideo.removeAttribute('src'); reviewVideo.removeAttribute('data-clip');
+    if(transcriptPollTimer){ clearTimeout(transcriptPollTimer); transcriptPollTimer=null; }
+  }
+
+  function syncReviewScrub(){
+    if(!reviewAudio) return;
+    reviewScrub.value = Math.floor(reviewAudio.currentTime*10);
+    updateReviewTime();
+    updateReviewFrame(reviewAudio.currentTime*1000);
+  }
+  function updateReviewTime(){
+    if(!reviewAudio) return;
+    reviewTime.textContent = fmtClock(reviewAudio.currentTime)+' / '+fmtClock(reviewAudio.duration);
+  }
+  function reviewLoop(){
+    if(!reviewAudio || reviewAudio.paused) return;
+    syncReviewScrub();
+    reviewRAF = requestAnimationFrame(reviewLoop);
+  }
+
+  function updateReviewFrame(audioMs){
+    let active=null, activeIdx=-1;
+    for(let i=0;i<clips.length;i++){
+      const c=clips[i];
+      if(audioMs>=c.startOffset && audioMs<=c.endOffset){ active=c; activeIdx=i; break; }
+    }
+    if(active && reviewClipUrls[activeIdx]){
+      if(reviewVideo.dataset.clip !== String(activeIdx)){
+        reviewVideo.src = reviewClipUrls[activeIdx];
+        reviewVideo.dataset.clip = String(activeIdx);
+      }
+      const within = (audioMs - active.startOffset)/1000;
+      if(Math.abs(reviewVideo.currentTime - within) > 0.15){
+        reviewVideo.currentTime = within;
+      }
+      if(reviewAudio && !reviewAudio.paused && reviewVideo.paused) reviewVideo.play().catch(()=>{});
+      if(reviewAudio && reviewAudio.paused && !reviewVideo.paused) reviewVideo.pause();
+      reviewVideo.style.display='block';
+      reviewNoClip.style.display='none';
+    } else {
+      reviewVideo.pause();
+      reviewVideo.style.display='none';
+      reviewNoClip.style.display='flex';
+      reviewVideo.removeAttribute('data-clip');
+    }
+    updateReviewPhotoHighlight(audioMs);
+    updateTranscriptHighlight(audioMs);
+  }
+
+  function renderReviewPhotoRail(){
+    reviewPhotoRail.innerHTML='';
+    pins.forEach(pin=>{
+      const b=document.createElement('button');
+      b.className='review-photo';
+      b.dataset.pin=pin.id;
+      b.innerHTML='<img src="'+pin.photo+'" alt="Pin '+pin.id+'">';
+      b.addEventListener('click', ()=>{
+        if(reviewAudio && pin.offset!==null){
+          reviewAudio.currentTime = pin.offset/1000;
+          syncReviewScrub();
+        }
+      });
+      reviewPhotoRail.appendChild(b);
+    });
+  }
+
+  function updateReviewPhotoHighlight(audioMs){
+    [...reviewPhotoRail.children].forEach(el=>{
+      const pin = pins.find(p=>p.id===Number(el.dataset.pin));
+      const active = pin && pin.offset!==null && Math.abs(pin.offset-audioMs) <= PHOTO_WINDOW_MS;
+      el.classList.toggle('active', !!active);
+    });
+  }
+
+  // ---------- transcript: fetch/poll + table-of-contents rail ----------
+  function speakerLabel(spk){
+    return spk ? ('Speaker '+spk) : '';
+  }
+  function escapeHtml(s){
+    return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+  function renderTranscriptList(){
+    rtList.innerHTML='';
+    transcriptSegments.forEach(seg=>{
+      const b=document.createElement('button');
+      b.className='rt-line';
+      b.innerHTML='<span class="spk">'+speakerLabel(seg.speaker)+'</span><span>'+escapeHtml(seg.text)+'</span>';
+      b.addEventListener('click', ()=>{
+        if(reviewAudio){
+          reviewAudio.currentTime = seg.start_ms/1000;
+          syncReviewScrub();
+        }
+      });
+      rtList.appendChild(b);
+    });
+  }
+  // The panel is ALWAYS shown in Review. Hiding it on 'none' meant a failed
+  // transcribe call left no trace anywhere in the UI — the feature just looked
+  // like it didn't exist. Now every state says what's going on, and failures
+  // show the server's actual message plus a Retry button.
+  function setTranscriptStatus(status, detail){
+    transcriptStatus=status;
+    reviewTranscript.classList.add('show');
+    function wireRetry(){
+      const rb=$('rtRetryBtn');
+      if(rb) rb.addEventListener('click', ()=>{
+        rtStatus.textContent='Requesting transcript…';
+        apiPostVerbose('/sessions/'+sessionId+'/transcribe', {}).then(res=>{
+          if(res.ok){ setTranscriptStatus('processing'); pollTranscript(); }
+          else { setTranscriptStatus('error', (res.body && res.body.error) || ('HTTP '+res.status)); }
+        });
+      });
+    }
+    if(status==='completed'){
+      rtStatus.style.display='none'; rtStatus.innerHTML='';
+      return;
+    }
+    rtStatus.style.display='block';
+    if(status==='processing'){
+      rtStatus.textContent='Transcribing… this can take a few minutes for longer sessions.';
+    } else if(status==='error'){
+      rtStatus.innerHTML='Transcript failed: '+escapeHtml(detail||'unknown error')+
+        ' <button class="mt-btn rt-retry" id="rtRetryBtn">Retry</button>';
+      wireRetry();
+    } else {
+      rtStatus.innerHTML='No transcript for this session yet.'+
+        ' <button class="mt-btn rt-retry" id="rtRetryBtn">Transcribe now</button>';
+      wireRetry();
+    }
+  }
+  function pollTranscript(){
+    if(!sessionId) return;
+    if(transcriptPollTimer){ clearTimeout(transcriptPollTimer); transcriptPollTimer=null; }
+    apiGet('/sessions/'+sessionId+'/transcript').then(res=>{
+      if(!reviewPanel.classList.contains('show')) return; // review closed while this was in flight
+      if(!res){ transcriptPollTimer=setTimeout(pollTranscript, 10000); return; }
+      if(res.status==='completed'){
+        transcriptSegments = res.segments || [];
+        renderTranscriptList();
+        setTranscriptStatus('completed');
+        if(reviewAudio) updateTranscriptHighlight(reviewAudio.currentTime*1000);
+      } else if(res.status==='processing'){
+        setTranscriptStatus('processing');
+        transcriptPollTimer=setTimeout(pollTranscript, 8000);
+      } else if(res.status==='error'){
+        setTranscriptStatus('error', lastTranscribeError);
+      } else {
+        // status 'none' means transcribe never successfully started — if we
+        // captured why at end-of-session, show that instead of a bare message.
+        if(lastTranscribeError) setTranscriptStatus('error', lastTranscribeError);
+        else setTranscriptStatus('none');
+      }
+    });
+  }
+  function updateTranscriptHighlight(audioMs){
+    if(!transcriptSegments.length) return;
+    let idx=-1;
+    for(let i=0;i<transcriptSegments.length;i++){
+      const s=transcriptSegments[i];
+      if(audioMs>=s.start_ms && audioMs<=s.end_ms){ idx=i; break; }
+    }
+    if(idx===transcriptActiveIdx) return;
+    transcriptActiveIdx=idx;
+    [...rtList.children].forEach((el,i)=> el.classList.toggle('active', i===idx));
+    if(idx>=0){
+      const el=rtList.children[idx];
+      if(el && el.scrollIntoView) el.scrollIntoView({behavior:'smooth', block:'nearest'});
+    }
+  }
+
+  reviewPlayBtn.addEventListener('click', ()=>{
+    if(!reviewAudio) return;
+    if(reviewAudioCtx && reviewAudioCtx.state==='suspended') reviewAudioCtx.resume().catch(()=>{});
+    if(reviewAudio.paused) reviewAudio.play(); else reviewAudio.pause();
+  });
+  reviewScrub.addEventListener('input', ()=>{
+    reviewScrubbing=true;
+    if(reviewAudio){
+      const t = reviewScrub.value/10;
+      reviewAudio.currentTime = t;
+      updateReviewTime();
+      updateReviewFrame(t*1000);
+    }
+  });
+  reviewScrub.addEventListener('change', ()=>{ reviewScrubbing=false; });
+
+  reviewBtn.addEventListener('click', openReview);
+  reviewClose.addEventListener('click', closeReview);
+
+
+  // ---------- draw-over editor ----------
+  let drawPin=null, drawCtx=null, drawStrokes=[], drawCur=null, drawColorIdx=0, drawWasRecording=false;
+
+  ANNO_COLORS.forEach((col,i)=>{
+    const b=document.createElement('button');
+    b.className='sw'; b.style.background=col; b.dataset.i=i;
+    b.addEventListener('click', ()=>{ drawColorIdx=i; syncSwatches(); });
+    drawSwatches.appendChild(b);
+  });
+  function syncSwatches(){
+    [...drawSwatches.children].forEach((b,i)=> b.classList.toggle('active', i===drawColorIdx));
+  }
+  syncSwatches();
+
+  function openDrawEditor(pin){
+    drawPin=pin; drawStrokes=[]; drawCur=null;
+    const img=new Image();
+    img.onload=()=>{
+      drawCanvas.width=img.width; drawCanvas.height=img.height;
+      drawCtx=drawCanvas.getContext('2d');
+      drawCtx.drawImage(img,0,0);
+      drawWrap.classList.add('show');
+    };
+    img.src=pin.photo;
+  }
+  function redraw(){
+    if(!drawCtx || !drawPin) return;
+    const img=new Image();
+    img.onload=()=>{
+      drawCtx.clearRect(0,0,drawCanvas.width,drawCanvas.height);
+      drawCtx.drawImage(img,0,0);
+      drawStrokes.forEach(st=>strokePath(st));
+    };
+    img.src=drawPin.photo;
+  }
+  function strokePath(st){
+    if(st.pts.length<2) return;
+    drawCtx.save();
+    drawCtx.strokeStyle=st.color; drawCtx.lineWidth=st.w;
+    drawCtx.lineCap='round'; drawCtx.lineJoin='round';
+    drawCtx.beginPath();
+    drawCtx.moveTo(st.pts[0].x, st.pts[0].y);
+    for(let i=1;i<st.pts.length;i++) drawCtx.lineTo(st.pts[i].x, st.pts[i].y);
+    drawCtx.stroke(); drawCtx.restore();
+  }
+  function canvasPt(e){
+    const r=drawCanvas.getBoundingClientRect();
+    const t=e.touches ? e.touches[0] : e;
+    return {
+      x:(t.clientX-r.left)*(drawCanvas.width/r.width),
+      y:(t.clientY-r.top)*(drawCanvas.height/r.height)
+    };
+  }
+  drawCanvas.addEventListener('pointerdown', e=>{
+    e.preventDefault();
+    const lw=Math.max(3, Math.round(drawCanvas.width*0.006));
+    drawCur={color:ANNO_COLORS[drawColorIdx], w:lw, pts:[canvasPt(e)]};
+    drawStrokes.push(drawCur);
+  });
+  drawCanvas.addEventListener('pointermove', e=>{
+    if(!drawCur) return;
+    e.preventDefault();
+    drawCur.pts.push(canvasPt(e));
+    const n=drawCur.pts.length;
+    if(n>1){
+      drawCtx.save();
+      drawCtx.strokeStyle=drawCur.color; drawCtx.lineWidth=drawCur.w;
+      drawCtx.lineCap='round'; drawCtx.lineJoin='round';
+      drawCtx.beginPath();
+      drawCtx.moveTo(drawCur.pts[n-2].x, drawCur.pts[n-2].y);
+      drawCtx.lineTo(drawCur.pts[n-1].x, drawCur.pts[n-1].y);
+      drawCtx.stroke(); drawCtx.restore();
+    }
+  });
+  ['pointerup','pointercancel','pointerleave'].forEach(ev=>
+    drawCanvas.addEventListener(ev, ()=>{ drawCur=null; }));
+
+  drawUndo.addEventListener('click', ()=>{ drawStrokes.pop(); redraw(); });
+  drawClear.addEventListener('click', ()=>{ drawStrokes=[]; redraw(); });
+  drawDone.addEventListener('click', ()=>{
+    if(drawPin && drawStrokes.length){
+      drawPin.photo = drawCanvas.toDataURL('image/jpeg',0.85);
+      drawPin.hasDrawing = true;
+      if(drawPin.marker) drawPin.marker.setPopupContent(popupHtml(drawPin));
+      renderStrip();
+      if(drawPin.remoteId){
+        apiUpload('/photos/'+drawPin.remoteId+'/image', dataUrlToBlob(drawPin.photo), null);
+      }
+    }
+    drawWrap.classList.remove('show');
+    drawPin=null; drawStrokes=[]; drawCur=null;
+    if(drawWasRecording && currentlyUpright) resumeRec();
+    drawWasRecording=false;
+  });
+
+  annoDraw.addEventListener('click', ()=>{
+    const pin=capturePin();
+    drawWasRecording = !isPausedFlat;
+    if(drawWasRecording) pauseRecForDraw();
+    openDrawEditor(pin);
+  });
+  function pauseRecForDraw(){
+    if(!sessionActive || isPausedFlat) return;
+    isPausedFlat=true;
+    if(segStart){ recordedMs += Date.now()-segStart; segStart=0; }
+    stopVideoClip();
+    setState('paused');
+  }
+
+
+  // ---------- photo filmstrip <-> pin selection ----------
+  function renderStrip(){
+    if(!pins.length){ filmStrip.classList.remove('show'); filmStrip.innerHTML=''; return; }
+    filmStrip.innerHTML='';
+    pins.forEach(pin=>{
+      const b=document.createElement('button');
+      b.className='film-thumb' + (pin.lat===null ? ' nogps' : '') + (pin.id===selectedPinId ? ' sel' : '');
+      b.dataset.pin=pin.id;
+      b.innerHTML='<img src="'+pin.photo+'" alt="Pin '+pin.id+'"><span class="fnum">'+pin.id+'</span>';
+      b.addEventListener('click', ()=> selectPin(pin, 'strip'));
+      filmStrip.appendChild(b);
+    });
+    filmStrip.classList.add('show');
+  }
+
+  function markSelectedMarkers(){
+    pins.forEach(pin=>{
+      if(pin.marker && pin.marker._icon)
+        pin.marker._icon.classList.toggle('pin-sel', pin.id===selectedPinId);
+    });
+  }
+
+  function scrollThumbIntoView(){
+    const el=filmStrip.querySelector('.film-thumb[data-pin="'+selectedPinId+'"]');
+    if(el && el.scrollIntoView) el.scrollIntoView({behavior:'smooth', block:'nearest', inline:'center'});
+  }
+
+  function selectPin(pin, source){
+    selectedPinId = (selectedPinId===pin.id && source==='strip') ? null : pin.id;
+    [...filmStrip.children].forEach(el=>
+      el.classList.toggle('sel', Number(el.dataset.pin)===selectedPinId));
+    markSelectedMarkers();
+    if(selectedPinId===null) return;
+    if(source==='strip'){
+      if(map && pin.lat!==null){
+        // centre the pin and zoom in on it
+        map.setView([pin.lat, pin.lng], Math.max(map.getZoom(), 20), {animate:true});
+        if(pin.marker) pin.marker.openPopup();
+      }
+    } else {
+      scrollThumbIntoView();
+    }
+  }
+
+
+  // ---------- map annotation: freehand sketch + measured polygons ----------
+  let sketches=[], measures=[];
+  let mapMode=null;                 // null | 'sketch' | 'measure'
+  let sketchLine=null, sketchPts=[], sketching=false;
+  let measurePts=[], measureLayer=null, measureAnchorPin=null;
+
+  const M_PER_FT=0.3048, SQFT_PER_ACRE=43560;
+
+  function metresBetween(a, b){
+    const R=6371000, toR=Math.PI/180;
+    const dLat=(b.lat-a.lat)*toR, dLng=(b.lng-a.lng)*toR;
+    const la1=a.lat*toR, la2=b.lat*toR;
+    const h=Math.sin(dLat/2)*Math.sin(dLat/2) +
+            Math.cos(la1)*Math.cos(la2)*Math.sin(dLng/2)*Math.sin(dLng/2);
+    return 2*R*Math.asin(Math.sqrt(h));
+  }
+  // local equirectangular projection about the first point, then shoelace
+  function areaSqM(pts){
+    if(pts.length<3) return 0;
+    const lat0=pts[0].lat*Math.PI/180;
+    const mx=111320*Math.cos(lat0), my=110540;
+    const xy=pts.map(p=>[(p.lng-pts[0].lng)*mx, (p.lat-pts[0].lat)*my]);
+    let a=0;
+    for(let i=0;i<xy.length;i++){
+      const j=(i+1)%xy.length;
+      a += xy[i][0]*xy[j][1] - xy[j][0]*xy[i][1];
+    }
+    return Math.abs(a/2);
+  }
+  function perimM(pts, close){
+    let d=0;
+    for(let i=0;i<pts.length-1;i++) d+=metresBetween(pts[i],pts[i+1]);
+    if(close && pts.length>2) d+=metresBetween(pts[pts.length-1], pts[0]);
+    return d;
+  }
+  function fmtMeasure(pts){
+    if(pts.length<3){
+      const ft=perimM(pts,false)/M_PER_FT;
+      return ft<1 ? '' : Math.round(ft).toLocaleString()+' ft';
+    }
+    const sqft=areaSqM(pts)/(M_PER_FT*M_PER_FT);
+    const acres=sqft/SQFT_PER_ACRE;
+    const perFt=perimM(pts,true)/M_PER_FT;
+    const areaTxt = sqft>=SQFT_PER_ACRE/4
+      ? Math.round(sqft).toLocaleString()+' sq ft\n('+acres.toFixed(2)+' ac)'
+      : Math.round(sqft).toLocaleString()+' sq ft';
+    return areaTxt+'\n'+Math.round(perFt).toLocaleString()+' ft perim';
+  }
+
+  function setMapMode(mode){
+    mapMode=mode;
+    sketchBtn.classList.toggle('active', mode==='sketch');
+    measureBtn.classList.toggle('active', mode==='measure');
+    modeBar.classList.toggle('show', !!mode);
+    if(!map) return;
+    if(mode==='sketch'){
+      map.dragging.disable();
+      modeMsg.innerHTML='<b>Sketch</b> \u2014 drag to draw';
+    } else if(mode==='measure'){
+      map.dragging.enable();
+      modeMsg.innerHTML='<b>Measure</b> \u2014 tap to add corners';
+    } else {
+      map.dragging.enable();
+    }
+  }
+
+  function clearMeasureDraft(){
+    if(measureLayer && map){ map.removeLayer(measureLayer); }
+    measureLayer=null; measurePts=[]; measureAnchorPin=null;
+  }
+
+  function drawMeasureDraft(){
+    if(measureLayer){ map.removeLayer(measureLayer); measureLayer=null; }
+    if(!measurePts.length) return;
+    const colour=annoColor();
+    measureLayer=L.layerGroup().addTo(map);
+    if(measurePts.length>=3){
+      L.polygon(measurePts,{color:colour, weight:3, fillOpacity:0.18, dashArray:'6 5'}).addTo(measureLayer);
+    } else if(measurePts.length===2){
+      L.polyline(measurePts,{color:colour, weight:3, dashArray:'6 5'}).addTo(measureLayer);
+    }
+    measurePts.forEach((pt,i)=>{
+      L.circleMarker(pt,{radius:i===0?7:5, color:'#fff', weight:2,
+        fillColor:i===0?'#c4432b':colour, fillOpacity:1}).addTo(measureLayer);
+    });
+    const txt=fmtMeasure(measurePts);
+    modeMsg.innerHTML = txt
+      ? '<b>Measure</b> \u2014 '+txt.replace(/\n/g,' \u00b7 ')
+      : '<b>Measure</b> \u2014 tap to add corners';
+  }
+
+  function commitMeasure(){
+    if(measurePts.length<3){ clearMeasureDraft(); setMapMode(null); return; }
+    const pts=measurePts.slice();
+    const colour=annoColor();
+    const sqft=areaSqM(pts)/(M_PER_FT*M_PER_FT);
+    const perFt=perimM(pts,true)/M_PER_FT;
+    const rec={
+      uuid:uuid(), sessionId:sessionId,
+      pinUuid: measureAnchorPin ? measureAnchorPin.uuid : null,
+      pinSeq: measureAnchorPin ? measureAnchorPin.id : null,
+      latlngs:pts.map(p=>({lat:p.lat, lng:p.lng})),
+      areaSqFt:Math.round(sqft), perimeterFt:Math.round(perFt),
+      colour:colour, time:new Date().toISOString()
+    };
+    const g=L.layerGroup().addTo(map);
+    const poly=L.polygon(pts,{color:colour, weight:3, fillOpacity:0.18}).addTo(g);
+    L.marker(poly.getBounds().getCenter(), {
+      interactive:false,
+      icon:L.divIcon({className:'', html:'<div class="measure-label">'+
+        fmtMeasure(pts).replace(/\n/g,'<br>')+'</div>', iconSize:[0,0]})
+    }).addTo(g);
+    rec.layer=g;
+    measures.push(rec);
+    apiPost('/sessions/'+sessionId+'/measures', {
+      colour:rec.colour, areaSqft:rec.areaSqFt, perimeterFt:rec.perimeterFt,
+      latlngs:rec.latlngs, anchorPhotoId: (measureAnchorPin && measureAnchorPin.remoteId) || null
+    });
+    clearMeasureDraft();
+    setMapMode(null);
+  }
+
+  function commitSketch(){
+    if(sketchPts.length>1){
+      const rec={
+        uuid:uuid(), sessionId:sessionId, colour:annoColor(),
+        latlngs:sketchPts.map(p=>({lat:p.lat, lng:p.lng})),
+        lengthFt:Math.round(perimM(sketchPts,false)/M_PER_FT),
+        time:new Date().toISOString(), layer:sketchLine
+      };
+      sketches.push(rec);
+      apiPost('/sessions/'+sessionId+'/sketches', { colour:rec.colour, lengthFt:rec.lengthFt, latlngs:rec.latlngs });
+    } else if(sketchLine){ map.removeLayer(sketchLine); }
+    sketchLine=null; sketchPts=[];
+  }
+
+  sketchBtn.addEventListener('click', ()=>{
+    if(mapMode==='sketch'){ setMapMode(null); return; }
+    clearMeasureDraft();
+    setMapMode('sketch');
+  });
+
+  measureBtn.addEventListener('click', ()=>{
+    if(mapMode==='measure'){ clearMeasureDraft(); setMapMode(null); return; }
+    const pin=pins.find(p=>p.id===selectedPinId);
+    if(!pin || pin.lat===null){
+      setMapMode('measure');
+      modeMsg.innerHTML='<b>Pick a photo first</b> \u2014 its pin anchors the shape';
+      setTimeout(()=>{ if(mapMode==='measure' && !measurePts.length) setMapMode(null); }, 2600);
+      return;
+    }
+    setMapMode('measure');
+    measureAnchorPin=pin;
+    measurePts=[L.latLng(pin.lat, pin.lng)];   // the photo's pin is corner 1
+    drawMeasureDraft();
+  });
+
+  modeUndo.addEventListener('click', ()=>{
+    if(mapMode==='measure'){
+      if(measurePts.length>1){ measurePts.pop(); drawMeasureDraft(); }
+    } else if(mapMode==='sketch'){
+      const last=sketches.pop();
+      if(last && last.layer) map.removeLayer(last.layer);
+    }
+  });
+  modeDone.addEventListener('click', ()=>{
+    if(mapMode==='measure') commitMeasure();
+    else setMapMode(null);
+  });
+  modeCancel.addEventListener('click', ()=>{
+    if(mapMode==='measure') clearMeasureDraft();
+    setMapMode(null);
+  });
+
+  function containerPt(e){
+    const r=map.getContainer().getBoundingClientRect();
+    return L.point(e.clientX-r.left, e.clientY-r.top);
+  }
+  function wireMapAnnotation(){
+    const c=map.getContainer();
+    c.addEventListener('pointerdown', e=>{
+      if(mapMode!=='sketch') return;
+      sketching=true; sketchPts=[];
+      const ll=map.containerPointToLatLng(containerPt(e));
+      sketchPts.push(ll);
+      sketchLine=L.polyline([ll],{color:annoColor(), weight:4, opacity:0.95}).addTo(map);
+    });
+    c.addEventListener('pointermove', e=>{
+      if(!sketching || mapMode!=='sketch') return;
+      e.preventDefault();
+      const ll=map.containerPointToLatLng(containerPt(e));
+      const prev=sketchPts[sketchPts.length-1];
+      if(prev && metresBetween(prev,ll) < 0.25) return;   // thin out jitter
+      sketchPts.push(ll); sketchLine.setLatLngs(sketchPts);
+    });
+    ['pointerup','pointercancel','pointerleave'].forEach(ev=>
+      c.addEventListener(ev, ()=>{ if(sketching){ sketching=false; commitSketch(); } }));
+
+    map.on('click', e=>{
+      if(mapMode!=='measure' || !measurePts.length) return;
+      measurePts.push(e.latlng);
+      drawMeasureDraft();
+    });
+  }
+
+  // ---------- map ----------
+  function initMap(){
+    if(mapInited) return;
+    mapInited=true;
+    const start = lastFix ? [lastFix.coords.latitude,lastFix.coords.longitude] : [41.32,-87.20];
+    map = L.map('map',{zoomControl:true}).setView(start, lastFix?19:15);
+    L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{
+      maxZoom:21, maxNativeZoom:19, attribution:'Imagery © Esri'
+    }).addTo(map);
+    updateMyMarker();
+    pins.forEach(p=>{ if(!p.marker) addPinMarker(p); });
+    bindPlanGestures();
+    wireMapAnnotation();
+  }
+  function showMap(show){
+    if(show){
+      mapwrap.classList.add('show');
+      initMap();
+      requestAnimationFrame(()=>{ map.invalidateSize(); });
+      pins.forEach(p=>{ if(!p.marker) addPinMarker(p); });
+      renderStrip(); markSelectedMarkers();
+    } else {
+      mapwrap.classList.remove('show');
+      if(mapMode){ clearMeasureDraft(); setMapMode(null); }
+    }
+  }
+  centerBtn.addEventListener('click', ()=>{
+    if(map && lastFix) map.setView([lastFix.coords.latitude,lastFix.coords.longitude], Math.max(map.getZoom(),19));
+  });
+
+  // ---------- extent lock ----------
+  let extentLocked=false;
+  lockExtentBtn.addEventListener('click', ()=>{
+    if(!map) return;
+    extentLocked=!extentLocked;
+    if(extentLocked){
+      map.setMaxBounds(map.getBounds());
+      map.setMinZoom(map.getZoom());
+      map.options.maxBoundsViscosity=1.0;
+      lockExtentBtn.textContent='Unlock extent';
+      lockExtentBtn.classList.add('active');
+    } else {
+      map.setMaxBounds(null);
+      map.setMinZoom(0);
+      lockExtentBtn.textContent='Lock extent';
+      lockExtentBtn.classList.remove('active');
+    }
+  });
+
+  // ---------- plan overlay ----------
+  let planOverlay=null, planImg=null, planCenter=null, planWidthM=60, planRotDeg=0, planAspect=1, planLocked=false;
+  let planCenterMarker=null;
+
+  importPlanBtn.addEventListener('click', ()=> planFile.click());
+  planFile.addEventListener('change', e=>{
+    const f=e.target.files[0];
+    if(!f) return;
+    const url=URL.createObjectURL(f);
+    const img=new Image();
+    img.onload=()=>{
+      planImg=url; planAspect=img.height/img.width;
+      planCenter = map.getCenter();
+      planWidthM = parseFloat(scaleSlider.value);
+      planRotDeg = parseFloat(rotSlider.value);
+      buildPlanOverlay();
+      overlayControls.classList.add('show');
+      planLocked=false; lockPlanBtn.textContent='Lock';
+      setPlanGestureMode(true);
+    };
+    img.src=url;
+  });
+
+  function planCorners(){
+    // compute topleft, topright, bottomleft latlngs from center, width(m), aspect, rotation
+    const lat=planCenter.lat, lng=planCenter.lng;
+    const mLat=1/111320, mLng=1/(111320*Math.cos(lat*Math.PI/180));
+    const w=planWidthM, h=planWidthM*planAspect;
+    const th=planRotDeg*Math.PI/180;
+    const rot=(x,y)=>[x*Math.cos(th)-y*Math.sin(th), x*Math.sin(th)+y*Math.cos(th)];
+    const toLL=([x,y])=>L.latLng(lat+y*mLat, lng+x*mLng);
+    return {
+      tl: toLL(rot(-w/2, h/2)),
+      tr: toLL(rot( w/2, h/2)),
+      bl: toLL(rot(-w/2,-h/2))
+    };
+  }
+  function buildPlanOverlay(){
+    const c=planCorners();
+    if(planOverlay) map.removeLayer(planOverlay);
+    planOverlay = L.imageOverlay.rotated(planImg, c.tl, c.tr, c.bl, {
+      opacity: parseFloat(opSlider.value)/100, interactive:false
+    }).addTo(map);
+    if(!planCenterMarker){
+      planCenterMarker = L.marker(planCenter, {
+        draggable:true,
+        icon: L.divIcon({className:'', html:'<div style="width:18px;height:18px;border-radius:50%;background:#c4432b;border:3px solid #fff;box-shadow:0 1px 6px rgba(0,0,0,.5)"></div>', iconSize:[18,18], iconAnchor:[9,9]})
+      }).addTo(map);
+      planCenterMarker.on('drag', ()=>{ planCenter=planCenterMarker.getLatLng(); refreshPlan(); });
+    } else planCenterMarker.setLatLng(planCenter);
+  }
+  function refreshPlan(){
+    if(!planOverlay) return;
+    const c=planCorners();
+    planOverlay.reposition(c.tl, c.tr, c.bl);
+  }
+  opSlider.addEventListener('input', ()=>{ if(planOverlay) planOverlay.setOpacity(parseFloat(opSlider.value)/100); });
+  scaleSlider.addEventListener('input', ()=>{ planWidthM=parseFloat(scaleSlider.value); refreshPlan(); });
+  rotSlider.addEventListener('input', ()=>{ planRotDeg=parseFloat(rotSlider.value); refreshPlan(); });
+  lockPlanBtn.addEventListener('click', ()=>{
+    planLocked=!planLocked;
+    lockPlanBtn.textContent = planLocked ? 'Unlock' : 'Lock';
+    if(planCenterMarker){
+      if(planLocked){ planCenterMarker.dragging.disable(); planCenterMarker.setOpacity(0); }
+      else { planCenterMarker.dragging.enable(); planCenterMarker.setOpacity(1); }
+    }
+    setPlanGestureMode(!planLocked);
+  });
+
+
+  // ---------- two-finger gestures for the plan overlay ----------
+  // While the plan is UNLOCKED the map is frozen and two fingers drive the
+  // overlay: pinch = scale, twist = rotate, drag = pan. Lock returns the
+  // map to normal navigation.
+  let planGestureOn=false, gest=null, pan1=null;
+
+  function setPlanGestureMode(on){
+    if(!map) return;
+    planGestureOn=!!on;
+    const h=[map.dragging, map.touchZoom, map.doubleClickZoom, map.boxZoom];
+    h.forEach(x=>{ if(x){ planGestureOn ? x.disable() : x.enable(); } });
+    if(map.scrollWheelZoom){ planGestureOn ? map.scrollWheelZoom.disable() : map.scrollWheelZoom.enable(); }
+  }
+
+  function touchMetrics(t0, t1, container){
+    const r=container.getBoundingClientRect();
+    const dx=t1.clientX-t0.clientX, dy=t1.clientY-t0.clientY;
+    return {
+      dist: Math.hypot(dx,dy) || 1,
+      ang: Math.atan2(dy,dx)*180/Math.PI,
+      cx: (t0.clientX+t1.clientX)/2 - r.left,
+      cy: (t0.clientY+t1.clientY)/2 - r.top
+    };
+  }
+
+  function bindPlanGestures(){
+    const el=map.getContainer();
+    el.addEventListener('touchstart', e=>{
+      if(!planGestureOn || !planOverlay) return;
+      if(e.touches.length===1){
+        // one finger: pan only
+        e.preventDefault();
+        const r=el.getBoundingClientRect();
+        pan1={
+          ll0: map.containerPointToLatLng([e.touches[0].clientX-r.left, e.touches[0].clientY-r.top]),
+          center0: L.latLng(planCenter.lat, planCenter.lng)
+        };
+        return;
+      }
+      if(e.touches.length!==2) return;
+      e.preventDefault();
+      pan1=null;
+      const m=touchMetrics(e.touches[0], e.touches[1], el);
+      gest={
+        dist0:m.dist, ang0:m.ang,
+        w0:planWidthM, rot0:planRotDeg,
+        ll0:map.containerPointToLatLng([m.cx, m.cy]),
+        center0:L.latLng(planCenter.lat, planCenter.lng)
+      };
+    }, {passive:false});
+
+    el.addEventListener('touchmove', e=>{
+      if(!pan1 || e.touches.length!==1) return;
+      e.preventDefault();
+      const r=el.getBoundingClientRect();
+      const llNow=map.containerPointToLatLng([e.touches[0].clientX-r.left, e.touches[0].clientY-r.top]);
+      planCenter = L.latLng(
+        pan1.center0.lat + (llNow.lat - pan1.ll0.lat),
+        pan1.center0.lng + (llNow.lng - pan1.ll0.lng)
+      );
+      if(planCenterMarker) planCenterMarker.setLatLng(planCenter);
+      refreshPlan();
+    }, {passive:false});
+
+    el.addEventListener('touchmove', e=>{
+      if(!gest || e.touches.length!==2) return;
+      e.preventDefault();
+      const m=touchMetrics(e.touches[0], e.touches[1], el);
+      // pinch -> size
+      planWidthM = Math.max(1, Math.min(5000, gest.w0 * (m.dist/gest.dist0)));
+      // twist -> rotation (screen angle grows clockwise, plan angle grows anticlockwise)
+      let rot = gest.rot0 - (m.ang - gest.ang0);
+      while(rot>180) rot-=360;
+      while(rot<-180) rot+=360;
+      planRotDeg = rot;
+      // drag -> position
+      const llNow=map.containerPointToLatLng([m.cx, m.cy]);
+      planCenter = L.latLng(
+        gest.center0.lat + (llNow.lat - gest.ll0.lat),
+        gest.center0.lng + (llNow.lng - gest.ll0.lng)
+      );
+      if(planCenterMarker) planCenterMarker.setLatLng(planCenter);
+      refreshPlan();
+      syncPlanSliders();
+    }, {passive:false});
+
+    ['touchend','touchcancel'].forEach(ev=>
+      el.addEventListener(ev, e=>{ if(e.touches.length<2) gest=null; if(!e.touches.length) pan1=null; }));
+  }
+
+  function syncPlanSliders(){
+    scaleSlider.value = Math.max(5, Math.min(600, Math.round(planWidthM)));
+    rotSlider.value = Math.round(planRotDeg);
+  }
+
+
+  // ---------- orientation ----------
+  function handleOrientation(evt){
+    if(evt.beta===null || evt.beta===undefined) return;
+    const b=(evt.beta||0)*Math.PI/180, g=(evt.gamma||0)*Math.PI/180;
+    const cosTilt=Math.max(-1,Math.min(1,Math.cos(b)*Math.cos(g)));
+    const tilt=Math.acos(cosTilt)*180/Math.PI;
+    tiltReadout.textContent='tilt '+Math.round(tilt)+'°';
+    const wantUpright = currentlyUpright ? tilt>UPRIGHT_OFF : tilt>UPRIGHT_ON;
+    if(wantUpright!==candidateState){ candidateState=wantUpright; candidateSince=Date.now(); }
+    if(candidateState!==currentlyUpright && Date.now()-candidateSince>HOLD_MS){
+      currentlyUpright=candidateState;
+      if(drawWrap.classList.contains('show')) return; // editor open: don't switch modes
+      if(currentlyUpright) resumeRec(); else pauseRec();
+    }
+  }
+
+  // ---------- wake lock ----------
+  async function requestWake(){
+    try{ if('wakeLock' in navigator) wakeLock=await navigator.wakeLock.request('screen'); }catch(e){}
+  }
+  document.addEventListener('visibilitychange', ()=>{
+    if(document.visibilityState==='visible' && sessionActive) requestWake();
+  });
+
+  // ---------- enable flow ----------
+  async function enable(){
+    errorMsg.style.display='none';
+    let motionGranted=true;
+    if(typeof DeviceOrientationEvent!=='undefined' && typeof DeviceOrientationEvent.requestPermission==='function'){
+      try{ motionGranted = (await DeviceOrientationEvent.requestPermission())==='granted'; }
+      catch(e){ motionGranted=false; }
+    }
+    try{ await startAudioStream(); }
+    catch(e){
+      let msg;
+      if(e && (e.name==='NotAllowedError' || e.name==='SecurityError')){
+        msg='Microphone permission is denied for this site. Tap the "Aa" icon in the address bar > Website Settings > Microphone > Allow, then reload.';
+      } else if(e && e.name==='NotReadableError'){
+        msg='The microphone is busy — another tab or app is holding it. Close other tabs of this app, force-quit Safari, and reopen.';
+      } else if(e && e.name==='NotFoundError'){
+        msg='No microphone was found on this device.';
+      } else {
+        msg='Microphone error: '+(e && e.name ? e.name : 'unknown')+'. Try force-quitting Safari and reloading.';
+      }
+      errorMsg.textContent=msg;
+      errorMsg.style.display='block'; return;
+    }
+    try{ await startCamera(); }
+    catch(e){
+      let msg;
+      if(e && (e.name==='NotAllowedError' || e.name==='SecurityError')){
+        msg='Camera permission is denied for this site. Tap the "Aa" icon in the address bar > Website Settings > Camera > Allow, then reload.';
+      } else if(e && e.name==='NotReadableError'){
+        msg='The camera is busy — another tab or app is holding it. Close other tabs of this app, force-quit Safari, and reopen.';
+      } else if(e && e.name==='NotFoundError'){
+        msg='No camera was found on this device.';
+      } else {
+        msg='Camera error: '+(e && e.name ? e.name : 'unknown')+'. Try force-quitting Safari and reloading.';
+      }
+      errorMsg.textContent=msg;
+      errorMsg.style.display='block'; return;
+    }
+    if(!motionGranted){
+      errorMsg.textContent='Motion access wasn\'t granted — the tilt trigger can\'t work. Clear this site\'s data in Safari settings and try again to get the prompt back.';
+      errorMsg.style.display='block'; return;
+    }
+    startGeo();
+    window.addEventListener('deviceorientation', handleOrientation);
+    startOverlay.classList.add('hidden');
+    startSession(); requestWake();
+  }
+  enableBtn.addEventListener('click', enable);
+})();
+</script>
+</body>
+</html>
