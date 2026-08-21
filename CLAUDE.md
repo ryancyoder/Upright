@@ -132,6 +132,40 @@ the existing `selectedPinId`/`markSelectedMarkers()` path and centres on it.
 When the transcript hasn't loaded yet, `.review-body.no-transcript` gives
 the mini pane the whole left column.
 
+### Per-clip share (silent clip + its audio)
+
+Review's transport bar has **Share clip N with audio**, acting on whichever
+clip the playhead is inside (disabled when the playhead is between clips).
+It muxes that clip with its slice of the master audio and hands the file to
+`navigator.share()` — Messages/Mail/AirDrop on iPad — falling back to a
+download.
+
+On the iPad this is a **remux, not a re-encode**: Safari's MediaRecorder
+writes MP4/H.264 + AAC for both streams, so ffmpeg copies them into one
+container with `-c copy`. Measured at ~40ms for an 8s clip. Mixed containers
+(desktop browsers only) re-encode just the audio.
+
+**ffmpeg.wasm asset paths must stay same-origin.** ffmpeg.wasm spawns a
+Worker from a sibling chunk and `importScripts()` the core inside it.
+Browsers block a cross-origin Worker outright, and the usual `toBlobURL`
+workaround breaks emscripten's path resolution (`failed to import
+ffmpeg-core.js`). So `index.html` loads `/vendor/ffmpeg/*` and **`vercel.json`
+rewrites those to unpkg** — same-origin to the browser, and no 32MB of wasm
+committed to the repo. If you ever move off Vercel, that rewrite has to be
+reproduced or the assets vendored; don't just point the URLs at a CDN.
+
+The single-threaded core is deliberate: the multithreaded build needs
+`SharedArrayBuffer`, which needs COOP/COEP headers, which would break the
+Leaflet CDN scripts and the Esri tiles. A stream copy is I/O-bound anyway.
+
+**Clip offsets are wall-clock**, not audio-timeline (`Date.now()-sessionT0`),
+so `audioDriftScale()` scales them by real-audio-length ÷ wall-clock-length
+before slicing. That needs a *frozen* session length: `totalMs()` keeps
+counting after the session ends, so `endSession()` stamps `sessionWallMs` and
+post-session reporting uses `sessionDurationMs()`. (This also fixed the ZIP
+manifest's `audioDurationSeconds`, which previously reported time-since-start
+at the moment you hit export.)
+
 **Not yet built**
 - Session reload / browse past sessions. `GET /sessions/:id` exists but nothing calls it.
 - ZIP **import** to view old sessions offline. The ZIP already contains everything needed (audio, clips + offsets, photos + offsets, GeoJSON) — except the transcript, which lives only in Supabase. Consider adding `transcript.json` to the export.
@@ -144,6 +178,9 @@ the mini pane the whole left column.
 - 58px sidebar buttons with a gloved thumb; marker base size (30% of screen); yellow marker visibility on sunny turf; stroke weight at 3× zoom.
 - Extent-lock button reachability; whether the filmstrip eats too much map height in landscape.
 - Audio level in real field conditions.
+- Per-clip share on a real session: whether the drift correction actually
+  lands the audio on the right moment for a clip late in a long visit, and
+  whether the ~30MB one-time ffmpeg download is tolerable on cellular.
 - Review pane swap: whether 190px of mini pane is enough to read a video
   thumbnail or a map at a glance, and whether the map's auto-centring fights
   you when you try to pan it manually mid-playback (drawing and pin-dragging

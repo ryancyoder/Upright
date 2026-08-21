@@ -339,6 +339,17 @@
     font-size:10px; font-weight:700; letter-spacing:0.08em; text-transform:uppercase;
     color:var(--ink); background:rgba(0,0,0,0.6); padding:3px 8px; border-radius:100px;
   }
+  .review-share{
+    flex:0 0 auto; padding:9px 16px; border-radius:100px;
+    border:1px solid var(--flat); background:transparent; color:var(--ink);
+    font-size:12px; font-weight:700; white-space:nowrap;
+  }
+  .review-share:disabled{opacity:0.35;}
+  .review-sharemsg{
+    flex:0 1 auto; min-width:0; font-size:11px; color:var(--dim);
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  }
+  .review-sharemsg.err{color:var(--live);}
   .review-head-actions{display:flex; align-items:center; gap:8px;}
   .review-swap{
     padding:7px 14px; border-radius:100px; border:1px solid var(--flat);
@@ -508,6 +519,8 @@
         <button class="review-playbtn" id="reviewPlayBtn">►</button>
         <input type="range" class="review-scrub" id="reviewScrub" min="0" max="1000" value="0">
         <span class="review-time" id="reviewTime">0:00 / 0:00</span>
+        <span class="review-sharemsg" id="reviewShareMsg"></span>
+        <button class="review-share" id="reviewShare" disabled>Share clip with audio</button>
       </div>
     </div>
   </div>
@@ -540,7 +553,8 @@
         reviewTranscript=$('reviewTranscript'), rtStatus=$('rtStatus'), rtList=$('rtList'),
         reviewBody=$('reviewBody'), reviewSwap=$('reviewSwap'),
         reviewVideoPane=$('reviewVideoPane'), reviewMapPane=$('reviewMapPane'),
-        reviewNoMap=$('reviewNoMap');
+        reviewNoMap=$('reviewNoMap'),
+        reviewShare=$('reviewShare'), reviewShareMsg=$('reviewShareMsg');
 
   const UPRIGHT_ON=55, UPRIGHT_OFF=35, HOLD_MS=350;
 
@@ -644,6 +658,10 @@
     } else stateText.textContent = mode || 'Ready';
   }
   function totalMs(){ return sessionT0 ? Date.now()-sessionT0 : 0; }
+  // totalMs() is a live wall clock and keeps counting after the session ends,
+  // so anything reported post-session must use the frozen value instead.
+  let sessionWallMs=null;
+  function sessionDurationMs(){ return sessionWallMs!=null ? sessionWallMs : totalMs(); }
   function updateClock(){
     const s=Math.floor(totalMs()/1000);
     clockEl.textContent=Math.floor(s/60)+':'+String(s%60).padStart(2,'0');
@@ -705,7 +723,7 @@
   }
   function startSession(){
     audioChunks=[]; clips=[]; currentClipChunks=[]; currentClipStart=null;
-    sessionId=uuid(); sessionStartedAt=new Date().toISOString();
+    sessionId=uuid(); sessionStartedAt=new Date().toISOString(); sessionWallMs=null;
     sessionT0=Date.now();
     apiPost('/sessions', { id: sessionId, startedAt: sessionStartedAt });
 
@@ -743,6 +761,7 @@
   function endSession(){
     if(!sessionActive) return;
     if(!isPausedFlat && segStart){ recordedMs += Date.now()-segStart; segStart=0; }
+    sessionWallMs = totalMs();   // freeze before the clock runs away from us
     sessionActive=false; clearInterval(clockTimer);
     const finishAudio = () => { try{ audioRecorder.stop(); }catch(e){ finalizeSession(); } };
     if(!isPausedFlat){ stopVideoClip(finishAudio); }
@@ -753,7 +772,7 @@
     finalAudioBlob = audioChunks.length ? new Blob(audioChunks,{type:atype}) : null;
     if(finalAudioBlob){
       const sid = sessionId; // capture: sessionId is reused if a new session starts
-      apiUpload('/sessions/'+sid+'/audio', finalAudioBlob, { durationSeconds: Math.round(totalMs()/1000) })
+      apiUpload('/sessions/'+sid+'/audio', finalAudioBlob, { durationSeconds: Math.round(sessionDurationMs()/1000) })
         .then(()=> apiPostVerbose('/sessions/'+sid+'/transcribe', {}))
         .then(res=>{
           if(!res || res.ok) return;
@@ -763,7 +782,7 @@
           console.warn('[upright-api] transcribe kick-off failed:', lastTranscribeError);
         });
     }
-    const audioSecs=Math.round(totalMs()/1000);
+    const audioSecs=Math.round(sessionDurationMs()/1000);
     const clipSecs=Math.round(recordedMs/1000);
     doneSub.textContent = (finalAudioBlob
       ? `${Math.floor(audioSecs/60)}:${String(audioSecs%60).padStart(2,'0')} of continuous audio, with ${clips.length} video clip${clips.length===1?'':'s'} (${Math.floor(clipSecs/60)}:${String(clipSecs%60).padStart(2,'0')} total).`
@@ -1112,7 +1131,7 @@
     zip.file('session.json', JSON.stringify({
       sessionId: sessionId, startedAt: sessionStartedAt, pinCount: pins.length,
       audioFile: finalAudioBlob ? ('audio.'+(finalAudioBlob.type.includes('mp4')?'m4a':'webm')) : null,
-      audioDurationSeconds: Math.round(totalMs()/1000),
+      audioDurationSeconds: Math.round(sessionDurationMs()/1000),
       clips: clipManifest
     },null,2));
     const photos=zip.folder('photos');
@@ -1191,6 +1210,8 @@
     // a hidden one is 0x0, which wrecks both the tile grid and fitBounds.
     reviewBody.classList.toggle('no-transcript', !reviewTranscript.classList.contains('show'));
     reviewCenteredPinId=null;
+    reviewActiveClip=-1; reviewShareMsg.textContent=''; reviewShareMsg.classList.remove('err');
+    updateShareButton();
     setMainPane('video');
     mountMapInReview();
     reviewScrub.value=0;
@@ -1317,6 +1338,161 @@
     map.setView([best.lat,best.lng], Math.max(map.getZoom(), REVIEW_MAP_ZOOM), {animate:true});
   }
 
+  // ---------- per-clip deliverable: silent clip + its slice of master audio ----------
+  // On the iPad both streams are already MP4/H.264 + AAC (Safari's
+  // MediaRecorder writes nothing else), so this is a REMUX, not a re-encode:
+  // ffmpeg copies the streams into one container untouched. Fast, and no
+  // generation loss.
+  // These MUST be same-origin. ffmpeg.wasm spawns a Worker from a sibling
+  // chunk and then importScripts() the core inside it; browsers block a
+  // cross-origin Worker outright, and routing round it with blob: URLs breaks
+  // emscripten's path resolution ("failed to import ffmpeg-core.js"). So the
+  // paths below are proxied to unpkg by vercel.json rather than hit directly
+  // -- same-origin to the browser, and no 32MB of wasm in the repo.
+  const FFMPEG_UMD  = '/vendor/ffmpeg/ffmpeg.js';
+  const FFMPEG_UTIL = '/vendor/ffmpeg/util.js';
+  const FFMPEG_CORE = '/vendor/ffmpeg/core';
+  let ffmpegInstance=null, ffmpegLoading=null, reviewActiveClip=-1, sharingClip=false;
+
+  function loadScriptOnce(src){
+    return new Promise((resolve,reject)=>{
+      if(document.querySelector('script[data-ffsrc="'+src+'"]')) return resolve();
+      const el=document.createElement('script');
+      el.src=src; el.dataset.ffsrc=src;
+      el.onload=()=>resolve();
+      el.onerror=()=>reject(new Error('Could not load '+src.split('/').pop()));
+      document.head.appendChild(el);
+    });
+  }
+
+  // ~30MB of wasm, so it is fetched on first use only -- never at page load,
+  // which would mean downloading it while standing in someone's yard.
+  async function getFFmpeg(note){
+    if(ffmpegInstance) return ffmpegInstance;
+    if(ffmpegLoading) return ffmpegLoading;
+    ffmpegLoading = (async ()=>{
+      note('Loading video tools (one-time ~30MB)…');
+      await loadScriptOnce(FFMPEG_UMD);
+      await loadScriptOnce(FFMPEG_UTIL);
+      if(!window.FFmpegWASM || !window.FFmpegUtil) throw new Error('Video tools failed to initialise');
+      const ff = new window.FFmpegWASM.FFmpeg();
+      ff.on('progress', ({progress})=>{
+        if(progress>0 && progress<=1) note('Combining… '+Math.round(progress*100)+'%');
+      });
+      // Single-threaded core deliberately: the multithreaded build needs
+      // SharedArrayBuffer, which needs COOP/COEP headers on this page, which
+      // would break the Leaflet CDN scripts AND the Esri satellite tiles.
+      // A stream copy is I/O-bound anyway, so threads buy us nothing here.
+      // Plain absolute URLs, not blob: URLs -- see the note on FFMPEG_UMD.
+      await ff.load({
+        coreURL: new URL(FFMPEG_CORE+'/ffmpeg-core.js', location.href).href,
+        wasmURL: new URL(FFMPEG_CORE+'/ffmpeg-core.wasm', location.href).href
+      });
+      ffmpegInstance = ff;
+      return ff;
+    })();
+    try{ return await ffmpegLoading; }
+    catch(e){ ffmpegLoading=null; throw e; }
+  }
+
+  // Clip offsets are wall-clock (Date.now()-sessionT0). The audio track keeps
+  // its own clock, and the two drift apart over a long session, so slicing at
+  // the raw offset can land seconds off on a late clip. Scale by how far the
+  // real audio ran against how far the wall clock ran.
+  function audioDriftScale(){
+    const wall = sessionDurationMs();
+    const real = (reviewAudio && isFinite(reviewAudio.duration)) ? reviewAudio.duration*1000 : 0;
+    if(!wall || !real) return 1;
+    const ratio = real/wall;
+    // An implausible ratio means one of the two clocks is wrong; don't let a
+    // bad "correction" make the alignment worse than doing nothing.
+    return (ratio>0.5 && ratio<2) ? ratio : 1;
+  }
+
+  async function buildClipWithAudio(idx, note){
+    const clip = clips[idx];
+    if(!clip || !clip.blob) throw new Error('That clip has no video');
+    if(!finalAudioBlob) throw new Error('No master audio for this session');
+    const ff = await getFFmpeg(note);
+    const { fetchFile } = window.FFmpegUtil;
+
+    const vExt = clip.blob.type.includes('mp4') ? 'mp4' : 'webm';
+    const aExt = finalAudioBlob.type.includes('mp4') ? 'm4a' : 'webm';
+    const scale = audioDriftScale();
+    const startS = Math.max(0, (clip.startOffset*scale)/1000);
+    const durS   = Math.max(0.1, ((clip.endOffset-clip.startOffset)*scale)/1000);
+    const vName='in.'+vExt, aName='in.'+aExt, oName='out.'+vExt;
+
+    note('Preparing…');
+    await ff.writeFile(vName, await fetchFile(clip.blob));
+    await ff.writeFile(aName, await fetchFile(finalAudioBlob));
+
+    // Matching container families (always the case on iPad) copy straight
+    // through. Mixed families only happen on desktop browsers, where the
+    // audio has to be re-encoded to something the container accepts.
+    const sameFamily = (vExt==='mp4') === (aExt==='m4a');
+    const audioArgs = sameFamily ? ['-c:a','copy']
+                    : (vExt==='mp4' ? ['-c:a','aac','-b:a','128k'] : ['-c:a','libopus']);
+    const args = ['-i', vName,
+                  '-ss', startS.toFixed(3), '-t', durS.toFixed(3), '-i', aName,
+                  '-map','0:v:0','-map','1:a:0',
+                  '-c:v','copy'].concat(audioArgs, ['-shortest']);
+    if(vExt==='mp4') args.push('-movflags','+faststart');
+    args.push(oName);
+    await ff.exec(args);
+
+    const data = await ff.readFile(oName);
+    for(const f of [vName,aName,oName]){ try{ await ff.deleteFile(f); }catch(e){} }
+    if(!data || !data.length) throw new Error('Combining produced an empty file');
+    return new Blob([data.buffer], {type: vExt==='mp4' ? 'video/mp4' : 'video/webm'});
+  }
+
+  async function shareClipWithAudio(idx){
+    if(sharingClip) return;
+    sharingClip = true;
+    reviewShare.disabled = true;
+    const note = msg => { reviewShareMsg.classList.remove('err'); reviewShareMsg.textContent = msg; };
+    try{
+      const blob = await buildClipWithAudio(idx, note);
+      const name = 'site-clip-'+(idx+1)+'.'+(blob.type.includes('mp4')?'mp4':'webm');
+      const file = new File([blob], name, {type:blob.type});
+      // Web Share hands the file straight to Messages / Mail / AirDrop, which
+      // is what "share with others" actually means on an iPad.
+      if(navigator.canShare && navigator.canShare({files:[file]})){
+        try{
+          await navigator.share({files:[file], title:name});
+          note('Shared.');
+          return;
+        }catch(err){
+          if(err && err.name==='AbortError'){ note(''); return; }
+          // Share refused for some other reason -- fall through to download.
+        }
+      }
+      const url=URL.createObjectURL(blob);
+      const a=document.createElement('a');
+      a.href=url; a.download=name;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(()=>URL.revokeObjectURL(url), 30000);
+      note('Saved '+name);
+    }catch(e){
+      reviewShareMsg.classList.add('err');
+      reviewShareMsg.textContent = (e && e.message) ? e.message : 'Could not combine clip';
+      console.warn('[clip share]', e);
+    }finally{
+      sharingClip = false;
+      updateShareButton();
+    }
+  }
+
+  function updateShareButton(){
+    if(sharingClip) return;                 // leave the in-progress state alone
+    const ok = reviewActiveClip >= 0 && !!finalAudioBlob;
+    reviewShare.disabled = !ok;
+    reviewShare.textContent = ok
+      ? ('Share clip '+(reviewActiveClip+1)+' with audio')
+      : 'Share clip with audio';
+  }
+
   function closeReview(){
     reviewPanel.classList.remove('show');
     if(reviewAudio){ reviewAudio.pause(); reviewAudio.src=''; reviewAudio=null; }
@@ -1353,6 +1529,10 @@
     for(let i=0;i<clips.length;i++){
       const c=clips[i];
       if(audioMs>=c.startOffset && audioMs<=c.endOffset){ active=c; activeIdx=i; break; }
+    }
+    if(reviewActiveClip !== (active ? activeIdx : -1)){
+      reviewActiveClip = active ? activeIdx : -1;
+      updateShareButton();
     }
     if(active && reviewClipUrls[activeIdx]){
       if(reviewVideo.dataset.clip !== String(activeIdx)){
@@ -1519,6 +1699,7 @@
 
   reviewBtn.addEventListener('click', openReview);
   reviewSwap.addEventListener('click', ()=> setMainPane(reviewMainPane==='video' ? 'map' : 'video'));
+  reviewShare.addEventListener('click', ()=>{ if(reviewActiveClip>=0) shareClipWithAudio(reviewActiveClip); });
   reviewClose.addEventListener('click', closeReview);
   // Rotating the iPad resizes both panes; Leaflet needs telling.
   window.addEventListener('resize', refreshReviewMapSize);

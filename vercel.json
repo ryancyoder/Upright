@@ -1,0 +1,16 @@
+{
+  "rewrites": [
+    {
+      "source": "/vendor/ffmpeg/util.js",
+      "destination": "https://unpkg.com/@ffmpeg/util@0.12.1/dist/umd/index.js"
+    },
+    {
+      "source": "/vendor/ffmpeg/core/:file",
+      "destination": "https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd/:file"
+    },
+    {
+      "source": "/vendor/ffmpeg/:file",
+      "destination": "https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/umd/:file"
+    }
+  ]
+}
