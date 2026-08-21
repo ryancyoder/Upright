@@ -278,6 +278,43 @@
   }
   .measure-label::before{display:none;}
 
+  /* Session history + property picker — full-screen panels over the stage. */
+  .history-panel, .prop-panel{
+    position:absolute; inset:0; background:var(--bg); z-index:36;
+    display:none; flex-direction:column;
+  }
+  .prop-panel{z-index:37;}
+  .history-panel.show, .prop-panel.show{display:flex;}
+  .hist-status{flex:0 0 auto; padding:12px 16px; font-size:13px; color:var(--dim);}
+  .hist-status.err{color:var(--live);}
+  .hist-list{flex:1 1 auto; overflow-y:auto; -webkit-overflow-scrolling:touch; min-height:0;}
+  .hist-row{
+    display:flex; align-items:center; gap:12px;
+    padding:14px 16px; border-bottom:1px solid var(--line);
+  }
+  .hist-main{flex:1 1 auto; min-width:0;}
+  .hist-title{font-size:15px; font-weight:700; overflow-wrap:anywhere;}
+  .hist-title.untagged{color:var(--dim); font-weight:400; font-style:italic;}
+  .hist-when{font-size:12px; color:var(--dim); margin-top:3px;}
+  .hist-sum{font-size:12px; color:var(--dim); margin-top:3px;}
+  .hist-sum .warn{color:var(--live);}
+  .hist-actions{flex:0 0 auto; display:flex; gap:8px;}
+  .hist-btn{
+    padding:9px 14px; border-radius:100px; border:1px solid var(--line);
+    background:transparent; color:var(--ink); font-size:12px; font-weight:700; white-space:nowrap;
+  }
+  .hist-btn.go{border-color:var(--flat);}
+  .hist-btn:disabled{opacity:0.3;}
+  .prop-search{
+    flex:0 0 auto; margin:12px 16px 0; padding:11px 14px;
+    border-radius:10px; border:1px solid var(--line);
+    background:var(--bg2); color:var(--ink); font-size:15px;
+  }
+  .link-btn{
+    margin-top:14px; padding:9px 16px; border-radius:100px;
+    border:1px solid var(--line); background:transparent; color:var(--dim);
+    font-size:13px; font-weight:700;
+  }
   /* Session review — audio-driven playback with synced silent video + photo rail */
   .review-panel{
     position:absolute; inset:0; background:var(--bg); z-index:35;
@@ -477,6 +514,7 @@
       <div class="overlay-title">Record upright, map flat</div>
       <div class="overlay-sub">Starting a session begins continuous audio recording for the whole visit. Stand the iPad up to also record silent video — the round button snaps a photo pin at your GPS position. Lay it flat and video pauses while the site map appears; audio keeps recording throughout.</div>
       <button class="go-btn" id="enableBtn">Start session</button>
+      <button class="link-btn" id="historyBtn">Past sessions</button>
       <div class="overlay-sub err" id="errorMsg"></div>
     </div>
 
@@ -487,8 +525,34 @@
         <button class="dl-btn" id="reviewBtn">Review session</button>
         <button class="dl-btn secondary" id="dlVideo">Download audio recording</button>
         <button class="dl-btn secondary" id="dlPins">Download session (ZIP): audio + clips + pins</button>
+        <button class="dl-btn secondary" id="historyBtn2">Past sessions</button>
         <button class="dl-btn secondary" id="newSession">Start new session</button>
       </div>
+    </div>
+
+    <div class="history-panel" id="historyPanel">
+      <div class="review-head">
+        <span class="title">Past sessions</span>
+        <div class="review-head-actions">
+          <button class="review-swap" id="historyRefresh">Refresh</button>
+          <button class="review-close" id="historyClose">Close</button>
+        </div>
+      </div>
+      <div class="hist-status" id="histStatus"></div>
+      <div class="hist-list" id="histList"></div>
+    </div>
+
+    <div class="prop-panel" id="propPanel">
+      <div class="review-head">
+        <span class="title">Choose property</span>
+        <div class="review-head-actions">
+          <button class="review-swap" id="propClear">No property</button>
+          <button class="review-close" id="propClose">Cancel</button>
+        </div>
+      </div>
+      <input class="prop-search" id="propSearch" placeholder="Search address…" autocomplete="off">
+      <div class="hist-status" id="propStatus"></div>
+      <div class="hist-list" id="propList"></div>
     </div>
 
     <div class="review-panel" id="reviewPanel">
@@ -554,7 +618,12 @@
         reviewBody=$('reviewBody'), reviewSwap=$('reviewSwap'),
         reviewVideoPane=$('reviewVideoPane'), reviewMapPane=$('reviewMapPane'),
         reviewNoMap=$('reviewNoMap'),
-        reviewShare=$('reviewShare'), reviewShareMsg=$('reviewShareMsg');
+        reviewShare=$('reviewShare'), reviewShareMsg=$('reviewShareMsg'),
+        historyPanel=$('historyPanel'), historyBtn=$('historyBtn'), historyBtn2=$('historyBtn2'),
+        historyClose=$('historyClose'), historyRefresh=$('historyRefresh'),
+        histStatus=$('histStatus'), histList=$('histList'),
+        propPanel=$('propPanel'), propSearch=$('propSearch'), propList=$('propList'),
+        propStatus=$('propStatus'), propClose=$('propClose'), propClear=$('propClear');
 
   const UPRIGHT_ON=55, UPRIGHT_OFF=35, HOLD_MS=350;
 
@@ -722,6 +791,7 @@
     } else if(cb) cb();
   }
   function startSession(){
+    if(archiveMode) exitArchive();
     audioChunks=[]; clips=[]; currentClipChunks=[]; currentClipStart=null;
     sessionId=uuid(); sessionStartedAt=new Date().toISOString(); sessionWallMs=null;
     sessionT0=Date.now();
@@ -1189,9 +1259,16 @@
   }
 
   function openReview(){
-    if(!finalAudioBlob) return;
-    reviewClipUrls = clips.map(c=> c.blob ? URL.createObjectURL(c.blob) : null);
-    reviewAudio = new Audio(URL.createObjectURL(finalAudioBlob));
+    if(!finalAudioBlob && !archiveAudioUrl) return;
+    // A stored session supplies Storage URLs; a live one supplies blobs.
+    reviewClipUrls = clips.map(c=> c.url || (c.blob ? URL.createObjectURL(c.blob) : null));
+    reviewAudio = new Audio();
+    // Remote audio must be CORS-enabled BEFORE it reaches the Web Audio graph:
+    // without this, createMediaElementSource() captures a tainted source and
+    // playback is silent with no error. Same failure mode as the gotcha in
+    // setupReviewGain, different cause.
+    if(!finalAudioBlob && archiveAudioUrl) reviewAudio.crossOrigin='anonymous';
+    reviewAudio.src = finalAudioBlob ? URL.createObjectURL(finalAudioBlob) : archiveAudioUrl;
     reviewAudio.addEventListener('loadedmetadata', ()=>{
       reviewScrub.max = Math.max(1, Math.floor(reviewAudio.duration*10));
       updateReviewTime();
@@ -1296,8 +1373,9 @@
     mapwrap.classList.add('show');
     initMap();  // may never have run: the iPad can stay upright the whole session
     pins.forEach(p=>{ if(!p.marker) addPinMarker(p); });
+    if(archiveMode) drawArchiveGeometry();
     markSelectedMarkers();
-    const located = pins.filter(p=> p.lat!==null && p.lng!==null);
+    const located = pins.filter(p=> p.lat!=null && p.lng!=null);
     reviewNoMap.style.display = located.length ? 'none' : 'flex';
     if(located.length){
       map.fitBounds(L.latLngBounds(located.map(p=>[p.lat,p.lng])),
@@ -1336,6 +1414,263 @@
     // measuring, or repositioning a pin.
     if(mapMode || pinDragging) return;
     map.setView([best.lat,best.lng], Math.max(map.getZoom(), REVIEW_MAP_ZOOM), {animate:true});
+  }
+
+  // ---------- session history: browse and reopen past sessions ----------
+  // Everything needed to rebuild a session lives in Supabase (rows + public
+  // Storage URLs), but nothing could *find* it: the session id was a JS
+  // variable that died on reload. GET /sessions is the index; archiveMode
+  // then points Review at stored URLs instead of in-memory blobs.
+  let archiveMode=false, archiveAudioUrl=null, historyBusy=false, propTargetSessionId=null;
+
+  function fmtWhen(iso){
+    if(!iso) return 'unknown date';
+    const d=new Date(iso);
+    if(isNaN(d)) return 'unknown date';
+    return d.toLocaleDateString(undefined,{month:'short',day:'numeric',year:'numeric'})
+         + ' · ' + d.toLocaleTimeString(undefined,{hour:'numeric',minute:'2-digit'});
+  }
+  function fmtDur(secs){
+    if(!secs) return null;
+    return Math.floor(secs/60)+':'+String(Math.round(secs)%60).padStart(2,'0');
+  }
+
+  function openHistory(){
+    startOverlay.classList.add('hidden');
+    donePanel.classList.remove('show');
+    historyPanel.classList.add('show');
+    loadHistory();
+  }
+  function closeHistory(){
+    historyPanel.classList.remove('show');
+    // Only return to the start screen if there's nothing else to go back to.
+    if(!sessionActive && !reviewPanel.classList.contains('show') && !donePanel.classList.contains('show')){
+      startOverlay.classList.remove('hidden');
+    }
+  }
+
+  async function loadHistory(){
+    if(historyBusy) return;
+    historyBusy=true;
+    histStatus.classList.remove('err');
+    histStatus.textContent='Loading…';
+    histList.innerHTML='';
+    const res = await apiGet('/sessions?limit=100');
+    historyBusy=false;
+    if(!res || !Array.isArray(res.sessions)){
+      histStatus.classList.add('err');
+      histStatus.textContent='Could not reach the server. Check the connection and try Refresh.';
+      return;
+    }
+    if(!res.sessions.length){ histStatus.textContent='No sessions recorded yet.'; return; }
+    histStatus.textContent = res.sessions.length+' session'+(res.sessions.length===1?'':'s');
+    renderHistory(res.sessions);
+  }
+
+  function renderHistory(list){
+    histList.innerHTML='';
+    list.forEach(s=>{
+      const row=document.createElement('div'); row.className='hist-row';
+      const main=document.createElement('div'); main.className='hist-main';
+
+      const title=document.createElement('div');
+      title.className='hist-title'+(s.propertyAddress?'':' untagged');
+      title.textContent = s.propertyAddress || 'Untagged session';
+      main.appendChild(title);
+
+      const when=document.createElement('div'); when.className='hist-when';
+      when.textContent=fmtWhen(s.startedAt);
+      main.appendChild(when);
+
+      // Counts are cosmetic -- if the server ever stops sending them the row
+      // still identifies and opens the session.
+      const bits=[];
+      const dur=fmtDur(s.durationSeconds);
+      if(dur) bits.push(dur+' audio');
+      if(s.photoCount) bits.push(s.photoCount+' photo'+(s.photoCount===1?'':'s'));
+      if(s.clipCount) bits.push(s.clipCount+' clip'+(s.clipCount===1?'':'s'));
+      if(s.sketchCount) bits.push(s.sketchCount+' sketch'+(s.sketchCount===1?'':'es'));
+      if(s.measureCount) bits.push(s.measureCount+' measure'+(s.measureCount===1?'':'s'));
+      if(s.transcriptStatus==='completed') bits.push('transcript ready');
+      else if(s.transcriptStatus==='processing') bits.push('transcript running');
+      else if(s.transcriptStatus==='error') bits.push('transcript failed');
+      const sum=document.createElement('div'); sum.className='hist-sum';
+      if(!s.hasAudio){
+        // Review is driven by the master audio, so a session whose audio
+        // upload never landed cannot be replayed. Say so rather than
+        // offering an Open button that does nothing.
+        sum.innerHTML='<span class="warn">No audio uploaded — cannot be replayed.</span>'
+                    + (bits.length ? ' ' + bits.join(' · ') : '');
+      } else {
+        sum.textContent = bits.join(' · ') || 'audio only';
+      }
+      main.appendChild(sum);
+      row.appendChild(main);
+
+      const actions=document.createElement('div'); actions.className='hist-actions';
+      const tagBtn=document.createElement('button');
+      tagBtn.className='hist-btn';
+      tagBtn.textContent = s.propertyAddress ? 'Retag' : 'Tag';
+      tagBtn.addEventListener('click', ()=> openPropertyPicker(s.id));
+      actions.appendChild(tagBtn);
+
+      const openBtn=document.createElement('button');
+      openBtn.className='hist-btn go';
+      openBtn.textContent='Open';
+      openBtn.disabled = !s.hasAudio;
+      openBtn.addEventListener('click', ()=> openArchivedSession(s.id, openBtn));
+      actions.appendChild(openBtn);
+
+      row.appendChild(actions);
+      histList.appendChild(row);
+    });
+  }
+
+  async function openArchivedSession(id, btn){
+    if(btn){ btn.disabled=true; btn.textContent='Loading…'; }
+    const data = await apiGet('/sessions/'+id);
+    if(btn){ btn.disabled=false; btn.textContent='Open'; }
+    if(!data || !data.session){
+      histStatus.classList.add('err');
+      histStatus.textContent='Could not load that session.';
+      return;
+    }
+    hydrateArchive(data);
+    historyPanel.classList.remove('show');
+    openReview();
+  }
+
+  // Replace live in-memory state with a stored session. Review reads the very
+  // same structures, so it needs no separate code path beyond preferring
+  // `url` over `blob`.
+  function hydrateArchive(data){
+    clearArchiveLayers();
+    const s=data.session;
+    archiveMode=true;
+    sessionId=s.id;
+    sessionStartedAt=s.started_at;
+    archiveAudioUrl=s.audioUrl||null;
+    finalAudioBlob=null;
+    sessionWallMs=(s.audio_duration_seconds||0)*1000;
+    lastTranscribeError=null;
+
+    clips=(data.clips||[]).map(c=>({
+      startOffset:c.start_offset_ms, endOffset:c.end_offset_ms,
+      blob:null, url:c.url
+    }));
+
+    pins=(data.photos||[]).map(p=>({
+      uuid:p.id, sessionId:s.id, id:p.seq, photo:p.url,
+      offset:p.offset_ms, lat:p.lat, lng:p.lng, acc:p.gps_accuracy_m,
+      time:p.taken_at, note:p.note||'', adjusted:!!p.manually_adjusted,
+      marker:null, remoteId:p.id
+    }));
+    pinSeq=pins.reduce((m,p)=>Math.max(m, p.id||0), 0);
+    selectedPinId=null;
+
+    sketches=(data.sketches||[]).map(k=>({
+      uuid:k.id, sessionId:s.id, colour:k.colour, lengthFt:k.length_ft,
+      latlngs:k.latlngs||[], time:k.created_at, layer:null
+    }));
+    measures=(data.measures||[]).map(m=>({
+      uuid:m.id, sessionId:s.id, pinUuid:m.anchor_photo_id, pinSeq:null,
+      latlngs:m.latlngs||[], areaSqFt:m.area_sqft, perimeterFt:m.perimeter_ft,
+      colour:m.colour, time:m.created_at, layer:null
+    }));
+    updatePinCount();
+  }
+
+  // Drawn geometry is re-created on the map when review mounts it.
+  function drawArchiveGeometry(){
+    if(!map) return;
+    sketches.forEach(rec=>{
+      if(rec.layer || !rec.latlngs || rec.latlngs.length<2) return;
+      rec.layer=L.polyline(rec.latlngs.map(p=>[p.lat,p.lng]),
+        {color:rec.colour||'#ffd400', weight:4, opacity:0.95}).addTo(map);
+    });
+    measures.forEach(rec=>{
+      if(rec.layer || !rec.latlngs || rec.latlngs.length<3) return;
+      const pts=rec.latlngs.map(p=>L.latLng(p.lat,p.lng));
+      const g=L.layerGroup().addTo(map);
+      const poly=L.polygon(pts,{color:rec.colour||'#ffd400', weight:3, fillOpacity:0.18}).addTo(g);
+      const label=(rec.areaSqFt!=null? Math.round(rec.areaSqFt)+' sq ft':'')
+                + (rec.perimeterFt!=null? '<br>'+Math.round(rec.perimeterFt)+' ft':'');
+      if(label){
+        L.marker(poly.getBounds().getCenter(), {interactive:false,
+          icon:L.divIcon({className:'', html:'<div class="measure-label">'+label+'</div>', iconSize:[0,0]})
+        }).addTo(g);
+      }
+      rec.layer=g;
+    });
+  }
+
+  function clearArchiveLayers(){
+    pins.forEach(p=>{ if(p.marker && map){ try{ map.removeLayer(p.marker); }catch(e){} } });
+    [].concat(sketches, measures).forEach(r=>{
+      if(r && r.layer && map){ try{ map.removeLayer(r.layer); }catch(e){} r.layer=null; }
+    });
+  }
+
+  // Leaving an archived session must not leave its pins and geometry behind
+  // for the next live session to inherit.
+  function exitArchive(){
+    if(!archiveMode) return;
+    clearArchiveLayers();
+    archiveMode=false; archiveAudioUrl=null;
+    clips=[]; pins=[]; sketches=[]; measures=[];
+    pinSeq=0; selectedPinId=null; sessionId=null;
+    finalAudioBlob=null; sessionWallMs=null;
+    transcriptSegments=[]; transcriptActiveIdx=-1;
+    renderStrip(); updatePinCount();
+  }
+
+  // ---------- property tagging ----------
+  function openPropertyPicker(sessionIdToTag){
+    propTargetSessionId=sessionIdToTag;
+    propPanel.classList.add('show');
+    propSearch.value='';
+    loadProperties('');
+  }
+  function closePropertyPicker(){
+    propPanel.classList.remove('show');
+    propTargetSessionId=null;
+  }
+  async function loadProperties(q){
+    propStatus.classList.remove('err');
+    propStatus.textContent='Loading…';
+    propList.innerHTML='';
+    const res = await apiGet('/properties'+(q?('?q='+encodeURIComponent(q)):''));
+    if(!res || !Array.isArray(res.properties)){
+      propStatus.classList.add('err');
+      propStatus.textContent='Could not load properties.';
+      return;
+    }
+    if(!res.properties.length){ propStatus.textContent='No matching addresses.'; return; }
+    propStatus.textContent=res.properties.length+' propert'+(res.properties.length===1?'y':'ies');
+    res.properties.forEach(pr=>{
+      const row=document.createElement('div'); row.className='hist-row';
+      const main=document.createElement('div'); main.className='hist-main';
+      const t=document.createElement('div'); t.className='hist-title'; t.textContent=pr.address;
+      main.appendChild(t);
+      row.appendChild(main);
+      const b=document.createElement('button'); b.className='hist-btn go'; b.textContent='Select';
+      b.addEventListener('click', ()=> assignProperty(pr.id));
+      const acts=document.createElement('div'); acts.className='hist-actions'; acts.appendChild(b);
+      row.appendChild(acts);
+      propList.appendChild(row);
+    });
+  }
+  async function assignProperty(propertyId){
+    if(!propTargetSessionId){ closePropertyPicker(); return; }
+    propStatus.textContent='Saving…';
+    const res = await apiPatch('/sessions/'+propTargetSessionId, {propertyId: propertyId});
+    if(!res){
+      propStatus.classList.add('err');
+      propStatus.textContent='Could not save. Try again.';
+      return;
+    }
+    closePropertyPicker();
+    loadHistory();
   }
 
   // ---------- per-clip deliverable: silent clip + its slice of master audio ----------
@@ -1411,21 +1746,23 @@
 
   async function buildClipWithAudio(idx, note){
     const clip = clips[idx];
-    if(!clip || !clip.blob) throw new Error('That clip has no video');
-    if(!finalAudioBlob) throw new Error('No master audio for this session');
+    if(!clip || (!clip.blob && !clip.url)) throw new Error('That clip has no video');
+    const audioSource = finalAudioBlob || archiveAudioUrl;
+    if(!audioSource) throw new Error('No master audio for this session');
     const ff = await getFFmpeg(note);
     const { fetchFile } = window.FFmpegUtil;
 
-    const vExt = clip.blob.type.includes('mp4') ? 'mp4' : 'webm';
-    const aExt = finalAudioBlob.type.includes('mp4') ? 'm4a' : 'webm';
+    // fetchFile takes a Blob or a URL, so live and stored sessions share this.
+    const vExt = (clip.blob ? clip.blob.type.includes('mp4') : /\.mp4(\?|$)/i.test(clip.url||'')) ? 'mp4' : 'webm';
+    const aExt = (finalAudioBlob ? finalAudioBlob.type.includes('mp4') : /\.m4a(\?|$)/i.test(archiveAudioUrl||'')) ? 'm4a' : 'webm';
     const scale = audioDriftScale();
     const startS = Math.max(0, (clip.startOffset*scale)/1000);
     const durS   = Math.max(0.1, ((clip.endOffset-clip.startOffset)*scale)/1000);
     const vName='in.'+vExt, aName='in.'+aExt, oName='out.'+vExt;
 
     note('Preparing…');
-    await ff.writeFile(vName, await fetchFile(clip.blob));
-    await ff.writeFile(aName, await fetchFile(finalAudioBlob));
+    await ff.writeFile(vName, await fetchFile(clip.blob || clip.url));
+    await ff.writeFile(aName, await fetchFile(audioSource));
 
     // Matching container families (always the case on iPad) copy straight
     // through. Mixed families only happen on desktop browsers, where the
@@ -1500,7 +1837,9 @@
     if(reviewSourceNode){ try{ reviewSourceNode.disconnect(); }catch(e){} reviewSourceNode=null; }
     if(reviewGainNode){ try{ reviewGainNode.disconnect(); }catch(e){} reviewGainNode=null; }
     if(reviewCompNode){ try{ reviewCompNode.disconnect(); }catch(e){} reviewCompNode=null; }
-    reviewClipUrls.forEach(u=>{ if(u) URL.revokeObjectURL(u); });
+    // Only revoke object URLs we minted -- revoking a Storage URL would be a
+    // no-op here but would break the archive if it ever became one.
+    reviewClipUrls.forEach(u=>{ if(u && u.indexOf('blob:')===0) URL.revokeObjectURL(u); });
     reviewClipUrls=[];
     reviewVideo.removeAttribute('src'); reviewVideo.removeAttribute('data-clip');
     if(transcriptPollTimer){ clearTimeout(transcriptPollTimer); transcriptPollTimer=null; }
@@ -1700,7 +2039,22 @@
   reviewBtn.addEventListener('click', openReview);
   reviewSwap.addEventListener('click', ()=> setMainPane(reviewMainPane==='video' ? 'map' : 'video'));
   reviewShare.addEventListener('click', ()=>{ if(reviewActiveClip>=0) shareClipWithAudio(reviewActiveClip); });
-  reviewClose.addEventListener('click', closeReview);
+  reviewClose.addEventListener('click', ()=>{
+    const wasArchive = archiveMode;
+    closeReview();
+    if(wasArchive){ exitArchive(); openHistory(); }
+  });
+  historyBtn.addEventListener('click', openHistory);
+  historyBtn2.addEventListener('click', openHistory);
+  historyClose.addEventListener('click', closeHistory);
+  historyRefresh.addEventListener('click', loadHistory);
+  propClose.addEventListener('click', closePropertyPicker);
+  propClear.addEventListener('click', ()=> assignProperty(null));
+  let propSearchTimer=null;
+  propSearch.addEventListener('input', ()=>{
+    clearTimeout(propSearchTimer);
+    propSearchTimer=setTimeout(()=> loadProperties(propSearch.value.trim()), 250);
+  });
   // Rotating the iPad resizes both panes; Leaflet needs telling.
   window.addEventListener('resize', refreshReviewMapSize);
   window.addEventListener('orientationchange', ()=> setTimeout(refreshReviewMapSize, 250));

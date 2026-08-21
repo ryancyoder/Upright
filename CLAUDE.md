@@ -35,13 +35,18 @@ Tables are all prefixed `upright_`: `upright_sessions`, `upright_clips`,
 `upright_photos`, `upright_sketches`, `upright_measures`,
 `upright_transcript_segments`. Storage bucket: `upright-media`.
 
-`upright_sessions` has nullable `event_id` / `deal_id` columns for linking to
-the existing `events` / `Sales Board` tables later — deliberately deferred.
+`upright_sessions` has a nullable `property_id` FK to the existing
+`properties` table — this is what the history list shows as a session's name.
+Nullable on purpose: a session must always be startable with one tap, so it
+can be tagged afterwards from the history list. `event_id` / `deal_id` are
+still nullable and still unused.
 
 ### Edge Function `upright-api`
 
 Endpoints under `/functions/v1/upright-api`:
-`POST /sessions`, `GET /sessions/:id`, `POST /sessions/:id/audio|clips|photos|sketches|measures`,
+`POST /sessions`, `GET /sessions` (history list), `GET /sessions/:id`,
+`PATCH /sessions/:id` (assign property), `GET /properties` (address picker),
+`POST /sessions/:id/audio|clips|photos|sketches|measures`,
 `PATCH /photos/:id`, `POST /photos/:id/image`,
 `POST /sessions/:id/transcribe`, `GET /sessions/:id/transcript`.
 
@@ -166,8 +171,45 @@ post-session reporting uses `sessionDurationMs()`. (This also fixed the ZIP
 manifest's `audioDurationSeconds`, which previously reported time-since-start
 at the moment you hit export.)
 
+### Session history
+
+**Past sessions** (start screen and done panel) lists every session
+newest-first from `GET /sessions`, labelled by its property address. Tapping
+Open rehydrates the session and launches Review against it.
+
+`hydrateArchive()` rebuilds the same in-memory structures a live session
+uses (`pins`, `clips`, `sketches`, `measures`) from API rows and public
+Storage URLs, so Review needs no separate code path — it just prefers
+`url` over `blob` in the three places media is read. `exitArchive()` tears
+that state down; `startSession()` calls it defensively so a live session can
+never inherit an archived one's pins.
+
+Two things that bite here:
+
+- **Remote audio needs `crossOrigin='anonymous'` set before `src`.** Review
+  pipes audio through `createMediaElementSource()`, and a cross-origin
+  element without CORS is captured as a *tainted, silent* source with no
+  error raised — the same silent-playback failure mode as the gotcha above,
+  different cause.
+- **Only revoke object URLs you minted.** `closeReview()` filters on
+  `blob:` before calling `revokeObjectURL`, since clip URLs are now
+  sometimes Storage URLs.
+
+Sessions whose audio never uploaded are listed but **not openable** — Review
+is driven by the master audio, so there is nothing to replay. The row says
+so rather than offering a dead button. As of writing, 6 of the 14 most
+recent sessions are in that state; one of them has clips, photos and a
+sketch, so this is the fire-and-forget write model showing up in real data,
+not just abandoned starts.
+
 **Not yet built**
-- Session reload / browse past sessions. `GET /sessions/:id` exists but nothing calls it.
+- ZIP export of an *archived* session. The export reads `pin.photo` as a
+  data URL and `clip.blob`, both of which are URLs in archive mode. Not
+  currently reachable (the done panel isn't part of the archive flow) but it
+  will need fetch-and-zip when it is.
+- Persisting the imported plan overlay. The plan image, centre, width and
+  rotation are local variables that never reach the API, so a reopened
+  session loses the plan even though pins and measures come back.
 - ZIP **import** to view old sessions offline. The ZIP already contains everything needed (audio, clips + offsets, photos + offsets, GeoJSON) — except the transcript, which lives only in Supabase. Consider adding `transcript.json` to the export.
 - Retry logic / sync-later indicator for failed uploads.
 - Client-facing deliverable (PDF or web page vs raw GeoJSON/ZIP).
@@ -178,6 +220,11 @@ at the moment you hit export.)
 - 58px sidebar buttons with a gloved thumb; marker base size (30% of screen); yellow marker visibility on sunny turf; stroke weight at 3× zoom.
 - Extent-lock button reachability; whether the filmstrip eats too much map height in landscape.
 - Audio level in real field conditions.
+- Session history against real data: the new `GET /sessions` and
+  `GET /properties` endpoints could not be called from the dev sandbox (its
+  proxy blocks supabase.co), so they are verified only against mocked
+  responses. Counts come from PostgREST embedded aggregates and degrade to 0
+  if that syntax ever misbehaves — the rows still open either way.
 - Per-clip share on a real session: whether the drift correction actually
   lands the audio on the right moment for a clip late in a long visit, and
   whether the ~30MB one-time ffmpeg download is tolerable on cellular.
