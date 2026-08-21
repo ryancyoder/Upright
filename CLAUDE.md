@@ -98,26 +98,39 @@ video/map swap.
 
 `side` is the transcript, `main` is the big stage, `mini` is the small pane
 under the transcript. The video and map panes each carry `in-main` or
-`in-mini` and **swap by class only — neither is ever re-parented**. That is
-deliberate: moving a playing `<video>` in the DOM restarts it on iOS Safari,
-and a moved Leaflet container needs a full re-init. Don't "simplify" this
-into appendChild calls.
+`in-mini` and **swap by class only — the panes are never re-parented**.
+That is deliberate: moving a playing `<video>` in the DOM restarts it on
+iOS Safari. Don't "simplify" the pane swap into appendChild calls.
 
-Two things that follow from it:
+**There is only one Leaflet map.** `mountMapInReview()` relocates the real
+capture map (`#mapwrap`) into the review pane on open and
+`unmountMapFromReview()` puts it back on close. Leaflet *does* survive its
+container being re-parented — it holds an element reference, not a tree
+position — provided `invalidateSize()` runs afterwards. A second review-only
+instance would have to re-implement every map tool and would edit a
+different set of markers, so review gets the real one and inherits
+draggable pins (with their PATCH-on-drop), sketch, measure, the plan
+overlay and the mode bar for free.
 
-- Review has its **own Leaflet instance** (`reviewMap`, `#reviewMap`),
-  separate from the live capture map (`map`, `#map`). One Leaflet map cannot
-  serve two containers, and review must not disturb live session state.
+Consequences worth knowing:
+
 - Leaflet caches container size, so every resize path calls
   `refreshReviewMapSize()` (pane swap, transcript appearing, window resize,
   orientation change). Skip it and you get grey tiles or mis-placed pins.
+- The **map toolbar is hidden while the map is in the mini pane** — 190px
+  has no room for it. Swap the map to the main stage to get the tools.
+- The map's own filmstrip is hidden throughout review; the review photo
+  rail already does that job.
+- Auto-centring holds off while `mapMode` is active or `pinDragging` is
+  true, so the playhead never yanks the viewport out from under someone
+  mid-sketch or mid-drag.
 
 The map is driven by the playhead: `updateReviewMapForTime()` picks the
 located pin nearest the playhead within `PHOTO_WINDOW_MS` — the same window
-the photo rail highlights on, so the two always agree — then centres on it
-and glows its marker. Tapping a map pin scrubs audio to that photo's offset,
-mirroring the photo rail. When the transcript hasn't loaded yet,
-`.review-body.no-transcript` gives the mini pane the whole left column.
+the photo rail highlights on, so the two always agree — then selects it via
+the existing `selectedPinId`/`markSelectedMarkers()` path and centres on it.
+When the transcript hasn't loaded yet, `.review-body.no-transcript` gives
+the mini pane the whole left column.
 
 **Not yet built**
 - Session reload / browse past sessions. `GET /sessions/:id` exists but nothing calls it.
@@ -133,6 +146,10 @@ mirroring the photo rail. When the transcript hasn't loaded yet,
 - Audio level in real field conditions.
 - Review pane swap: whether 190px of mini pane is enough to read a video
   thumbnail or a map at a glance, and whether the map's auto-centring fights
-  you when you try to pan it manually mid-playback.
+  you when you try to pan it manually mid-playback (drawing and pin-dragging
+  are already guarded; a plain pan is not).
+- Editing on the review map: dragging a pin there PATCHes the same row the
+  live map would, so a review-time correction is a real edit to the session.
+  Confirm that reads as intended rather than as a surprise.
 - Longer-session soak test (30–60 min) — dual-stream recording plus continuous uploads.
 - What happens if the iPad backgrounds mid-upload.

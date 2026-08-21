@@ -318,7 +318,15 @@
     border-top:1px solid var(--line); border-right:1px solid var(--line);
   }
   .review-pane video{width:100%; height:100%; object-fit:contain; display:block;}
-  #reviewMap{width:100%; height:100%; background:#0a0a08;}
+  /* The live capture map is relocated into whichever review pane is active,
+     so review inherits every map tool -- draggable pins, sketch, measure,
+     plan overlay -- instead of a feature-poor second map. */
+  .review-pane > .mapwrap{position:absolute; inset:0; z-index:1;}
+  /* The mini pane is glance-sized; a toolbar would eat the whole thing.
+     Swap the map to the main stage to get the tools back. */
+  .review-pane.in-mini .map-toolbar{display:none;}
+  /* Review has its own photo rail -- the map's filmstrip would duplicate it. */
+  .review-pane .film-strip{display:none;}
   .review-noclip, .review-nomap{
     position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
     color:var(--dim); font-size:13px; text-align:center; padding:24px;
@@ -491,7 +499,6 @@
           <span class="pane-tag">Video</span>
         </div>
         <div class="review-pane in-mini" id="reviewMapPane">
-          <div id="reviewMap"></div>
           <div class="review-nomap" id="reviewNoMap">No GPS pins in this session</div>
           <span class="pane-tag">Map</span>
         </div>
@@ -1036,7 +1043,9 @@
     const m=L.marker([pin.lat,pin.lng],{draggable:true}).addTo(map);
     pin.marker=m;
     m.bindPopup(()=>popupHtml(pin), {maxWidth:220});
+    m.on('dragstart', ()=>{ pinDragging=true; });
     m.on('dragend', ()=>{
+      pinDragging=false;
       const ll=m.getLatLng();
       pin.lat=ll.lat; pin.lng=ll.lng; pin.adjusted=true;
       m.setPopupContent(popupHtml(pin));
@@ -1142,11 +1151,10 @@
   let reviewAudio=null, reviewRAF=null, reviewClipUrls=[], reviewScrubbing=false;
   let reviewAudioCtx=null, reviewSourceNode=null, reviewGainNode=null, reviewCompNode=null;
   const PHOTO_WINDOW_MS = 3000;
-  // Review map: its own Leaflet instance, separate from the live capture map
-  // (#map). One Leaflet map cannot serve two containers, and the live map is
-  // still mid-session state we don't want review to disturb.
-  let reviewMap=null, reviewMapInited=false, reviewPinLayers=[];
+  // Review reuses the ONE capture map rather than standing up a second
+  // Leaflet instance -- see mountMapInReview below for why.
   let reviewCenteredPinId=null, reviewMainPane='video';
+  let mapHomeParent=null, mapHomeNext=null;
   const REVIEW_MAP_ZOOM = 20;
   const REVIEW_GAIN = 14.0; // aggressive boost — mic recordings can come back very quiet; compressor below guards against clipping
 
@@ -1183,10 +1191,8 @@
     // a hidden one is 0x0, which wrecks both the tile grid and fitBounds.
     reviewBody.classList.toggle('no-transcript', !reviewTranscript.classList.contains('show'));
     reviewCenteredPinId=null;
-    initReviewMap();
     setMainPane('video');
-    renderReviewMapPins();
-    refreshReviewMapSize();
+    mountMapInReview();
     reviewScrub.value=0;
     updateReviewFrame(0);
   }
@@ -1247,66 +1253,68 @@
   }
   // Leaflet caches container size; if it changes while Leaflet isn't looking
   // the map renders grey tiles or mis-places pins. Re-measure after layout.
+  // Leaflet caches container size; if it changes while Leaflet isn't looking
+  // the map renders grey tiles or mis-places pins. Re-measure after layout.
   function refreshReviewMapSize(){
-    if(!reviewMap) return;
-    requestAnimationFrame(()=>{ try{ reviewMap.invalidateSize(); }catch(e){} });
+    if(!map) return;
+    requestAnimationFrame(()=>{ try{ map.invalidateSize(); }catch(e){} });
   }
 
-  function initReviewMap(){
-    if(reviewMapInited) return;
-    reviewMapInited = true;
-    reviewMap = L.map('reviewMap',{zoomControl:true, attributionControl:false})
-                 .setView([41.32,-87.20], 15);
-    L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{
-      maxZoom:21, maxNativeZoom:19, attribution:'Imagery © Esri'
-    }).addTo(reviewMap);
-  }
-
-  function renderReviewMapPins(){
-    if(!reviewMap) return;
-    reviewPinLayers.forEach(m=>{ try{ reviewMap.removeLayer(m); }catch(e){} });
-    reviewPinLayers = [];
+  // Move the real capture map into the review pane instead of creating a
+  // second Leaflet instance. Everything already bound to it comes along:
+  // draggable pins and their PATCH-on-drop, sketch, measure, the plan
+  // overlay, the mode bar. A second map would have to re-implement all of it
+  // and would edit a different set of markers.
+  // Leaflet survives its container being re-parented as long as
+  // invalidateSize() runs afterwards -- it holds an element reference, not a
+  // position in the tree. (A <video> would NOT survive this, which is why the
+  // panes themselves still swap by grid-area rather than by moving nodes.)
+  function mountMapInReview(){
+    if(!mapHomeParent){ mapHomeParent = mapwrap.parentNode; mapHomeNext = mapwrap.nextSibling; }
+    if(mapwrap.parentNode !== reviewMapPane) reviewMapPane.appendChild(mapwrap);
+    mapwrap.classList.add('show');
+    initMap();  // may never have run: the iPad can stay upright the whole session
+    pins.forEach(p=>{ if(!p.marker) addPinMarker(p); });
+    markSelectedMarkers();
     const located = pins.filter(p=> p.lat!==null && p.lng!==null);
     reviewNoMap.style.display = located.length ? 'none' : 'flex';
-    if(!located.length) return;
-    located.forEach(pin=>{
-      const m = L.marker([pin.lat,pin.lng]).addTo(reviewMap);
-      m._pinId = pin.id;
-      m.bindPopup('<b>Pin '+pin.id+'</b>', {maxWidth:160});
-      // The map is a second way into the timeline: tapping a pin scrubs the
-      // master audio to the moment that photo was taken.
-      m.on('click', ()=>{
-        if(reviewAudio && pin.offset!==null){
-          reviewAudio.currentTime = pin.offset/1000;
-          syncReviewScrub();
-        }
-      });
-      reviewPinLayers.push(m);
-    });
-    reviewMap.fitBounds(L.latLngBounds(located.map(p=>[p.lat,p.lng])), {padding:[40,40], maxZoom:REVIEW_MAP_ZOOM});
+    if(located.length){
+      map.fitBounds(L.latLngBounds(located.map(p=>[p.lat,p.lng])),
+                    {padding:[40,40], maxZoom:REVIEW_MAP_ZOOM});
+    }
+    refreshReviewMapSize();
+  }
+
+  function unmountMapFromReview(){
+    if(mapMode){ clearMeasureDraft(); setMapMode(null); }
+    if(!mapHomeParent || mapwrap.parentNode===mapHomeParent) return;
+    mapHomeParent.insertBefore(mapwrap, mapHomeNext);
+    mapwrap.classList.remove('show');
   }
 
   // Drive the map from the playhead: whichever photo the timeline is sitting
-  // on gets highlighted and centred. Uses the same window as the photo rail
-  // so the rail highlight and the map agree; when several pins fall inside
-  // the window the nearest one wins.
+  // on gets selected and centred. Uses the same window as the photo rail so
+  // the rail highlight and the map agree; nearest pin wins when several fall
+  // inside it.
   function updateReviewMapForTime(audioMs){
-    if(!reviewMap) return;
+    if(!map) return;
     let best=null, bestD=Infinity;
     pins.forEach(pin=>{
       if(pin.lat===null || pin.offset===null) return;
       const d = Math.abs(pin.offset - audioMs);
       if(d <= PHOTO_WINDOW_MS && d < bestD){ bestD=d; best=pin; }
     });
-    reviewPinLayers.forEach(m=>{
-      if(m._icon) m._icon.classList.toggle('pin-sel', !!best && m._pinId===best.id);
-    });
     // Clearing the id on the way out means scrubbing back onto the same pin
     // re-centres it, even if the map was panned away in between.
     if(!best){ reviewCenteredPinId=null; return; }
     if(best.id === reviewCenteredPinId) return;
     reviewCenteredPinId = best.id;
-    reviewMap.setView([best.lat,best.lng], Math.max(reviewMap.getZoom(), REVIEW_MAP_ZOOM), {animate:true});
+    selectedPinId = best.id;
+    markSelectedMarkers();
+    // Never yank the viewport out from under someone who is drawing,
+    // measuring, or repositioning a pin.
+    if(mapMode || pinDragging) return;
+    map.setView([best.lat,best.lng], Math.max(map.getZoom(), REVIEW_MAP_ZOOM), {animate:true});
   }
 
   function closeReview(){
@@ -1321,6 +1329,7 @@
     reviewVideo.removeAttribute('src'); reviewVideo.removeAttribute('data-clip');
     if(transcriptPollTimer){ clearTimeout(transcriptPollTimer); transcriptPollTimer=null; }
     reviewCenteredPinId=null;
+    unmountMapFromReview();
   }
 
   function syncReviewScrub(){
@@ -1674,6 +1683,7 @@
   // ---------- map annotation: freehand sketch + measured polygons ----------
   let sketches=[], measures=[];
   let mapMode=null;                 // null | 'sketch' | 'measure'
+  let pinDragging=false;            // true mid-drag, so auto-centring holds off
   let sketchLine=null, sketchPts=[], sketching=false;
   let measurePts=[], measureLayer=null, measureAnchorPin=null;
 
