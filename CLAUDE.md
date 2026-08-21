@@ -46,7 +46,7 @@ still nullable and still unused.
 Endpoints under `/functions/v1/upright-api`:
 `POST /sessions`, `GET /sessions` (history list), `GET /sessions/:id`,
 `PATCH /sessions/:id` (assign property), `GET /properties` (address picker),
-`POST /sessions/:id/audio|clips|photos|sketches|measures`,
+`POST /sessions/:id/audio|clips|photos|sketches|measures|plan`,
 `PATCH /photos/:id`, `POST /photos/:id/image`,
 `POST /sessions/:id/transcribe`, `GET /sessions/:id/transcript`.
 
@@ -171,6 +171,49 @@ post-session reporting uses `sessionDurationMs()`. (This also fixed the ZIP
 manifest's `audioDurationSeconds`, which previously reported time-since-start
 at the moment you hit export.)
 
+### Plan overlay as a basemap
+
+An imported plan is **georeferenced**, not decorative. `planCorners()` turns
+centre lat/lng + width in metres + aspect + rotation into three real corner
+latlngs, and three corners of a parallelogram fully define an affine mapping
+from image pixel to coordinate. Store the image and those five numbers and
+you can rebuild it exactly — that is what `plan_*` on `upright_sessions` is.
+
+Because Leaflet's CRS is independent of any tile layer, **the satellite can
+simply be removed**: pins, sketches and measures are computed from lat/lng
+and do not change by one millimetre. `basemapBtn` cycles
+`both → plan → satellite`; `satLayer` is held in a variable (not created
+inline) precisely so it can be taken away.
+
+This is usually the *honest* view once a plan is aligned. Per the settled
+notes, satellite imagery is feet-misaligned and 1–2 years stale, so leaving
+it under an accurate plan puts two contradictory references on screen with
+the stale one beneath your measurements. But note what it does **not** do:
+hiding the tiles does not improve accuracy, it hides the disagreement. The
+plan is only as well-placed as whatever it was aligned against — align to
+two known GPS points (snap pins at identifiable corners) before trusting a
+tile-free view.
+
+`planCorners()` is a flat-earth approximation (fixed metres-per-degree with
+a `cos(lat)` term). Sub-centimetre at site scale, so fine — but it models the
+image as a parallelogram with **no perspective correction**, so a plan
+photographed at an angle will never align perfectly however much you nudge it.
+
+**Extent lock prefers the plan's footprint** (`planBounds()`) over the
+current viewport when a plan is loaded, and sets `minZoom` from
+`getBoundsZoom` so you can't zoom out past the plan.
+
+Geometry changes are PATCHed on a 700ms debounce — sliders and drags fire
+continuously and only the resting position matters. The image itself uploads
+once, on import.
+
+**Restored plans come back locked.** An unlocked plan freezes the map for
+two-finger gestures, which is a nasty surprise when you have just reopened
+an old session to look at it. Tap Unlock to nudge.
+
+Note the plan controls live in `.map-toolbar`, which is hidden while the map
+is in review's mini pane — swap the map to the main stage to reach them.
+
 ### Session history
 
 **Past sessions** (start screen and done panel) lists every session
@@ -207,9 +250,9 @@ not just abandoned starts.
   data URL and `clip.blob`, both of which are URLs in archive mode. Not
   currently reachable (the done panel isn't part of the archive flow) but it
   will need fetch-and-zip when it is.
-- Persisting the imported plan overlay. The plan image, centre, width and
-  rotation are local variables that never reach the API, so a reopened
-  session loses the plan even though pins and measures come back.
+- Aligning a plan to known GPS points rather than by eye. This is the piece
+  that would make plan-only mode trustworthy rather than merely tidy.
+- Perspective/skew correction for plans photographed at an angle.
 - ZIP **import** to view old sessions offline. The ZIP already contains everything needed (audio, clips + offsets, photos + offsets, GeoJSON) — except the transcript, which lives only in Supabase. Consider adding `transcript.json` to the export.
 - Retry logic / sync-later indicator for failed uploads.
 - Client-facing deliverable (PDF or web page vs raw GeoJSON/ZIP).
@@ -220,6 +263,9 @@ not just abandoned starts.
 - 58px sidebar buttons with a gloved thumb; marker base size (30% of screen); yellow marker visibility on sunny turf; stroke weight at 3× zoom.
 - Extent-lock button reachability; whether the filmstrip eats too much map height in landscape.
 - Audio level in real field conditions.
+- Plan persistence against a real plan photo on the iPad: whether the upload
+  size is sensible over cellular, and whether a restored plan lands exactly
+  where it was left.
 - Session history against real data: the new `GET /sessions` and
   `GET /properties` endpoints could not be called from the dev sandbox (its
   proxy blocks supabase.co), so they are verified only against mocked

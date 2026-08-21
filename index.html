@@ -506,6 +506,7 @@
         <button class="mt-btn" id="sketchBtn">Sketch</button>
         <button class="mt-btn" id="measureBtn">Measure</button>
         <button class="mt-btn" id="lockExtentBtn">Lock extent</button>
+        <button class="mt-btn" id="basemapBtn" style="display:none">Plan + satellite</button>
       </div>
     </div>
 
@@ -606,6 +607,7 @@
         importPlanBtn=$('importPlanBtn'), planFile=$('planFile'), overlayControls=$('overlayControls'),
         opSlider=$('opSlider'), scaleSlider=$('scaleSlider'), rotSlider=$('rotSlider'),
         lockPlanBtn=$('lockPlanBtn'), exportPinsBtn=$('exportPinsBtn'), centerBtn=$('centerBtn'), lockExtentBtn=$('lockExtentBtn'),
+        basemapBtn=$('basemapBtn'),
         annoDraw=$('annoDraw'), drawWrap=$('drawWrap'), drawCanvas=$('drawCanvas'),
         drawSwatches=$('drawSwatches'), drawUndo=$('drawUndo'), drawClear=$('drawClear'), drawDone=$('drawDone'),
         filmStrip=$('filmStrip'), sketchBtn=$('sketchBtn'), measureBtn=$('measureBtn'),
@@ -1554,6 +1556,14 @@
     sessionWallMs=(s.audio_duration_seconds||0)*1000;
     lastTranscribeError=null;
 
+    // The plan can only be rebuilt once the map exists, so stash it here and
+    // let drawArchiveGeometry() put it back when review mounts the map.
+    archivePlanData = (s.planUrl && s.plan_center_lat!=null && s.plan_center_lng!=null) ? {
+      url:s.planUrl, lat:s.plan_center_lat, lng:s.plan_center_lng,
+      widthM:s.plan_width_m, aspect:s.plan_aspect, rotDeg:s.plan_rot_deg,
+      opacity:s.plan_opacity, basemap:s.basemap
+    } : null;
+
     clips=(data.clips||[]).map(c=>({
       startOffset:c.start_offset_ms, endOffset:c.end_offset_ms,
       blob:null, url:c.url
@@ -1580,9 +1590,37 @@
     updatePinCount();
   }
 
+  // A stored plan is rebuilt from its georeference: the image plus centre,
+  // width, aspect and rotation is everything planCorners() needs.
+  function restoreArchivePlan(){
+    if(!map || !archivePlanData) return;
+    const d=archivePlanData;
+    archivePlanData=null;                 // restore once per open
+    planImg=d.url;
+    planAspect=(d.aspect!=null? d.aspect : 1);
+    planCenter=L.latLng(d.lat, d.lng);
+    planWidthM=(d.widthM!=null? d.widthM : 60);
+    planRotDeg=(d.rotDeg!=null? d.rotDeg : 0);
+    opSlider.value=Math.round((d.opacity!=null? d.opacity : 0.6)*100);
+    scaleSlider.value=planWidthM;
+    rotSlider.value=planRotDeg;
+    buildPlanOverlay();
+    overlayControls.classList.add('show');
+    // Restored plans come back LOCKED. They were already aligned once, and an
+    // unlocked plan freezes the map for two-finger gestures -- a nasty
+    // surprise when you have just reopened a session to look at it.
+    planLocked=true;
+    lockPlanBtn.textContent='Unlock';
+    if(planCenterMarker){ planCenterMarker.dragging.disable(); planCenterMarker.setOpacity(0); }
+    setPlanGestureMode(false);
+    basemapMode=d.basemap || 'both';
+    applyBasemap();
+  }
+
   // Drawn geometry is re-created on the map when review mounts it.
   function drawArchiveGeometry(){
     if(!map) return;
+    restoreArchivePlan();
     sketches.forEach(rec=>{
       if(rec.layer || !rec.latlngs || rec.latlngs.length<2) return;
       rec.layer=L.polyline(rec.latlngs.map(p=>[p.lat,p.lng]),
@@ -1616,7 +1654,12 @@
   function exitArchive(){
     if(!archiveMode) return;
     clearArchiveLayers();
-    archiveMode=false; archiveAudioUrl=null;
+    archiveMode=false; archiveAudioUrl=null; archivePlanData=null;
+    if(planOverlay && map){ try{ map.removeLayer(planOverlay); }catch(e){} }
+    if(planCenterMarker && map){ try{ map.removeLayer(planCenterMarker); }catch(e){} }
+    planOverlay=null; planCenterMarker=null; planImg=null; planCenter=null;
+    overlayControls.classList.remove('show');
+    basemapMode='both'; applyBasemap();
     clips=[]; pins=[]; sketches=[]; measures=[];
     pinSeq=0; selectedPinId=null; sessionId=null;
     finalAudioBlob=null; sessionWallMs=null;
@@ -2427,13 +2470,17 @@
     mapInited=true;
     const start = lastFix ? [lastFix.coords.latitude,lastFix.coords.longitude] : [41.32,-87.20];
     map = L.map('map',{zoomControl:true}).setView(start, lastFix?19:15);
-    L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{
+    // Kept in a variable, not created inline: once a plan is aligned the
+    // satellite tiles are stale by comparison and need to be removable.
+    satLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{
       maxZoom:21, maxNativeZoom:19, attribution:'Imagery © Esri'
-    }).addTo(map);
+    });
+    satLayer.addTo(map);
     updateMyMarker();
     pins.forEach(p=>{ if(!p.marker) addPinMarker(p); });
     bindPlanGestures();
     wireMapAnnotation();
+    applyBasemap();
   }
   function showMap(show){
     if(show){
@@ -2457,8 +2504,18 @@
     if(!map) return;
     extentLocked=!extentLocked;
     if(extentLocked){
-      map.setMaxBounds(map.getBounds());
-      map.setMinZoom(map.getZoom());
+      // With a plan loaded, its footprint is the meaningful extent -- locking
+      // to whatever the viewport happened to be is arbitrary by comparison.
+      const pb = planBounds();
+      if(pb){
+        map.fitBounds(pb, {animate:false});
+        map.setMaxBounds(pb);
+        map.setMinZoom(map.getBoundsZoom(pb));
+        lockExtentBtn.title='Locked to the plan';
+      } else {
+        map.setMaxBounds(map.getBounds());
+        map.setMinZoom(map.getZoom());
+      }
       map.options.maxBoundsViscosity=1.0;
       lockExtentBtn.textContent='Unlock extent';
       lockExtentBtn.classList.add('active');
@@ -2473,6 +2530,71 @@
   // ---------- plan overlay ----------
   let planOverlay=null, planImg=null, planCenter=null, planWidthM=60, planRotDeg=0, planAspect=1, planLocked=false;
   let planCenterMarker=null;
+  let satLayer=null, basemapMode='both', archivePlanData=null, planSaveTimer=null;
+
+  // ---------- basemap: satellite, plan, or both ----------
+  // Leaflet's CRS is independent of any tile layer, so removing the satellite
+  // changes nothing about where pins, sketches or measures land — they are
+  // computed from lat/lng, not from tiles. Once a plan is aligned the tiles
+  // are the *less* accurate reference (feet-misaligned, 1-2 years stale), so
+  // working plan-only is often the honest view.
+  function applyBasemap(){
+    if(!map) return;
+    const hasPlan = !!planOverlay;
+    if(!hasPlan) basemapMode='both';
+    if(satLayer){
+      const wantTiles = (basemapMode !== 'plan');
+      if(wantTiles && !map.hasLayer(satLayer)) satLayer.addTo(map);
+      else if(!wantTiles && map.hasLayer(satLayer)) map.removeLayer(satLayer);
+    }
+    if(planOverlay){
+      const wantPlan = (basemapMode !== 'satellite');
+      if(wantPlan && !map.hasLayer(planOverlay)) planOverlay.addTo(map);
+      else if(!wantPlan && map.hasLayer(planOverlay)) map.removeLayer(planOverlay);
+    }
+    basemapBtn.style.display = hasPlan ? '' : 'none';
+    basemapBtn.textContent = basemapMode==='both' ? 'Plan + satellite'
+                           : basemapMode==='plan' ? 'Plan only'
+                           : 'Satellite only';
+    basemapBtn.classList.toggle('active', basemapMode==='plan');
+  }
+  basemapBtn.addEventListener('click', ()=>{
+    basemapMode = basemapMode==='both' ? 'plan' : basemapMode==='plan' ? 'satellite' : 'both';
+    applyBasemap();
+    savePlanGeometry();
+  });
+
+  // The plan's own footprint. tl/tr/bl describe a parallelogram, so the
+  // fourth corner is tr + (bl - tl).
+  function planBounds(){
+    if(!planCenter || !planOverlay) return null;
+    const c = planCorners();
+    const br = L.latLng(c.tr.lat + (c.bl.lat - c.tl.lat), c.tr.lng + (c.bl.lng - c.tl.lng));
+    return L.latLngBounds([c.tl, c.tr, c.bl, br]);
+  }
+
+  // ---------- plan persistence ----------
+  // The image plus centre/width/aspect/rotation IS the georeference. Without
+  // storing it, a session reopened from history shows its pins over stale
+  // satellite instead of over the plan they were measured against.
+  function planMeta(){
+    return {
+      planCenterLat: planCenter ? planCenter.lat : null,
+      planCenterLng: planCenter ? planCenter.lng : null,
+      planWidthM: planWidthM,
+      planAspect: planAspect,
+      planRotDeg: planRotDeg,
+      planOpacity: parseFloat(opSlider.value)/100,
+      planLocked: planLocked,
+      basemap: basemapMode
+    };
+  }
+  function savePlanGeometry(){
+    if(!sessionId || !planCenter) return;
+    clearTimeout(planSaveTimer);
+    // Sliders and drags fire continuously; only the resting position matters.
+    planSaveTimer = setTimeout(()=>{ apiPatch('/sessions/'+sessionId, planMeta()); }, 700);
+  }
 
   importPlanBtn.addEventListener('click', ()=> planFile.click());
   planFile.addEventListener('change', e=>{
@@ -2489,6 +2611,9 @@
       overlayControls.classList.add('show');
       planLocked=false; lockPlanBtn.textContent='Lock';
       setPlanGestureMode(true);
+      applyBasemap();
+      // Upload the image once; every later nudge only PATCHes the geometry.
+      if(sessionId) apiUpload('/sessions/'+sessionId+'/plan', f, planMeta());
     };
     img.src=url;
   });
@@ -2525,8 +2650,12 @@
     if(!planOverlay) return;
     const c=planCorners();
     planOverlay.reposition(c.tl, c.tr, c.bl);
+    savePlanGeometry();
   }
-  opSlider.addEventListener('input', ()=>{ if(planOverlay) planOverlay.setOpacity(parseFloat(opSlider.value)/100); });
+  opSlider.addEventListener('input', ()=>{
+    if(planOverlay) planOverlay.setOpacity(parseFloat(opSlider.value)/100);
+    savePlanGeometry();
+  });
   scaleSlider.addEventListener('input', ()=>{ planWidthM=parseFloat(scaleSlider.value); refreshPlan(); });
   rotSlider.addEventListener('input', ()=>{ planRotDeg=parseFloat(rotSlider.value); refreshPlan(); });
   lockPlanBtn.addEventListener('click', ()=>{
@@ -2537,6 +2666,7 @@
       else { planCenterMarker.dragging.enable(); planCenterMarker.setOpacity(1); }
     }
     setPlanGestureMode(!planLocked);
+    savePlanGeometry();
   });
 
 
