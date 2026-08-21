@@ -87,10 +87,37 @@ collapse that back into one try/catch. If still too quiet, raise `REVIEW_GAIN`.
 
 ## Open items
 
-**Just shipped, verify on device:** the transcript panel moved from a bottom
-strip to a left column (**25%** width, full height) with the photo rail still a
-full-width row beneath. Width lives in one place — `.review-transcript`'s
-`flex`/`max-width` pair; keep the two in sync.
+**Just shipped, verify on device:** the review window's left column, and the
+video/map swap.
+
+`.review-body` is now a **CSS grid**, not a flex row:
+
+    grid-template-columns: 25% 1fr;      <- column width lives HERE now
+    grid-template-areas: "side main"
+                         "mini main";
+
+`side` is the transcript, `main` is the big stage, `mini` is the small pane
+under the transcript. The video and map panes each carry `in-main` or
+`in-mini` and **swap by class only — neither is ever re-parented**. That is
+deliberate: moving a playing `<video>` in the DOM restarts it on iOS Safari,
+and a moved Leaflet container needs a full re-init. Don't "simplify" this
+into appendChild calls.
+
+Two things that follow from it:
+
+- Review has its **own Leaflet instance** (`reviewMap`, `#reviewMap`),
+  separate from the live capture map (`map`, `#map`). One Leaflet map cannot
+  serve two containers, and review must not disturb live session state.
+- Leaflet caches container size, so every resize path calls
+  `refreshReviewMapSize()` (pane swap, transcript appearing, window resize,
+  orientation change). Skip it and you get grey tiles or mis-placed pins.
+
+The map is driven by the playhead: `updateReviewMapForTime()` picks the
+located pin nearest the playhead within `PHOTO_WINDOW_MS` — the same window
+the photo rail highlights on, so the two always agree — then centres on it
+and glows its marker. Tapping a map pin scrubs audio to that photo's offset,
+mirroring the photo rail. When the transcript hasn't loaded yet,
+`.review-body.no-transcript` gives the mini pane the whole left column.
 
 **Not yet built**
 - Session reload / browse past sessions. `GET /sessions/:id` exists but nothing calls it.
@@ -104,5 +131,8 @@ full-width row beneath. Width lives in one place — `.review-transcript`'s
 - 58px sidebar buttons with a gloved thumb; marker base size (30% of screen); yellow marker visibility on sunny turf; stroke weight at 3× zoom.
 - Extent-lock button reachability; whether the filmstrip eats too much map height in landscape.
 - Audio level in real field conditions.
+- Review pane swap: whether 190px of mini pane is enough to read a video
+  thumbnail or a map at a glance, and whether the map's auto-centring fights
+  you when you try to pan it manually mid-playback.
 - Longer-session soak test (30–60 min) — dual-stream recording plus continuous uploads.
 - What happens if the iPad backgrounds mid-upload.

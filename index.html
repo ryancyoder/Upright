@@ -293,18 +293,48 @@
     padding:7px 14px; border-radius:100px; border:1px solid var(--line);
     background:transparent; color:var(--ink); font-size:12px; font-weight:700;
   }
-  /* Body row: transcript column on the left (25% of width), video stage filling the rest. */
+  /* Body: transcript column on the left with a small secondary pane beneath
+     it, and the main stage filling the rest. Video and map each sit in a
+     named grid area and swap between "main" and "mini" by class alone --
+     neither element is ever re-parented, so video playback and the Leaflet
+     instance both survive a toggle untouched.
+     Column width lives HERE now (grid-template-columns), not on
+     .review-transcript. */
   .review-body{
-    flex:1 1 auto; display:flex; flex-direction:row; min-height:0; min-width:0;
+    flex:1 1 auto; min-height:0; min-width:0;
+    display:grid;
+    grid-template-columns:25% 1fr;
+    grid-template-rows:1fr 190px;
+    grid-template-areas:"side main"
+                        "mini main";
   }
-  .review-stage{
-    flex:1 1 auto; position:relative; background:#000; min-height:0; min-width:0;
-    display:flex; align-items:center; justify-content:center;
+  /* No transcript yet: let the mini pane have the whole left column rather
+     than stranding it under empty space. */
+  .review-body.no-transcript{grid-template-rows:0 1fr;}
+  .review-pane{position:relative; min-width:0; min-height:0; overflow:hidden;}
+  .review-pane.in-main{grid-area:main; background:#000;}
+  .review-pane.in-mini{
+    grid-area:mini; background:#000;
+    border-top:1px solid var(--line); border-right:1px solid var(--line);
   }
-  .review-stage video{width:100%; height:100%; object-fit:contain; display:block;}
-  .review-noclip{
+  .review-pane video{width:100%; height:100%; object-fit:contain; display:block;}
+  #reviewMap{width:100%; height:100%; background:#0a0a08;}
+  .review-noclip, .review-nomap{
     position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
     color:var(--dim); font-size:13px; text-align:center; padding:24px;
+  }
+  .review-nomap{display:none; z-index:500; background:var(--bg);}
+  /* Which pane is which is not obvious once they swap -- label the small one. */
+  .review-pane.in-main .pane-tag{display:none;}
+  .review-pane.in-mini .pane-tag{
+    position:absolute; left:6px; top:6px; z-index:600; pointer-events:none;
+    font-size:10px; font-weight:700; letter-spacing:0.08em; text-transform:uppercase;
+    color:var(--ink); background:rgba(0,0,0,0.6); padding:3px 8px; border-radius:100px;
+  }
+  .review-head-actions{display:flex; align-items:center; gap:8px;}
+  .review-swap{
+    padding:7px 14px; border-radius:100px; border:1px solid var(--flat);
+    background:transparent; color:var(--ink); font-size:12px; font-weight:700;
   }
   .review-photo-rail{
     flex:0 0 auto; display:flex; gap:8px; padding:8px 10px; overflow-x:auto;
@@ -318,7 +348,7 @@
   .review-photo img{width:100%; height:100%; object-fit:cover; display:block;}
   .review-photo.active{opacity:1; border-color:var(--live); transform:scale(1.05);}
   .review-transcript{
-    flex:0 0 25%; max-width:25%; min-width:0; min-height:0;
+    grid-area:side; min-width:0; min-height:0;
     display:none; flex-direction:column;
     background:var(--bg2); border-right:1px solid var(--line);
   }
@@ -445,16 +475,25 @@
     <div class="review-panel" id="reviewPanel">
       <div class="review-head">
         <span class="title">Session review</span>
-        <button class="review-close" id="reviewClose">Close</button>
+        <div class="review-head-actions">
+          <button class="review-swap" id="reviewSwap">Show map</button>
+          <button class="review-close" id="reviewClose">Close</button>
+        </div>
       </div>
-      <div class="review-body">
+      <div class="review-body" id="reviewBody">
         <div class="review-transcript" id="reviewTranscript">
           <div class="rt-status" id="rtStatus"></div>
           <div class="rt-list" id="rtList"></div>
         </div>
-        <div class="review-stage">
+        <div class="review-pane in-main" id="reviewVideoPane">
           <video id="reviewVideo" muted playsinline></video>
           <div class="review-noclip" id="reviewNoClip">No video at this point — audio continues</div>
+          <span class="pane-tag">Video</span>
+        </div>
+        <div class="review-pane in-mini" id="reviewMapPane">
+          <div id="reviewMap"></div>
+          <div class="review-nomap" id="reviewNoMap">No GPS pins in this session</div>
+          <span class="pane-tag">Map</span>
         </div>
       </div>
       <div class="review-photo-rail" id="reviewPhotoRail"></div>
@@ -491,7 +530,10 @@
         reviewBtn=$('reviewBtn'), reviewPanel=$('reviewPanel'), reviewClose=$('reviewClose'),
         reviewVideo=$('reviewVideo'), reviewNoClip=$('reviewNoClip'), reviewPhotoRail=$('reviewPhotoRail'),
         reviewPlayBtn=$('reviewPlayBtn'), reviewScrub=$('reviewScrub'), reviewTime=$('reviewTime'),
-        reviewTranscript=$('reviewTranscript'), rtStatus=$('rtStatus'), rtList=$('rtList');
+        reviewTranscript=$('reviewTranscript'), rtStatus=$('rtStatus'), rtList=$('rtList'),
+        reviewBody=$('reviewBody'), reviewSwap=$('reviewSwap'),
+        reviewVideoPane=$('reviewVideoPane'), reviewMapPane=$('reviewMapPane'),
+        reviewNoMap=$('reviewNoMap');
 
   const UPRIGHT_ON=55, UPRIGHT_OFF=35, HOLD_MS=350;
 
@@ -1100,6 +1142,12 @@
   let reviewAudio=null, reviewRAF=null, reviewClipUrls=[], reviewScrubbing=false;
   let reviewAudioCtx=null, reviewSourceNode=null, reviewGainNode=null, reviewCompNode=null;
   const PHOTO_WINDOW_MS = 3000;
+  // Review map: its own Leaflet instance, separate from the live capture map
+  // (#map). One Leaflet map cannot serve two containers, and the live map is
+  // still mid-session state we don't want review to disturb.
+  let reviewMap=null, reviewMapInited=false, reviewPinLayers=[];
+  let reviewCenteredPinId=null, reviewMainPane='video';
+  const REVIEW_MAP_ZOOM = 20;
   const REVIEW_GAIN = 14.0; // aggressive boost — mic recordings can come back very quiet; compressor below guards against clipping
 
   // Transcript: the master audio is also the transcript's timeline, so the
@@ -1131,6 +1179,14 @@
     transcriptSegments=[]; transcriptActiveIdx=-1; rtList.innerHTML='';
     pollTranscript();
     reviewPanel.classList.add('show');
+    // Panel must be visible first: Leaflet measures the container on init and
+    // a hidden one is 0x0, which wrecks both the tile grid and fitBounds.
+    reviewBody.classList.toggle('no-transcript', !reviewTranscript.classList.contains('show'));
+    reviewCenteredPinId=null;
+    initReviewMap();
+    setMainPane('video');
+    renderReviewMapPins();
+    refreshReviewMapSize();
     reviewScrub.value=0;
     updateReviewFrame(0);
   }
@@ -1175,6 +1231,84 @@
     }
   }
 
+  // ---------- review: video <-> map pane swap ----------
+  // Both panes stay put in the DOM; only their grid-area class changes. That
+  // matters: re-parenting a playing <video> restarts it on iOS Safari, and a
+  // re-parented Leaflet container needs a full re-init.
+  function setMainPane(which){
+    reviewMainPane = which;
+    const videoMain = (which === 'video');
+    reviewVideoPane.classList.toggle('in-main', videoMain);
+    reviewVideoPane.classList.toggle('in-mini', !videoMain);
+    reviewMapPane.classList.toggle('in-main', !videoMain);
+    reviewMapPane.classList.toggle('in-mini', videoMain);
+    reviewSwap.textContent = videoMain ? 'Show map' : 'Show video';
+    refreshReviewMapSize();
+  }
+  // Leaflet caches container size; if it changes while Leaflet isn't looking
+  // the map renders grey tiles or mis-places pins. Re-measure after layout.
+  function refreshReviewMapSize(){
+    if(!reviewMap) return;
+    requestAnimationFrame(()=>{ try{ reviewMap.invalidateSize(); }catch(e){} });
+  }
+
+  function initReviewMap(){
+    if(reviewMapInited) return;
+    reviewMapInited = true;
+    reviewMap = L.map('reviewMap',{zoomControl:true, attributionControl:false})
+                 .setView([41.32,-87.20], 15);
+    L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{
+      maxZoom:21, maxNativeZoom:19, attribution:'Imagery © Esri'
+    }).addTo(reviewMap);
+  }
+
+  function renderReviewMapPins(){
+    if(!reviewMap) return;
+    reviewPinLayers.forEach(m=>{ try{ reviewMap.removeLayer(m); }catch(e){} });
+    reviewPinLayers = [];
+    const located = pins.filter(p=> p.lat!==null && p.lng!==null);
+    reviewNoMap.style.display = located.length ? 'none' : 'flex';
+    if(!located.length) return;
+    located.forEach(pin=>{
+      const m = L.marker([pin.lat,pin.lng]).addTo(reviewMap);
+      m._pinId = pin.id;
+      m.bindPopup('<b>Pin '+pin.id+'</b>', {maxWidth:160});
+      // The map is a second way into the timeline: tapping a pin scrubs the
+      // master audio to the moment that photo was taken.
+      m.on('click', ()=>{
+        if(reviewAudio && pin.offset!==null){
+          reviewAudio.currentTime = pin.offset/1000;
+          syncReviewScrub();
+        }
+      });
+      reviewPinLayers.push(m);
+    });
+    reviewMap.fitBounds(L.latLngBounds(located.map(p=>[p.lat,p.lng])), {padding:[40,40], maxZoom:REVIEW_MAP_ZOOM});
+  }
+
+  // Drive the map from the playhead: whichever photo the timeline is sitting
+  // on gets highlighted and centred. Uses the same window as the photo rail
+  // so the rail highlight and the map agree; when several pins fall inside
+  // the window the nearest one wins.
+  function updateReviewMapForTime(audioMs){
+    if(!reviewMap) return;
+    let best=null, bestD=Infinity;
+    pins.forEach(pin=>{
+      if(pin.lat===null || pin.offset===null) return;
+      const d = Math.abs(pin.offset - audioMs);
+      if(d <= PHOTO_WINDOW_MS && d < bestD){ bestD=d; best=pin; }
+    });
+    reviewPinLayers.forEach(m=>{
+      if(m._icon) m._icon.classList.toggle('pin-sel', !!best && m._pinId===best.id);
+    });
+    // Clearing the id on the way out means scrubbing back onto the same pin
+    // re-centres it, even if the map was panned away in between.
+    if(!best){ reviewCenteredPinId=null; return; }
+    if(best.id === reviewCenteredPinId) return;
+    reviewCenteredPinId = best.id;
+    reviewMap.setView([best.lat,best.lng], Math.max(reviewMap.getZoom(), REVIEW_MAP_ZOOM), {animate:true});
+  }
+
   function closeReview(){
     reviewPanel.classList.remove('show');
     if(reviewAudio){ reviewAudio.pause(); reviewAudio.src=''; reviewAudio=null; }
@@ -1186,6 +1320,7 @@
     reviewClipUrls=[];
     reviewVideo.removeAttribute('src'); reviewVideo.removeAttribute('data-clip');
     if(transcriptPollTimer){ clearTimeout(transcriptPollTimer); transcriptPollTimer=null; }
+    reviewCenteredPinId=null;
   }
 
   function syncReviewScrub(){
@@ -1230,6 +1365,7 @@
       reviewVideo.removeAttribute('data-clip');
     }
     updateReviewPhotoHighlight(audioMs);
+    updateReviewMapForTime(audioMs);
     updateTranscriptHighlight(audioMs);
   }
 
@@ -1287,6 +1423,8 @@
   function setTranscriptStatus(status, detail){
     transcriptStatus=status;
     reviewTranscript.classList.add('show');
+    reviewBody.classList.remove('no-transcript');
+    refreshReviewMapSize();
     function wireRetry(){
       const rb=$('rtRetryBtn');
       if(rb) rb.addEventListener('click', ()=>{
@@ -1371,7 +1509,11 @@
   reviewScrub.addEventListener('change', ()=>{ reviewScrubbing=false; });
 
   reviewBtn.addEventListener('click', openReview);
+  reviewSwap.addEventListener('click', ()=> setMainPane(reviewMainPane==='video' ? 'map' : 'video'));
   reviewClose.addEventListener('click', closeReview);
+  // Rotating the iPad resizes both panes; Leaflet needs telling.
+  window.addEventListener('resize', refreshReviewMapSize);
+  window.addEventListener('orientationchange', ()=> setTimeout(refreshReviewMapSize, 250));
 
 
   // ---------- draw-over editor ----------
