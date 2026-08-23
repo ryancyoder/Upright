@@ -296,7 +296,9 @@ to the point. Without that photo a yard full of "Target 3" pins is
 impossible to place afterwards.
 
 Pressing the button again ends the mode, restores tilt-to-map, opens the
-survey bar and fits the map to the survey.
+survey bar and fits the map to the survey. The bar is status plus **Done** —
+there are no manual add-point buttons, because every point comes from a shot;
+a point with no shot has no elevation and is just clutter.
 
 **Shot points start `placed=false`** at a provisional position fanned around
 the observation, and their elevation reads *place pin* rather than a number —
@@ -319,12 +321,12 @@ calls `elevSelect()`, which calls `elevRenderAll()`, which destroys and
 rebuilds every marker *during the click* — so the popup Leaflet was opening
 belonged to an element that no longer existed, and the photo silently could
 never be seen. `elevSelect()` therefore reopens the popup on the freshly
-built marker. The photo is also mirrored into the survey bar, where it
-survives a drag; a popup closes on first touch, which is precisely when you
-need to see what you aimed at.
+built marker. The photo lives on the pin and nowhere else — it was briefly
+mirrored into a panel in the survey bar, and a permanent photo-sized hole in
+the map was worse than the problem it solved.
 
-The locally captured frame is kept in `photoLocal` even after upload, and
-both the bar and the popup fall back to it if the Storage URL fails to load.
+The locally captured frame is kept in `photoLocal` even after upload, and the
+popup falls back to it if the Storage URL fails to load.
 Given the fire-and-forget write model and field connectivity, a pin with a
 broken image and no fallback is a real prospect.
 
