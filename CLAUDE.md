@@ -307,7 +307,26 @@ the maths, so iOS compass calibration cannot corrupt a measurement.
 
 Observation, anchor and target each render as their **own SVG glyph** (tripod,
 benchmark triangle, crosshair) — deliberately not the standard photo-pin
-graphic, since they are different things.
+graphic, since they are different things. **Keep the pins minimal**: glyph
+plus at most one line, no fill, border or corner radius. Legibility over
+bright satellite comes from drop-shadows, not from a box; a yard full of
+boxed labels is unreadable. The point's name shows only while it is
+*unplaced*, which is the one moment identity matters — after that the number
+is all you want.
+
+**The reference photo must be reachable, and that is fiddly.** Tapping a pin
+calls `elevSelect()`, which calls `elevRenderAll()`, which destroys and
+rebuilds every marker *during the click* — so the popup Leaflet was opening
+belonged to an element that no longer existed, and the photo silently could
+never be seen. `elevSelect()` therefore reopens the popup on the freshly
+built marker. The photo is also mirrored into the survey bar, where it
+survives a drag; a popup closes on first touch, which is precisely when you
+need to see what you aimed at.
+
+The locally captured frame is kept in `photoLocal` even after upload, and
+both the bar and the popup fall back to it if the Storage URL fails to load.
+Given the fire-and-forget write model and field connectivity, a pin with a
+broken image and no fallback is a real prospect.
 
 Sighting is gated on steadiness (`STEADY_DEG`, sample spread over the same
 800ms window that gets averaged into the shot): HOLD STEADY → HOLDING → fire.

@@ -266,23 +266,36 @@
   .elev-bar.show{display:flex;}
   .elev-status{font-size:13px; line-height:1.4; color:var(--ink); min-height:18px;}
   .elev-actions{display:flex; gap:8px; flex-wrap:wrap; align-items:center;}
+  /* The shot's reference photo, shown while a pin is selected. It has to stay
+     put while you drag the pin -- a popup would close on the first touch,
+     which is exactly when you need to see what you aimed at. */
+  .elev-thumb{
+    display:none; width:100%; max-height:180px; object-fit:contain;
+    border-radius:8px; border:1px solid var(--line); background:#000;
+  }
+  .elev-thumb.show{display:block;}
   .mt-btn.go{border-color:var(--flat);}
   .mt-btn:disabled{opacity:0.35;}
-  /* Map pins carry their own elevation, so the survey reads at a glance. */
+  /* Minimal: the glyph plus one line of text. No chrome around it -- a yard
+     full of boxed labels is unreadable, and the glyph already says what the
+     point is. Legibility on bright satellite comes from shadows, not fills. */
   .elev-pin{
     transform:translate(-50%,-50%);
-    display:flex; flex-direction:column; align-items:center; gap:1px;
-    padding:4px 9px; border-radius:9px; white-space:nowrap;
-    background:rgba(0,0,0,0.74); border:2px solid var(--c);
-    font-size:11px; color:var(--ink); line-height:1.25;
+    display:flex; flex-direction:column; align-items:center;
+    white-space:nowrap; line-height:1.2; text-align:center;
   }
-  .elev-pin svg{display:block; margin-bottom:1px;}
-  .elev-pin em{font-style:normal; font-size:10px; font-weight:700; color:var(--live); letter-spacing:0.04em;}
-  .elev-pin.unplaced{border-style:dashed; opacity:0.92;}
-  .elev-pin b{font-size:11px; font-weight:700;}
-  .elev-pin span{font-size:13px; font-weight:700; color:var(--c);}
-  .elev-pin.sel{box-shadow:0 0 0 3px rgba(255,255,255,0.35);}
-  .elev-pin.active{background:rgba(90,122,99,0.5);}
+  .elev-pin svg{display:block; filter:drop-shadow(0 1px 2px rgba(0,0,0,0.9));}
+  .elev-pin b{
+    font-size:10px; font-weight:700; color:#fff; opacity:0.85;
+    text-shadow:0 1px 3px rgba(0,0,0,0.95), 0 0 2px rgba(0,0,0,0.95);
+  }
+  .elev-pin span{
+    font-size:13px; font-weight:700; color:var(--c);
+    text-shadow:0 1px 3px rgba(0,0,0,0.95), 0 0 2px rgba(0,0,0,0.95);
+  }
+  .elev-pin.unplaced svg{opacity:0.75;}
+  .elev-pin.unplaced span{color:#fff; opacity:0.9;}
+  .elev-pin.sel svg{filter:drop-shadow(0 0 4px #fff) drop-shadow(0 1px 2px rgba(0,0,0,0.9));}
   .sight-steady{
     font-size:11px; font-weight:700; letter-spacing:0.1em; text-transform:uppercase;
     color:var(--dim);
@@ -606,6 +619,7 @@
       <div class="film-strip" id="filmStrip"></div>
       <div class="elev-bar" id="elevBar">
         <span class="elev-status" id="elevStatus"></span>
+        <img class="elev-thumb" id="elevThumb" alt="">
         <div class="elev-actions">
           <button class="mt-btn" id="elevAddObs">+ Observation</button>
           <button class="mt-btn" id="elevAddAnchor">+ Anchor</button>
@@ -735,7 +749,7 @@
         sightDwell=$('sightDwellFill'),
         elevBar=$('elevBar'), elevStatus=$('elevStatus'), elevAddObs=$('elevAddObs'),
         elevAddAnchor=$('elevAddAnchor'), elevAddTarget=$('elevAddTarget'),
-        elevExit=$('elevExit'),
+        elevExit=$('elevExit'), elevThumb=$('elevThumb'),
         annoDraw=$('annoDraw'), drawWrap=$('drawWrap'), drawCanvas=$('drawCanvas'),
         drawSwatches=$('drawSwatches'), drawUndo=$('drawUndo'), drawClear=$('drawClear'), drawDone=$('drawDone'),
         filmStrip=$('filmStrip'), sketchBtn=$('sketchBtn'), measureBtn=$('measureBtn'),
@@ -2739,21 +2753,35 @@
       const isObs=pt.kind==='observation', isAnchor=pt.kind==='anchor';
       const colour=isObs?'#8b887f':isAnchor?'#5a7a63':'#c4432b';
       const e=elevationOf(pt.id);
-      const value=isObs ? (pt.id===elevActiveObs?'standing':'observation') : fmtElev(e);
+      const value=isObs ? '' : fmtElev(e);
       const cls='elev-pin'+(pt.id===elevSelected?' sel':'')+(pt.placed?'':' unplaced');
+      // Name it only while it is unplaced -- that is when you need to match a
+      // pin to its photo. Once placed, the number is all that matters.
+      const name=(!pt.placed && !isObs) ? '<b>'+(pt.label||'')+'</b>' : '';
       const html='<div class="'+cls+'" style="--c:'+colour+'">'
-               + elevGlyph(pt.kind, colour)
-               + '<b>'+(pt.label||'')+'</b><span>'+value+'</span>'
-               + (pt.placed?'':'<em>drag me</em>')
+               + elevGlyph(pt.kind, colour) + name
+               + (value?'<span>'+value+'</span>':'')
                + '</div>';
       const m=L.marker([pt.lat,pt.lng],{
         draggable:true,
         icon:L.divIcon({className:'', html:html, iconSize:[0,0], iconAnchor:[0,0]})
       }).addTo(map);
       // The reference photo is what makes placing the pin possible at all.
-      if(pt.photoUrl) m.bindPopup('<div style="text-align:center"><b>'+(pt.label||'')+'</b><br>'
-        + '<img src="'+pt.photoUrl+'" style="width:220px;max-width:60vw;border-radius:6px;margin-top:6px"></div>',
-        {maxWidth:260});
+      // Built lazily so it always picks the best source available at open time,
+      // and falls back to the locally captured frame if the remote one fails.
+      if(pt.photoUrl || pt.photoLocal){
+        m.bindPopup(()=>{
+          const d=document.createElement('div');
+          d.style.textAlign='center';
+          d.innerHTML='<b>'+(pt.label||'')+'</b>';
+          const img=document.createElement('img');
+          img.style.cssText='width:220px;max-width:60vw;border-radius:6px;margin-top:6px;display:block';
+          img.onerror=()=>{ if(pt.photoLocal && img.src!==pt.photoLocal) img.src=pt.photoLocal; };
+          img.src=pt.photoUrl || pt.photoLocal;
+          d.appendChild(img);
+          return d;
+        }, {maxWidth:260});
+      }
       m.on('click', ()=> elevSelect(pt.id));
       m.on('dragstart', ()=>{ pinDragging=true; });
       m.on('dragend', ()=>{
@@ -2776,10 +2804,29 @@
     const pt=elevPoint(id);
     if(pt && pt.kind==='observation') elevActiveObs=id;
     elevRenderAll(); elevStatusUpdate();
+    // elevRenderAll() rebuilds every marker, so the popup Leaflet was about to
+    // open on the click belongs to an element that no longer exists. Reopen it
+    // on the new one.
+    const fresh=elevPoint(id);
+    if(fresh && fresh.marker && fresh.photoUrl){
+      try{ fresh.marker.openPopup(); }catch(e){}
+    }
   }
 
   function elevStatusUpdate(){
     if(!elevSurveyOn) return;
+    const selPt=elevPoint(elevSelected);
+    if(selPt && (selPt.photoUrl || selPt.photoLocal)){
+      elevThumb.onerror=()=>{
+        // Remote image did not load. The frame we captured locally is still
+        // the same picture, so fall back rather than showing nothing.
+        if(selPt.photoLocal && elevThumb.src!==selPt.photoLocal) elevThumb.src=selPt.photoLocal;
+        else elevThumb.classList.remove('show');
+      };
+      elevThumb.src=selPt.photoUrl || selPt.photoLocal;
+      elevThumb.classList.add('show');
+    }
+    else { elevThumb.onerror=null; elevThumb.removeAttribute('src'); elevThumb.classList.remove('show'); }
     const unplaced=elevPoints.filter(p=>!p.placed).length;
     const sel=elevPoint(elevSelected);
     let msg;
@@ -2882,7 +2929,11 @@
     const dataUrl=pt.pendingPhoto;
     pt.pendingPhoto=null;             // clear first so a retry can't double-send
     apiUpload('/elevation-points/'+pt.remoteId+'/photo', dataUrlToBlob(dataUrl))
-      .then(res=>{ if(res && res.url) pt.photoUrl=res.url; });
+      .then(res=>{
+        if(!res || !res.url) return;   // upload failed: keep the local data URL
+        pt.photoUrl=res.url;
+        if(elevSelected===pt.id) elevStatusUpdate();
+      });
   }
 
   // A shot is taken the instant its point is created, so neither id exists yet.
@@ -2925,7 +2976,7 @@
     elevShots.push(shot);
 
     const snap=gradeSnapshot();
-    if(snap){ pt.pendingPhoto=snap; pt.photoUrl=snap; }
+    if(snap){ pt.pendingPhoto=snap; pt.photoLocal=snap; pt.photoUrl=snap; }
     elevFlushPending();
 
     snapFlash.classList.remove('go'); void snapFlash.offsetWidth; snapFlash.classList.add('go');
