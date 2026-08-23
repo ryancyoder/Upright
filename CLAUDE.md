@@ -46,7 +46,7 @@ still nullable and still unused.
 Endpoints under `/functions/v1/upright-api`:
 `POST /sessions`, `GET /sessions` (history list), `GET /sessions/:id`,
 `PATCH /sessions/:id` (assign property), `GET /properties` (address picker),
-`POST /sessions/:id/audio|clips|photos|sketches|measures|plan`,
+`POST /sessions/:id/audio|clips|photos|sketches|measures|plan|elevations`,
 `PATCH /photos/:id`, `POST /photos/:id/image`,
 `POST /sessions/:id/transcribe`, `GET /sessions/:id/transcript`.
 
@@ -214,6 +214,47 @@ an old session to look at it. Tap Unlock to nudge.
 Note the plan controls live in `.map-toolbar`, which is hidden while the map
 is in review's mini pane — swap the map to the main stage to reach them.
 
+### Relative elevation shots
+
+Sight two points from **one standing position**: an *anchor* (your zero) and a
+*target*. Height above the device is `d·tan(angle)` for each, so the answer is
+`d_t·tan(θ_t) − d_a·tan(θ_a)`. The device's own height off the ground cancels,
+which is why `upright_elevation_shots` stores no instrument height and why the
+result is **relative to the anchor** — there is no absolute datum.
+
+**Distances come from tapping the map, never from walking to each point.**
+This is the whole accuracy story and it is not a detail. GPS is 3–5 m; two
+differenced fixes at 30 m range swing the answer by roughly **±3 ft**, which
+is worthless for grading. Tapped against an aligned plan overlay, the tilt
+reading becomes the only meaningful error term (still ~1.7 ft per degree at
+30 m, hence the averaging below). If you ever "simplify" this to use the GPS
+fix for the observation point, you have thrown the feature away.
+
+The angle reuses the existing tilt: `handleOrientation` computes 0 flat (rear
+camera pointing straight down) and 90 upright (camera horizontal), so the
+camera's elevation above horizontal is **`tilt − 90`**. Samples go into a
+rolling buffer and a capture averages the last `TILT_WINDOW_MS` (800ms) to
+take out hand shake.
+
+Two things that are load-bearing, both found by testing rather than reasoning:
+
+- **Elevation mode survives going upright.** `showMap(false)` cancels the
+  active map mode — correct for sketch and measure, fatal here, because the
+  workflow *is* tap-flat-then-stand-up. It now explicitly skips `'elevation'`.
+- **The result is shown in the sighting overlay, not the mode bar.** The mode
+  bar lives inside `.mapwrap` and is hidden the moment you stand up, so
+  putting the answer there would mean lying the iPad down to read your own
+  measurement. The overlay's buttons become Save / Redo.
+
+Also: `drawElevShot()` hangs a Leaflet layer off the record, and Leaflet
+objects are circular — snapshot the POST payload *before* drawing or
+`JSON.stringify` throws and kills the upload silently.
+
+Backend (table + `POST /sessions/:id/elevations`) was deployed as
+`upright-api` v11 before this client existed; `GET /sessions/:id` returns an
+`elevations` array, and shots are restored with the rest of the archived
+geometry.
+
 ### Session history
 
 **Past sessions** (start screen and done panel) lists every session
@@ -250,6 +291,8 @@ not just abandoned starts.
   data URL and `clip.blob`, both of which are URLs in archive mode. Not
   currently reachable (the done panel isn't part of the archive flow) but it
   will need fetch-and-zip when it is.
+- Absolute elevations. Shots are relative to their anchor only; there is no
+  `anchor_elevation_ft`, so nothing ties them to a plan's spot elevations.
 - Aligning a plan to known GPS points rather than by eye. This is the piece
   that would make plan-only mode trustworthy rather than merely tidy.
 - Perspective/skew correction for plans photographed at an angle.
@@ -263,6 +306,10 @@ not just abandoned starts.
 - 58px sidebar buttons with a gloved thumb; marker base size (30% of screen); yellow marker visibility on sunny turf; stroke weight at 3× zoom.
 - Extent-lock button reachability; whether the filmstrip eats too much map height in landscape.
 - Audio level in real field conditions.
+- Elevation accuracy against a known drop (a step, a wall course, a kerb).
+  The maths is verified; what is unproven is whether a handheld iPad can be
+  sighted steadily enough, and whether tapping your own standing position on
+  the plan is as easy in the field as it is at a desk.
 - Plan persistence against a real plan photo on the iPad: whether the upload
   size is sensible over cellular, and whether a restored plan lands exactly
   where it was left.
