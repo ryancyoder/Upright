@@ -46,7 +46,9 @@ still nullable and still unused.
 Endpoints under `/functions/v1/upright-api`:
 `POST /sessions`, `GET /sessions` (history list), `GET /sessions/:id`,
 `PATCH /sessions/:id` (assign property), `GET /properties` (address picker),
-`POST /sessions/:id/audio|clips|photos|sketches|measures|plan|elevations`,
+`POST /sessions/:id/audio|clips|photos|sketches|measures|plan`,
+`POST /sessions/:id/elevation-points|elevation-shots`,
+`PATCH /elevation-points/:id`,
 `PATCH /photos/:id`, `POST /photos/:id/image`,
 `POST /sessions/:id/transcribe`, `GET /sessions/:id/transcript`.
 
@@ -214,46 +216,67 @@ an old session to look at it. Tap Unlock to nudge.
 Note the plan controls live in `.map-toolbar`, which is hidden while the map
 is in review's mini pane — swap the map to the main stage to reach them.
 
-### Relative elevation shots
+### Relative elevation survey
 
-Sight two points from **one standing position**: an *anchor* (your zero) and a
-*target*. Height above the device is `d·tan(angle)` for each, so the answer is
-`d_t·tan(θ_t) − d_a·tan(θ_a)`. The device's own height off the ground cancels,
-which is why `upright_elevation_shots` stores no instrument height and why the
-result is **relative to the anchor** — there is no absolute datum.
+**OBSERVATION → ANCHOR → unlimited TARGETS.** Stand somewhere, nominate one
+point as `0.00'`, then measure everything else against it. Nothing here is
+absolute; it is a fast relative site survey for grading and drainage, not a
+replacement for an instrument.
 
-**Distances come from tapping the map, never from walking to each point.**
-This is the whole accuracy story and it is not a detail. GPS is 3–5 m; two
-differenced fixes at 30 m range swing the answer by roughly **±3 ft**, which
-is worthless for grading. Tapped against an aligned plan overlay, the tilt
-reading becomes the only meaningful error term (still ~1.7 ft per degree at
-30 m, hence the averaging below). If you ever "simplify" this to use the GPS
-fix for the observation point, you have thrown the feature away.
+Height above the device is `d·tan(θ)`. Two sightings from the *same*
+observation position cancel the device's own height, so a target is
+`d_t·tan(θ_t) − d_a·tan(θ_a)` relative to the anchor. That cancellation is
+why no instrument height is stored anywhere.
 
-The angle reuses the existing tilt: `handleOrientation` computes 0 flat (rear
-camera pointing straight down) and 90 upright (camera horizontal), so the
-camera's elevation above horizontal is **`tilt − 90`**. Samples go into a
-rolling buffer and a capture averages the last `TILT_WINDOW_MS` (800ms) to
-take out hand shake.
+**Elevation is derived, never stored.** `upright_elevation_points` holds
+positions, `upright_elevation_shots` holds sightings, and `elevationOf()`
+computes the number live. Drag a pin and every dependent elevation corrects
+itself — which would be impossible with a stored scalar. (This replaced an
+earlier one-row-per-measurement table that forced each target to carry its
+own anchor sighting, making the anchor impossible to reuse.)
 
-Two things that are load-bearing, both found by testing rather than reasoning:
+**Distance comes from where the pins sit on the map, never from GPS.** GPS
+only seeds the first observation so there is something to drag. Against an
+aligned plan a tapped pin is far better than a 3–5 m fix, and that is what
+makes the numbers worth anything. Do not "simplify" this to use the live fix.
 
-- **Elevation mode survives going upright.** `showMap(false)` cancels the
-  active map mode — correct for sketch and measure, fatal here, because the
-  workflow *is* tap-flat-then-stand-up. It now explicitly skips `'elevation'`.
-- **The result is shown in the sighting overlay, not the mode bar.** The mode
-  bar lives inside `.mapwrap` and is hidden the moment you stand up, so
-  putting the answer there would mean lying the iPad down to read your own
-  measurement. The overlay's buttons become Save / Redo.
+**A second observation position must re-shoot the anchor.** Its angle is
+relative to *that* position's horizontal plane and device height, so reusing
+another observation's anchor shot silently produces nonsense. `elevBeginSight()`
+refuses to sight a target until the current observation has its own anchor
+shot, and says why.
 
-Also: `drawElevShot()` hangs a Leaflet layer off the record, and Leaflet
-objects are circular — snapshot the POST payload *before* drawing or
-`JSON.stringify` throws and kills the upload silently.
+**Repeatability is not accuracy.** Shot spread (`angle_spread_deg`, and the
+`± repeat` figure) only measures how steadily you held the iPad. Five shots
+at a pin dropped two feet off the mark will agree beautifully and all be
+wrong. The only check that catches a mis-placed pin is the *same target from
+a different observation position*, reported separately as `N obs ± agree`. A
+single-observation point is labelled **unverified** on purpose — do not
+collapse these two numbers into one "confidence" figure.
 
-Backend (table + `POST /sessions/:id/elevations`) was deployed as
-`upright-api` v11 before this client existed; `GET /sessions/:id` returns an
-`elevations` array, and shots are restored with the rest of the archived
-geometry.
+Error behaves differently by angle, which is worth knowing in the field:
+sensitivity to distance error is `tanθ`, so shallow yard shots (2–4°) are
+forgiving of a sloppy pin, while steep ones are not. Angle error scales with
+`d·sec²θ`, so long *and* steep is the bad combination.
+
+Two workflow rules that are load-bearing, both found by testing:
+
+- **The survey survives going upright.** Points are placed flat, then sighted
+  standing. `showMap(false)` hides the survey bar with the map but must not
+  touch `elevSurveyOn` or any point.
+- **The sighting overlay stays open after a shot**, offering *Shoot again* /
+  *Done*, and carries the running result. Repeat shots are the whole basis of
+  the confidence model; if taking a second one meant lying the iPad flat and
+  starting over, nobody would ever take one. The same reasoning applies to
+  showing the result there — the mode bar is inside `.mapwrap` and invisible
+  while you are stood up holding the thing.
+
+Sighting is gated on steadiness (`STEADY_DEG`, sample spread over the same
+800ms window that gets averaged into the shot): HOLD STEADY → READY → Shoot.
+The gate runs when the overlay opens, not just on the next orientation event.
+
+No compass is needed — bearings come from map geometry, which sidesteps iOS
+compass calibration entirely.
 
 ### Session history
 
@@ -291,8 +314,13 @@ not just abandoned starts.
   data URL and `clip.blob`, both of which are URLs in archive mode. Not
   currently reachable (the done panel isn't part of the archive flow) but it
   will need fetch-and-zip when it is.
-- Absolute elevations. Shots are relative to their anchor only; there is no
-  `anchor_elevation_ft`, so nothing ties them to a plan's spot elevations.
+- Absolute elevations. Everything is relative to the anchor; nothing ties a
+  survey to a plan's spot elevations or a real benchmark.
+- Grade between two measured points (`Δelev / distance × 100`), and everything
+  downstream of it: contours, slope/drainage arrows, colour-coded zones,
+  cut/fill. All cheap now that elevations exist and are derived live.
+- Renaming survey points. They auto-label (Observation A/B, Target 1/2) so
+  nobody types in a yard; renaming at the desk is not built yet.
 - Aligning a plan to known GPS points rather than by eye. This is the piece
   that would make plan-only mode trustworthy rather than merely tidy.
 - Perspective/skew correction for plans photographed at an angle.
@@ -307,9 +335,13 @@ not just abandoned starts.
 - Extent-lock button reachability; whether the filmstrip eats too much map height in landscape.
 - Audio level in real field conditions.
 - Elevation accuracy against a known drop (a step, a wall course, a kerb).
-  The maths is verified; what is unproven is whether a handheld iPad can be
-  sighted steadily enough, and whether tapping your own standing position on
-  the plan is as easy in the field as it is at a desk.
+  The maths is verified against an independent calculation; what is unproven
+  is whether a handheld iPad can be sighted steadily enough for the numbers to
+  mean anything, whether `STEADY_DEG` (0.4°) is a sensible gate or just
+  annoying, and whether tapping your own standing position on the plan is as
+  easy in a yard as it is at a desk.
+- Whether the two-observation cross-check actually catches bad pins in
+  practice, since that is the only real accuracy signal in the system.
 - Plan persistence against a real plan photo on the iPad: whether the upload
   size is sensible over cellular, and whether a restored plan lands exactly
   where it was left.

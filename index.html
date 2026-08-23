@@ -225,6 +225,36 @@
     display:flex; gap:12px;
   }
 
+  /* Relative elevation survey */
+  .elev-bar{
+    position:absolute; left:0; right:0; bottom:0; z-index:1200;
+    display:none; flex-direction:column; gap:8px;
+    padding:10px 12px calc(env(safe-area-inset-bottom,0px) + 10px);
+    background:rgba(20,20,15,0.94); border-top:1px solid var(--line);
+  }
+  .elev-bar.show{display:flex;}
+  .elev-status{font-size:13px; line-height:1.4; color:var(--ink); min-height:18px;}
+  .elev-actions{display:flex; gap:8px; flex-wrap:wrap; align-items:center;}
+  .mt-btn.go{border-color:var(--flat);}
+  .mt-btn:disabled{opacity:0.35;}
+  /* Map pins carry their own elevation, so the survey reads at a glance. */
+  .elev-pin{
+    transform:translate(-50%,-50%);
+    display:flex; flex-direction:column; align-items:center; gap:1px;
+    padding:4px 9px; border-radius:9px; white-space:nowrap;
+    background:rgba(0,0,0,0.74); border:2px solid var(--c);
+    font-size:11px; color:var(--ink); line-height:1.25;
+  }
+  .elev-pin b{font-size:11px; font-weight:700;}
+  .elev-pin span{font-size:13px; font-weight:700; color:var(--c);}
+  .elev-pin.sel{box-shadow:0 0 0 3px rgba(255,255,255,0.35);}
+  .elev-pin.active{background:rgba(90,122,99,0.5);}
+  .sight-steady{
+    font-size:11px; font-weight:700; letter-spacing:0.1em; text-transform:uppercase;
+    color:var(--dim);
+  }
+  .sight-steady.ready{color:var(--flat);}
+
   /* Draw-over editor */
   .draw-wrap{
     position:absolute; inset:0; z-index:15; display:none;
@@ -502,6 +532,7 @@
       <div class="sight-top">
         <div class="sight-msg" id="sightMsg"></div>
         <div class="sight-angle" id="sightAngle">—</div>
+        <div class="sight-steady" id="sightSteady">HOLD STEADY</div>
       </div>
       <div class="sight-actions">
         <button class="mb-btn" id="sightCancel">Cancel</button>
@@ -540,6 +571,16 @@
         <button class="mb-btn" id="modeCancel">Cancel</button>
       </div>
       <div class="film-strip" id="filmStrip"></div>
+      <div class="elev-bar" id="elevBar">
+        <span class="elev-status" id="elevStatus"></span>
+        <div class="elev-actions">
+          <button class="mt-btn" id="elevAddObs">+ Observation</button>
+          <button class="mt-btn" id="elevAddAnchor">+ Anchor</button>
+          <button class="mt-btn" id="elevAddTarget">+ Target</button>
+          <button class="mt-btn go" id="elevShoot">Shoot</button>
+          <button class="mt-btn" id="elevExit">Done</button>
+        </div>
+      </div>
       <div class="map-toolbar">
         <button class="mt-btn" id="importPlanBtn">Import plan</button>
         <input type="file" id="planFile" accept="image/*">
@@ -658,7 +699,10 @@
         lockPlanBtn=$('lockPlanBtn'), exportPinsBtn=$('exportPinsBtn'), centerBtn=$('centerBtn'), lockExtentBtn=$('lockExtentBtn'),
         basemapBtn=$('basemapBtn'), elevBtn=$('elevBtn'),
         sightOverlay=$('sightOverlay'), sightMsg=$('sightMsg'), sightAngle=$('sightAngle'),
-        sightCapture=$('sightCapture'), sightCancel=$('sightCancel'),
+        sightCapture=$('sightCapture'), sightCancel=$('sightCancel'), sightSteady=$('sightSteady'),
+        elevBar=$('elevBar'), elevStatus=$('elevStatus'), elevAddObs=$('elevAddObs'),
+        elevAddAnchor=$('elevAddAnchor'), elevAddTarget=$('elevAddTarget'),
+        elevShoot=$('elevShoot'), elevExit=$('elevExit'),
         annoDraw=$('annoDraw'), drawWrap=$('drawWrap'), drawCanvas=$('drawCanvas'),
         drawSwatches=$('drawSwatches'), drawUndo=$('drawUndo'), drawClear=$('drawClear'), drawDone=$('drawDone'),
         filmStrip=$('filmStrip'), sketchBtn=$('sketchBtn'), measureBtn=$('measureBtn'),
@@ -938,8 +982,7 @@
     finalAudioBlob=null; clips=[];
     pins.forEach(p=>{ if(p.marker && map) map.removeLayer(p.marker); });
     pins=[]; pinSeq=0; selectedPinId=null;
-    elevShots.forEach(r=>{ if(r.layer && map) map.removeLayer(r.layer); });
-    elevShots=[]; elevReset();
+    elevSetSurvey(false); elevReset();
     renderStrip();
     startSession(); requestWake();
   });
@@ -1635,12 +1678,16 @@
       uuid:k.id, sessionId:s.id, colour:k.colour, lengthFt:k.length_ft,
       latlngs:k.latlngs||[], time:k.created_at, layer:null
     }));
-    elevShots=(data.elevations||[]).map(e=>({
-      observationLat:e.observation_lat, observationLng:e.observation_lng,
-      anchorLat:e.anchor_lat, anchorLng:e.anchor_lng, anchorAngleDeg:e.anchor_angle_deg,
-      targetLat:e.target_lat, targetLng:e.target_lng, targetAngleDeg:e.target_angle_deg,
-      elevationFt:e.elevation_ft, layer:null
+    elevPoints=(data.elevationPoints||[]).map(e=>({
+      id:e.id, remoteId:e.id, kind:e.kind, label:e.label, lat:e.lat, lng:e.lng,
+      gpsLat:e.gps_lat, gpsLng:e.gps_lng, marker:null
     }));
+    elevShots=(data.elevationShots||[]).map(sh=>({
+      id:sh.id, remoteId:sh.id, observationId:sh.observation_id, pointId:sh.point_id,
+      angleDeg:sh.angle_deg, angleSpreadDeg:sh.angle_spread_deg, distanceM:sh.distance_m
+    }));
+    elevActiveObs=(elevPoints.find(p=>p.kind==='observation')||{}).id || null;
+    elevSelected=null;
     measures=(data.measures||[]).map(m=>({
       uuid:m.id, sessionId:s.id, pinUuid:m.anchor_photo_id, pinSeq:null,
       latlngs:m.latlngs||[], areaSqFt:m.area_sqft, perimeterFt:m.perimeter_ft,
@@ -1680,7 +1727,7 @@
   function drawArchiveGeometry(){
     if(!map) return;
     restoreArchivePlan();
-    elevShots.forEach(rec=>{ if(!rec.layer) drawElevShot(rec); });
+    elevRenderAll();
     sketches.forEach(rec=>{
       if(rec.layer || !rec.latlngs || rec.latlngs.length<2) return;
       rec.layer=L.polyline(rec.latlngs.map(p=>[p.lat,p.lng]),
@@ -1704,7 +1751,8 @@
 
   function clearArchiveLayers(){
     pins.forEach(p=>{ if(p.marker && map){ try{ map.removeLayer(p.marker); }catch(e){} } });
-    [].concat(sketches, measures, elevShots).forEach(r=>{
+    elevClearLayers();
+    [].concat(sketches, measures).forEach(r=>{
       if(r && r.layer && map){ try{ map.removeLayer(r.layer); }catch(e){} r.layer=null; }
     });
   }
@@ -1720,8 +1768,8 @@
     planOverlay=null; planCenterMarker=null; planImg=null; planCenter=null;
     overlayControls.classList.remove('show');
     basemapMode='both'; applyBasemap();
-    clips=[]; pins=[]; sketches=[]; measures=[]; elevShots=[];
-    elevReset();
+    clips=[]; pins=[]; sketches=[]; measures=[];
+    elevSetSurvey(false); elevReset();
     pinSeq=0; selectedPinId=null; sessionId=null;
     finalAudioBlob=null; sessionWallMs=null;
     transcriptSegments=[]; transcriptActiveIdx=-1;
@@ -2373,7 +2421,6 @@
     mapMode=mode;
     sketchBtn.classList.toggle('active', mode==='sketch');
     measureBtn.classList.toggle('active', mode==='measure');
-    elevBtn.classList.toggle('active', mode==='elevation');
     modeBar.classList.toggle('show', !!mode);
     if(mode!=='elevation') sightOverlay.classList.remove('show');
     if(!map) return;
@@ -2383,9 +2430,6 @@
     } else if(mode==='measure'){
       map.dragging.enable();
       modeMsg.innerHTML='<b>Measure</b> \u2014 tap to add corners';
-    } else if(mode==='elevation'){
-      map.dragging.enable();
-      elevPrompt();
     } else {
       map.dragging.enable();
     }
@@ -2483,7 +2527,6 @@
   });
 
   modeUndo.addEventListener('click', ()=>{
-    if(mapMode==='elevation'){ elevUndo(); return; }
     if(mapMode==='measure'){
       if(measurePts.length>1){ measurePts.pop(); drawMeasureDraft(); }
     } else if(mapMode==='sketch'){
@@ -2492,12 +2535,10 @@
     }
   });
   modeDone.addEventListener('click', ()=>{
-    if(mapMode==='elevation'){ if(elevStep==='done') elevSave(); return; }
     if(mapMode==='measure') commitMeasure();
     else setMapMode(null);
   });
   modeCancel.addEventListener('click', ()=>{
-    if(mapMode==='elevation'){ elevReset(); setMapMode(null); return; }
     if(mapMode==='measure') clearMeasureDraft();
     setMapMode(null);
   });
@@ -2527,207 +2568,319 @@
       c.addEventListener(ev, ()=>{ if(sketching){ sketching=false; commitSketch(); } }));
 
     map.on('click', e=>{
-      if(mapMode==='elevation'){ elevMapTap(e.latlng); return; }
+      if(elevSurveyOn && elevPlacing){ elevMapTap(e.latlng); return; }
       if(mapMode!=='measure' || !measurePts.length) return;
       measurePts.push(e.latlng);
       drawMeasureDraft();
     });
   }
 
-  // ---------- relative elevation shots ----------
-  // Sight two points from ONE standing position: an anchor (your zero) and a
-  // target. Height of each above the device is d*tan(angle), so the
-  // difference is (d_t*tan t) - (d_a*tan a) -- the device's own height above
-  // the ground cancels out, which is why no instrument height is stored and
-  // why the result is RELATIVE to the anchor.
+  // ---------- relative elevation survey ----------
+  // OBSERVATION -> ANCHOR -> unlimited TARGETS.
   //
-  // Horizontal distances come from tapping the map, NOT from walking to each
-  // point with GPS. That is the whole accuracy story: GPS is 3-5m, and
-  // differencing two fixes at 30m range swings the answer by about +/-3 ft,
-  // which is useless for grading. Against an aligned plan overlay, tapped
-  // distances leave the tilt reading as the only meaningful error term.
-  let elevStep=null;          // obs | anchor | target | sightAnchor | sightTarget | done
-  let elevObs=null, elevAnchor=null, elevTarget=null;
-  let elevAnchorAngle=null, elevTargetAngle=null, elevResult=null;
-  let elevLayer=null, elevShots=[];
-  const tiltSamples=[];       // rolling {t, angle} buffer, fed by handleOrientation
-  const TILT_WINDOW_MS=800;   // average this long to take the hand-shake out
+  // Height above the device is d*tan(angle). Taking two sightings from the
+  // SAME observation position, the device's own height cancels, so a target's
+  // elevation relative to the anchor is d_t*tan(t) - d_a*tan(a). The anchor is
+  // 0.00' by definition; nothing here is absolute.
+  //
+  // Horizontal distance comes from where the pins sit ON THE MAP, never from
+  // GPS. GPS is 3-5m; against an aligned plan a tapped pin is far better, and
+  // it is what makes the numbers worth anything. GPS only seeds the first
+  // observation, and the user drags it to the truth.
+  //
+  // IMPORTANT: a second observation position must re-shoot the anchor. The
+  // anchor angle is measured relative to THAT position's horizontal plane and
+  // device height; reusing another observation's anchor shot silently
+  // produces nonsense.
+  let elevPoints=[], elevShots=[];
+  let elevSurveyOn=false, elevActiveObs=null, elevPlacing=null, elevSelected=null, elevSighting=null;
+  const tiltSamples=[];
+  const TILT_WINDOW_MS=800;   // averaged into one shot
+  const STEADY_DEG=0.4;       // sample spread below this counts as steady
 
-  // The existing tilt is 0 flat (rear camera pointing straight down) and 90
-  // upright (camera horizontal), so camera elevation above horizontal is
-  // tilt-90. Leaning back past vertical gives >90, i.e. a positive angle up.
-  function sightAngleNow(){
-    if(!tiltSamples.length) return null;
+  const rad=x=>x*Math.PI/180;
+  const mean=a=>a.reduce((x,y)=>x+y,0)/a.length;
+  const halfRange=a=>a.length>1 ? (Math.max.apply(null,a)-Math.min.apply(null,a))/2 : null;
+
+  // Existing tilt is 0 flat (rear camera pointing down) and 90 upright (camera
+  // horizontal), so elevation above horizontal is tilt-90.
+  function tiltWindow(){
     const cutoff=Date.now()-TILT_WINDOW_MS;
     const recent=tiltSamples.filter(x=>x.t>=cutoff);
-    const use=recent.length?recent:tiltSamples.slice(-1);
-    return use.reduce((a,x)=>a+x.angle,0)/use.length;
+    return recent.length?recent:tiltSamples.slice(-1);
+  }
+  function sightAngleNow(){
+    const w=tiltWindow();
+    return w.length ? mean(w.map(x=>x.angle)) : null;
+  }
+  function sightSpreadNow(){
+    const w=tiltWindow();
+    return w.length>1 ? (Math.max.apply(null,w.map(x=>x.angle))-Math.min.apply(null,w.map(x=>x.angle))) : 0;
   }
 
-  function elevReset(){
-    elevStep=null; elevObs=null; elevAnchor=null; elevTarget=null;
-    elevAnchorAngle=null; elevTargetAngle=null; elevResult=null;
-    if(elevLayer && map){ try{ map.removeLayer(elevLayer); }catch(e){} }
-    elevLayer=null;
-    sightOverlay.classList.remove('show');
+  // Steadiness gate: a shot taken mid-wobble is worse than no shot. Called
+  // both from handleOrientation and the moment the overlay opens, so Shoot is
+  // never live before the gate has had a say.
+  function sightRefresh(){
+    const a=sightAngleNow(), sp=sightSpreadNow();
+    sightAngle.textContent = (a===null) ? '—' : ((a>=0?'+':'')+a.toFixed(1)+'°');
+    const steady = (a!==null && sp<=STEADY_DEG);
+    sightSteady.textContent = steady ? 'READY' : 'HOLD STEADY';
+    sightSteady.classList.toggle('ready', steady);
+    sightCapture.disabled = !steady;
   }
 
-  function elevDraft(){
-    if(elevLayer && map){ try{ map.removeLayer(elevLayer); }catch(e){} }
-    if(!map) return;
-    elevLayer=L.layerGroup().addTo(map);
-    const dot=(ll,colour,label)=>{
-      L.circleMarker(ll,{radius:7,color:colour,weight:3,fillColor:'#000',fillOpacity:0.8}).addTo(elevLayer);
-      L.marker(ll,{interactive:false,icon:L.divIcon({className:'',
-        html:'<div class="measure-label">'+label+'</div>', iconSize:[0,0]})}).addTo(elevLayer);
+  function elevPoint(id){ return elevPoints.find(p=>p.id===id) || null; }
+  function elevAnchorPoint(){ return elevPoints.find(p=>p.kind==='anchor') || null; }
+  function elevLabelFor(kind){
+    if(kind==='anchor') return 'Anchor';
+    const n=elevPoints.filter(p=>p.kind===kind).length+1;
+    if(kind==='observation') return 'Observation '+String.fromCharCode(64+n);
+    return 'Target '+n;
+  }
+
+  // Elevation is DERIVED, never stored: drag a pin and every dependent number
+  // corrects itself. One estimate per target shot, using that observation's
+  // mean anchor angle.
+  function elevationOf(pointId){
+    const anchor=elevAnchorPoint();
+    if(!anchor) return null;
+    const pt=elevPoint(pointId);
+    if(!pt) return null;
+    if(pt.kind==='anchor') return {ft:0, shots:elevShots.filter(s=>s.pointId===anchor.id).length, isAnchor:true};
+    const perObs=[], all=[];
+    elevPoints.filter(o=>o.kind==='observation').forEach(obs=>{
+      const aShots=elevShots.filter(s=>s.observationId===obs.id && s.pointId===anchor.id);
+      const pShots=elevShots.filter(s=>s.observationId===obs.id && s.pointId===pt.id);
+      if(!aShots.length || !pShots.length) return;
+      const dA=metresBetween(obs, anchor), dP=metresBetween(obs, pt);
+      const hA=dA*Math.tan(rad(mean(aShots.map(s=>s.angleDeg))));
+      const est=pShots.map(s=>(dP*Math.tan(rad(s.angleDeg))-hA)/M_PER_FT);
+      est.forEach(e=>all.push(e));
+      perObs.push(mean(est));
+    });
+    if(!all.length) return null;
+    return {
+      ft: mean(perObs),          // each observation weighs equally
+      shots: all.length,
+      obsCount: perObs.length,
+      // Repeatability: agreement between shots. Says nothing about whether the
+      // pin is in the right place.
+      repeat: halfRange(all),
+      // Cross-observation agreement: the only check that can catch a badly
+      // placed pin or a mis-set observation.
+      agree: halfRange(perObs)
     };
-    if(elevObs) dot(elevObs, '#8b887f', 'standing');
-    if(elevAnchor){
-      dot(elevAnchor, '#5a7a63', 'zero');
-      if(elevObs) L.polyline([elevObs,elevAnchor],{color:'#5a7a63',weight:2,dashArray:'5 5'}).addTo(elevLayer);
-    }
-    if(elevTarget){
-      dot(elevTarget, '#c4432b', 'target');
-      if(elevObs) L.polyline([elevObs,elevTarget],{color:'#c4432b',weight:2,dashArray:'5 5'}).addTo(elevLayer);
-    }
   }
 
-  function elevPrompt(){
-    const d=(a,b)=> (a&&b) ? metresBetween(a,b) : null;
-    const dA=d(elevObs,elevAnchor), dT=d(elevObs,elevTarget);
-    const ft=m=> Math.round(m/M_PER_FT);
-    if(elevStep==='obs')          modeMsg.innerHTML='<b>Elevation 1/5</b> — tap where you are standing';
-    else if(elevStep==='anchor')  modeMsg.innerHTML='<b>Elevation 2/5</b> — tap your reference point (the zero)';
-    else if(elevStep==='target')  modeMsg.innerHTML='<b>Elevation 3/5</b> — tap the point to measure';
-    else if(elevStep==='sightAnchor') modeMsg.innerHTML='<b>Elevation 4/5</b> — stand the iPad up and sight the <b>zero</b> ('+ft(dA)+' ft away)';
-    else if(elevStep==='sightTarget') modeMsg.innerHTML='<b>Elevation 5/5</b> — now sight the <b>target</b> ('+ft(dT)+' ft away)';
-    else if(elevStep==='done' && elevResult){
-      const r=elevResult;
-      modeMsg.innerHTML='<b>'+(r.elevationFt>=0?'+':'')+r.elevationFt.toFixed(1)+' ft</b> vs zero &nbsp;·&nbsp; '
-        + 'zero '+ft(dA)+' ft @ '+r.anchorAngleDeg.toFixed(1)+'° &nbsp;·&nbsp; '
-        + 'target '+ft(dT)+' ft @ '+r.targetAngleDeg.toFixed(1)+'° — Finish to save';
+  function fmtElev(e){
+    if(!e) return '—';
+    if(e.isAnchor) return "0.00' anchor";
+    return (e.ft>=0?'+':'')+e.ft.toFixed(2)+"'";
+  }
+  function elevConfidence(e){
+    if(!e || e.isAnchor) return '';
+    const bits=[e.shots+' shot'+(e.shots===1?'':'s')];
+    if(e.repeat!=null) bits.push('±'+e.repeat.toFixed(2)+"' repeat");
+    if(e.obsCount>1 && e.agree!=null) bits.push(e.obsCount+' obs ±'+e.agree.toFixed(2)+"' agree");
+    else if(e.obsCount===1) bits.push('1 obs — unverified');
+    return bits.join(' · ');
+  }
+
+  // ---------- rendering ----------
+  function elevClearLayers(){
+    elevPoints.forEach(p=>{
+      if(p.marker && map){ try{ map.removeLayer(p.marker); }catch(e){} }
+      p.marker=null;
+    });
+  }
+  function elevRenderAll(){
+    if(!map) return;
+    elevClearLayers();
+    if(!elevSurveyOn && !elevPoints.length) return;
+    elevPoints.forEach(pt=>{
+      const isObs=pt.kind==='observation', isAnchor=pt.kind==='anchor';
+      const colour=isObs?'#8b887f':isAnchor?'#5a7a63':'#c4432b';
+      const active=(isObs && pt.id===elevActiveObs);
+      const sel=(pt.id===elevSelected);
+      const e=elevationOf(pt.id);
+      const line = isObs ? (active?'standing here':'observation')
+                 : isAnchor ? "0.00'"
+                 : (e ? fmtElev(e) : 'not shot');
+      const html='<div class="elev-pin'+(sel?' sel':'')+(active?' active':'')+'" style="--c:'+colour+'">'
+               + '<b>'+(pt.label||'')+'</b><span>'+line+'</span></div>';
+      const m=L.marker([pt.lat,pt.lng],{
+        draggable:elevSurveyOn,
+        icon:L.divIcon({className:'', html:html, iconSize:[0,0], iconAnchor:[0,0]})
+      }).addTo(map);
+      m.on('click', ()=>{ elevSelect(pt.id); });
+      m.on('dragstart', ()=>{ pinDragging=true; });
+      m.on('dragend', ()=>{
+        pinDragging=false;
+        const ll=m.getLatLng();
+        pt.lat=ll.lat; pt.lng=ll.lng;
+        // Moving a pin changes distance, so every dependent elevation moves.
+        if(pt.remoteId) apiPatch('/elevation-points/'+pt.remoteId, {lat:pt.lat, lng:pt.lng});
+        elevRenderAll(); elevStatusUpdate();
+      });
+      pt.marker=m;
+    });
+  }
+
+  function elevSelect(id){
+    elevSelected=id;
+    const pt=elevPoint(id);
+    if(pt && pt.kind==='observation') elevActiveObs=id;
+    elevRenderAll(); elevStatusUpdate();
+  }
+
+  function elevStatusUpdate(){
+    if(!elevSurveyOn) return;
+    const anchor=elevAnchorPoint();
+    const obs=elevPoint(elevActiveObs);
+    const sel=elevPoint(elevSelected);
+    let msg;
+    if(elevPlacing) msg='Tap the map to place the '+elevPlacing;
+    else if(!obs) msg='Add an observation position — where you are standing';
+    else if(!anchor) msg='Add an anchor — the point that becomes 0.00\u2032';
+    else if(!sel) msg='Tap a point to select it, then Shoot';
+    else {
+      const e=elevationOf(sel.id);
+      msg='<b>'+sel.label+'</b> — '+fmtElev(e)+(elevConfidence(e)?' · '+elevConfidence(e):'');
     }
+    elevStatus.innerHTML=msg;
+    const canShoot=!!(obs && sel && !elevPlacing);
+    elevShoot.disabled=!canShoot;
+    elevShoot.textContent = (sel && anchor && sel.id===anchor.id) ? 'Shoot anchor'
+                          : (sel ? 'Shoot '+(sel.kind==='observation'?'—':sel.label) : 'Shoot');
+    elevShoot.style.display = (sel && sel.kind==='observation') ? 'none' : '';
   }
 
-  function elevAdvanceToSight(which){
-    elevStep = which;
-    sightMsg.textContent = which==='sightAnchor'
-      ? 'Sight the REFERENCE point (your zero) and tap Capture'
-      : 'Sight the TARGET point and tap Capture';
-    sightCapture.textContent='Capture';
-    sightCancel.textContent='Cancel';
-    sightOverlay.classList.add('show');
-    elevPrompt();
-  }
-
-  function elevCaptureAngle(){
-    const a=sightAngleNow();
-    if(a===null){ sightMsg.textContent='No tilt reading yet — move the iPad slightly'; return; }
-    if(elevStep==='sightAnchor'){
-      elevAnchorAngle=a;
-      elevAdvanceToSight('sightTarget');
+  // ---------- placing points ----------
+  function elevBeginPlace(kind){
+    if(kind==='anchor' && elevAnchorPoint()){
+      elevStatus.textContent='There is already an anchor — drag it to move it';
       return;
     }
-    elevTargetAngle=a;
-    elevCompute();
-    elevShowResult();
+    elevPlacing=kind;
+    elevStatusUpdate();
   }
 
-  // You have just sighted the target with the iPad at your eye; the answer has
-  // to be readable right there. The mode bar lives inside .mapwrap and is
-  // hidden while upright, so the sighting overlay carries the result instead.
-  function elevShowResult(){
-    if(!elevResult) return;
-    const dA=metresBetween(elevObs,elevAnchor), dT=metresBetween(elevObs,elevTarget);
-    const ft=m=>Math.round(m/M_PER_FT);
-    sightMsg.innerHTML='zero '+ft(dA)+' ft @ '+elevResult.anchorAngleDeg.toFixed(1)+'\u00b0'
-                     + '<br>target '+ft(dT)+' ft @ '+elevResult.targetAngleDeg.toFixed(1)+'\u00b0';
-    sightAngle.textContent=(elevResult.elevationFt>=0?'+':'')+elevResult.elevationFt.toFixed(1)+' ft';
-    sightCapture.textContent='Save';
-    sightCancel.textContent='Redo';
-    sightOverlay.classList.add('show');
-  }
-
-  function elevCompute(){
-    const dA=metresBetween(elevObs,elevAnchor), dT=metresBetween(elevObs,elevTarget);
-    const rad=x=>x*Math.PI/180;
-    const hA=dA*Math.tan(rad(elevAnchorAngle));
-    const hT=dT*Math.tan(rad(elevTargetAngle));
-    elevResult={
-      observationLat:elevObs.lat, observationLng:elevObs.lng,
-      anchorLat:elevAnchor.lat, anchorLng:elevAnchor.lng, anchorAngleDeg:elevAnchorAngle,
-      targetLat:elevTarget.lat, targetLng:elevTarget.lng, targetAngleDeg:elevTargetAngle,
-      elevationFt:(hT-hA)/M_PER_FT
+  function elevPlaceAt(latlng, gps){
+    const kind=elevPlacing;
+    const pt={
+      id:'local-'+uuid(), remoteId:null, kind:kind, label:elevLabelFor(kind),
+      lat:latlng.lat, lng:latlng.lng,
+      gpsLat: gps?gps.lat:null, gpsLng: gps?gps.lng:null, marker:null
     };
-    elevStep='done';
-    elevPrompt();
-  }
-
-  function elevSave(){
-    if(!elevResult) return;
-    // Snapshot the payload BEFORE drawing: drawElevShot hangs a Leaflet layer
-    // off the record, and Leaflet objects are circular, so JSON.stringify on
-    // the drawn record throws and silently kills the upload.
-    const payload=Object.assign({}, elevResult);
-    const rec=Object.assign({}, elevResult);
-    elevShots.push(rec);
-    drawElevShot(rec);
-    if(sessionId) apiPost('/sessions/'+sessionId+'/elevations', payload);
-    sightOverlay.classList.remove('show');
-    elevReset();
-    setMapMode(null);
-  }
-
-  function drawElevShot(rec){
-    if(!map) return;
-    const g=L.layerGroup().addTo(map);
-    const ll=L.latLng(rec.targetLat, rec.targetLng);
-    L.circleMarker(ll,{radius:7,color:'#c4432b',weight:3,fillColor:'#000',fillOpacity:0.85}).addTo(g);
-    L.marker(ll,{interactive:false,icon:L.divIcon({className:'',
-      html:'<div class="measure-label">'+(rec.elevationFt>=0?'+':'')+rec.elevationFt.toFixed(1)+' ft</div>',
-      iconSize:[0,0]})}).addTo(g);
-    L.polyline([[rec.anchorLat,rec.anchorLng],ll],{color:'#c4432b',weight:2,dashArray:'4 4',opacity:0.7}).addTo(g);
-    rec.layer=g;
+    elevPoints.push(pt);
+    elevPlacing=null;
+    if(kind==='observation') elevActiveObs=pt.id;
+    elevSelected=pt.id;
+    if(sessionId){
+      apiPost('/sessions/'+sessionId+'/elevation-points', {
+        kind:pt.kind, label:pt.label, lat:pt.lat, lng:pt.lng, gpsLat:pt.gpsLat, gpsLng:pt.gpsLng
+      }).then(row=>{ if(row && row.id) pt.remoteId=row.id; });
+    }
+    elevRenderAll(); elevStatusUpdate();
   }
 
   function elevMapTap(latlng){
-    if(elevStep==='obs'){ elevObs=latlng; elevStep='anchor'; }
-    else if(elevStep==='anchor'){ elevAnchor=latlng; elevStep='target'; }
-    else if(elevStep==='target'){
-      elevTarget=latlng;
-      elevDraft();
-      elevAdvanceToSight('sightAnchor');
+    if(elevPlacing){ elevPlaceAt(latlng, null); return; }
+  }
+
+  // ---------- sighting ----------
+  function elevBeginSight(){
+    const sel=elevPoint(elevSelected), obs=elevPoint(elevActiveObs);
+    if(!sel || !obs) return;
+    const anchor=elevAnchorPoint();
+    // A fresh observation position has to re-shoot the anchor before its
+    // targets mean anything -- the anchor angle is relative to THIS position.
+    if(anchor && sel.id!==anchor.id &&
+       !elevShots.some(s=>s.observationId===obs.id && s.pointId===anchor.id)){
+      elevStatus.innerHTML='Shoot the <b>anchor</b> from this observation first — '
+                         + 'its angle is relative to where you are standing now';
+      elevSelect(anchor.id);
       return;
     }
-    elevDraft();
-    elevPrompt();
+    elevSighting=sel.id;
+    const d=metresBetween(obs, sel);
+    sightMsg.innerHTML='Sight <b>'+sel.label+'</b> — '+Math.round(d/M_PER_FT)+' ft away';
+    sightCapture.textContent='Shoot';
+    sightCancel.textContent='Cancel';
+    sightCapture.disabled=true;          // until the gate says otherwise
+    sightSteady.textContent='HOLD STEADY';
+    sightSteady.classList.remove('ready');
+    sightOverlay.classList.add('show');
+    sightRefresh();
   }
 
-  function elevUndo(){
-    if(elevStep==='done'){ elevResult=null; elevTargetAngle=null; elevAdvanceToSight('sightTarget'); return; }
-    if(elevStep==='sightTarget'){ elevAnchorAngle=null; elevAdvanceToSight('sightAnchor'); return; }
-    if(elevStep==='sightAnchor'){ sightOverlay.classList.remove('show'); elevTarget=null; elevStep='target'; }
-    else if(elevStep==='target'){ elevAnchor=null; elevStep='anchor'; }
-    else if(elevStep==='anchor'){ elevObs=null; elevStep='obs'; }
-    elevDraft();
-    elevPrompt();
+  function elevShootNow(){
+    const pt=elevPoint(elevSighting), obs=elevPoint(elevActiveObs);
+    if(!pt || !obs) return;
+    const angle=sightAngleNow();
+    if(angle===null){ sightMsg.textContent='No tilt reading yet — move the iPad slightly'; return; }
+    const spread=sightSpreadNow();
+    const d=metresBetween(obs, pt);
+    const shot={ id:'local-'+uuid(), observationId:obs.id, pointId:pt.id,
+                 angleDeg:angle, angleSpreadDeg:spread, distanceM:d };
+    elevShots.push(shot);
+    if(sessionId && obs.remoteId && pt.remoteId){
+      apiPost('/sessions/'+sessionId+'/elevation-shots', {
+        observationId:obs.remoteId, pointId:pt.remoteId,
+        angleDeg:angle, angleSpreadDeg:spread, distanceM:d
+      }).then(row=>{ if(row && row.id) shot.remoteId=row.id; });
+    }
+    // Stay on the point. Repeat shots are the whole basis of the confidence
+    // model, and making the user lie the iPad flat between them would mean
+    // nobody ever takes a second one.
+    elevRenderAll(); elevStatusUpdate();
+    const e=elevationOf(pt.id);
+    sightMsg.innerHTML='<b>'+pt.label+'</b> '+fmtElev(e)
+                     + (elevConfidence(e)?'<br>'+elevConfidence(e):'')
+                     + '<br>Shoot again to improve it, or Done';
+    sightCapture.textContent='Shoot again';
+    sightCancel.textContent='Done';
   }
 
-  sightCapture.addEventListener('click', ()=>{
-    if(elevStep==='done') elevSave(); else elevCaptureAngle();
-  });
-  sightCancel.addEventListener('click', ()=>{
-    // From a result, Redo re-sights the target rather than throwing the whole
-    // setup away -- the tapped points are still good.
-    if(elevStep==='done'){ elevResult=null; elevTargetAngle=null; elevAdvanceToSight('sightTarget'); return; }
-    elevReset(); setMapMode(null);
-  });
+  function elevReset(){
+    elevClearLayers();
+    elevPoints=[]; elevShots=[];
+    elevActiveObs=null; elevPlacing=null; elevSelected=null; elevSighting=null;
+    sightOverlay.classList.remove('show');
+  }
+
+  function elevSetSurvey(on){
+    elevSurveyOn=on;
+    elevBar.classList.toggle('show', on);
+    elevBtn.classList.toggle('active', on);
+    if(!on){ elevPlacing=null; elevSighting=null; sightOverlay.classList.remove('show'); }
+    elevRenderAll();
+    if(on) elevStatusUpdate();
+  }
+
   elevBtn.addEventListener('click', ()=>{
-    if(mapMode==='elevation'){ elevReset(); setMapMode(null); return; }
+    if(elevSurveyOn){ elevSetSurvey(false); return; }
     if(mapMode){ clearMeasureDraft(); setMapMode(null); }
-    elevReset();
-    elevStep='obs';
-    setMapMode('elevation');
+    elevSetSurvey(true);
+    // Seed the first observation from GPS so there is something to drag,
+    // exactly as the spec asks: GPS proposes, the map position decides.
+    if(!elevPoints.length && lastFix){
+      elevPlacing='observation';
+      elevPlaceAt(L.latLng(lastFix.coords.latitude, lastFix.coords.longitude),
+                  {lat:lastFix.coords.latitude, lng:lastFix.coords.longitude});
+      elevStatus.innerHTML='GPS placed <b>Observation A</b> — drag it onto your real position';
+    }
+  });
+  elevAddObs.addEventListener('click', ()=> elevBeginPlace('observation'));
+  elevAddAnchor.addEventListener('click', ()=> elevBeginPlace('anchor'));
+  elevAddTarget.addEventListener('click', ()=> elevBeginPlace('target'));
+  elevShoot.addEventListener('click', elevBeginSight);
+  elevExit.addEventListener('click', ()=> elevSetSurvey(false));
+
+  sightCapture.addEventListener('click', elevShootNow);
+  sightCancel.addEventListener('click', ()=>{
+    elevSighting=null; sightOverlay.classList.remove('show'); elevStatusUpdate();
   });
 
   // ---------- map ----------
@@ -2757,10 +2910,10 @@
       renderStrip(); markSelectedMarkers();
     } else {
       mapwrap.classList.remove('show');
-      // Elevation deliberately SURVIVES going upright: you tap the points on
-      // the map lying flat, then stand the iPad up to sight them. Cancelling
-      // the mode on that transition would make the feature impossible to use.
-      if(mapMode && mapMode!=='elevation'){ clearMeasureDraft(); setMapMode(null); }
+      // The survey deliberately SURVIVES going upright: points are placed on
+      // the map lying flat, then sighted standing up. Only the bar hides with
+      // the map; elevSurveyOn and every point stay exactly as they were.
+      if(mapMode){ clearMeasureDraft(); setMapMode(null); }
     }
   }
   centerBtn.addEventListener('click', ()=>{
@@ -3047,10 +3200,7 @@
     // camera's elevation above horizontal is tilt-90.
     tiltSamples.push({t:Date.now(), angle:tilt-90});
     if(tiltSamples.length>240) tiltSamples.splice(0, tiltSamples.length-240);
-    if(sightOverlay.classList.contains('show') && elevStep!=='done'){
-      const a=sightAngleNow();
-      sightAngle.textContent = (a===null) ? '—' : ((a>=0?'+':'')+a.toFixed(1)+'°');
-    }
+    if(sightOverlay.classList.contains('show')) sightRefresh();
     const wantUpright = currentlyUpright ? tilt>UPRIGHT_OFF : tilt>UPRIGHT_ON;
     if(wantUpright!==candidateState){ candidateState=wantUpright; candidateSince=Date.now(); }
     if(candidateState!==currentlyUpright && Date.now()-candidateSince>HOLD_MS){
