@@ -224,6 +224,23 @@
     margin-bottom:calc(env(safe-area-inset-bottom,0px) + 28px);
     display:flex; gap:12px;
   }
+  /* Thumb button, sitting directly above the camera shutter (which is
+     right:18px bottom:80px, 76px across) so the two form one control cluster
+     under the same thumb. */
+  .sight-shoot{
+    position:absolute; right:18px; bottom:172px;
+    width:76px; height:76px; border-radius:50%;
+    border:4px solid rgba(255,255,255,0.9);
+    background:rgba(90,122,99,0.92); color:#fff;
+    font-size:13px; font-weight:700; letter-spacing:0.06em;
+    box-shadow:0 4px 20px rgba(0,0,0,0.5);
+  }
+  .sight-shoot:active{transform:scale(0.92);}
+  .sight-shoot:disabled{background:rgba(90,122,99,0.35); border-color:rgba(255,255,255,0.4);}
+  /* The backdrop must not swallow taps meant for the shutter underneath it;
+     only the overlay's own controls are interactive. */
+  .sight-overlay{pointer-events:none;}
+  .sight-top, .sight-actions, .sight-shoot{pointer-events:auto;}
 
   /* Relative elevation survey */
   .elev-bar{
@@ -536,8 +553,8 @@
       </div>
       <div class="sight-actions">
         <button class="mb-btn" id="sightCancel">Cancel</button>
-        <button class="mb-btn go" id="sightCapture">Capture</button>
       </div>
+      <button class="sight-shoot" id="sightCapture">SHOOT</button>
     </div>
     <div class="scale-track" id="scaleX" style="right:189px; bottom:118px;">
       <div class="st-inner" data-axis="x" style="transform:translate(-50%,-50%) rotate(0deg);"><div class="st-knob"></div></div>
@@ -2596,7 +2613,11 @@
   let elevSurveyOn=false, elevActiveObs=null, elevPlacing=null, elevSelected=null, elevSighting=null;
   const tiltSamples=[];
   const TILT_WINDOW_MS=800;   // averaged into one shot
-  const STEADY_DEG=0.4;       // sample spread below this counts as steady
+  // Sample spread below this counts as steady. 0.4 was unusably tight for a
+  // handheld iPad. The shot is the MEAN of the window, so with ~13 samples the
+  // averaged error lands well under the raw spread -- the gate is there to
+  // reject a real wobble, not to demand tripod stillness.
+  const STEADY_DEG=1.2;
 
   const rad=x=>x*Math.PI/180;
   const mean=a=>a.reduce((x,y)=>x+y,0)/a.length;
@@ -2806,7 +2827,7 @@
     elevSighting=sel.id;
     const d=metresBetween(obs, sel);
     sightMsg.innerHTML='Sight <b>'+sel.label+'</b> — '+Math.round(d/M_PER_FT)+' ft away';
-    sightCapture.textContent='Shoot';
+    sightCapture.textContent='SHOOT';
     sightCancel.textContent='Cancel';
     sightCapture.disabled=true;          // until the gate says otherwise
     sightSteady.textContent='HOLD STEADY';
@@ -2839,7 +2860,7 @@
     sightMsg.innerHTML='<b>'+pt.label+'</b> '+fmtElev(e)
                      + (elevConfidence(e)?'<br>'+elevConfidence(e):'')
                      + '<br>Shoot again to improve it, or Done';
-    sightCapture.textContent='Shoot again';
+    sightCapture.textContent='AGAIN';
     sightCancel.textContent='Done';
   }
 

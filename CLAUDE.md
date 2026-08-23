@@ -272,8 +272,19 @@ Two workflow rules that are load-bearing, both found by testing:
   while you are stood up holding the thing.
 
 Sighting is gated on steadiness (`STEADY_DEG`, sample spread over the same
-800ms window that gets averaged into the shot): HOLD STEADY → READY → Shoot.
+800ms window that gets averaged into the shot): HOLD STEADY → READY → SHOOT.
 The gate runs when the overlay opens, not just on the next orientation event.
+**0.4° was unusably tight** on a handheld iPad and is now **1.2°** — the shot
+is the *mean* of the window, so ~13 samples put the averaged error well under
+the raw spread. The gate exists to reject a real wobble, not to demand tripod
+stillness; the spread is recorded on every shot either way.
+
+**SHOOT is a round thumb button in the lower right, directly above the camera
+shutter** (`right:18px`, shutter at `bottom:80px`, SHOOT at `bottom:172px`),
+so the two sit under the same thumb. It reads SHOOT, then AGAIN after the
+first shot. The overlay backdrop is `pointer-events:none` with only its own
+controls interactive, so it never swallows a tap meant for the shutter
+underneath.
 
 No compass is needed — bearings come from map geometry, which sidesteps iOS
 compass calibration entirely.
