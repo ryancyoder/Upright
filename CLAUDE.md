@@ -218,8 +218,13 @@ is in review's mini pane — swap the map to the main stage to reach them.
 
 ### Relative elevation survey
 
-**OBSERVATION → ANCHOR → unlimited TARGETS.** Stand somewhere, nominate one
-point as `0.00'`, then measure everything else against it. Nothing here is
+**SHOOT FIRST, PLACE SECOND.** Stand somewhere, hold the iPad up, and shoot
+every point from there; drag the pins onto the map afterwards. Shooting and
+pin-placing are separate jobs and mixing them means constantly raising and
+lowering the iPad.
+
+**OBSERVATION → ANCHOR → unlimited TARGETS.** Nominate one point as `0.00'`,
+then measure everything else against it. Nothing here is
 absolute; it is a fast relative site survey for grading and drainage, not a
 replacement for an instrument.
 
@@ -271,20 +276,57 @@ Two workflow rules that are load-bearing, both found by testing:
   showing the result there — the mode bar is inside `.mapwrap` and invisible
   while you are stood up holding the thing.
 
+### Grade mode (the shooting half)
+
+`SHOOT GRADE` (thumb button above the shutter) toggles it. On entry it
+**locks the flat/upright switch** — `handleOrientation` returns early — because
+shots are taken at whatever angle the target demands, including pointing at
+the ground, and flipping to the map mid-survey would be unusable. It also
+logs the observation position from GPS there and then.
+
+Shots fire **automatically on dwell**: hold the crosshair steady for
+`DWELL_MS` and it takes the shot itself, so you never fumble for a button
+while aiming. After each shot it **disarms until you move off by
+`REARM_DEG`**, otherwise one long hold would machine-gun the same point.
+
+The first shot from any observation is always the anchor — creating it the
+first time, re-establishing it for a new standing position after that. Each
+shot also captures a **camera frame with the crosshair burned in**, attached
+to the point. Without that photo a yard full of "Target 3" pins is
+impossible to place afterwards.
+
+Pressing the button again ends the mode, restores tilt-to-map, opens the
+survey bar and fits the map to the survey.
+
+**Shot points start `placed=false`** at a provisional position fanned around
+the observation, and their elevation reads *place pin* rather than a number —
+it is not a measurement until the pin is where the point actually is.
+Dragging one sets `placed=true`. Compass heading, when the device offers one,
+only aims that provisional parking spot to shorten the drag; it never enters
+the maths, so iOS compass calibration cannot corrupt a measurement.
+
+Observation, anchor and target each render as their **own SVG glyph** (tripod,
+benchmark triangle, crosshair) — deliberately not the standard photo-pin
+graphic, since they are different things.
+
 Sighting is gated on steadiness (`STEADY_DEG`, sample spread over the same
-800ms window that gets averaged into the shot): HOLD STEADY → READY → SHOOT.
+800ms window that gets averaged into the shot): HOLD STEADY → HOLDING → fire.
 The gate runs when the overlay opens, not just on the next orientation event.
 **0.4° was unusably tight** on a handheld iPad and is now **1.2°** — the shot
 is the *mean* of the window, so ~13 samples put the averaged error well under
 the raw spread. The gate exists to reject a real wobble, not to demand tripod
 stillness; the spread is recorded on every shot either way.
 
-**SHOOT is a round thumb button in the lower right, directly above the camera
-shutter** (`right:18px`, shutter at `bottom:80px`, SHOOT at `bottom:172px`),
-so the two sit under the same thumb. It reads SHOOT, then AGAIN after the
-first shot. The overlay backdrop is `pointer-events:none` with only its own
-controls interactive, so it never swallows a tap meant for the shutter
-underneath.
+**The grade button is round and thumb-sized, directly above the camera
+shutter** (`right:18px`, shutter at `bottom:80px`, grade at `bottom:172px`),
+so the two sit under the same thumb. The sighting HUD is
+`pointer-events:none` apart from its own controls, so it never swallows a tap
+meant for the shutter underneath.
+
+**The map recentres on the FIRST GPS fix only.** The map can be opened before
+GPS has a fix, in which case it sits on the Hebron fallback tens of km away —
+which used to park freshly shot pins off-screen where they could not be
+dragged. Recentring is first-fix-only so it can never yank the view later.
 
 No compass is needed — bearings come from map geometry, which sidesteps iOS
 compass calibration entirely.

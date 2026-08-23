@@ -227,16 +227,30 @@
   /* Thumb button, sitting directly above the camera shutter (which is
      right:18px bottom:80px, 76px across) so the two form one control cluster
      under the same thumb. */
-  .sight-shoot{
+  /* Thumb button directly above the camera shutter (right:18px, bottom:80px,
+     76px across) so the two sit under the same thumb. This one TOGGLES grade
+     mode; shots inside that mode fire automatically on dwell. */
+  .grade-btn{
     position:absolute; right:18px; bottom:172px;
     width:76px; height:76px; border-radius:50%;
     border:4px solid rgba(255,255,255,0.9);
     background:rgba(90,122,99,0.92); color:#fff;
-    font-size:13px; font-weight:700; letter-spacing:0.06em;
+    font-size:12px; font-weight:700; letter-spacing:0.04em; line-height:1.15;
+    z-index:22; display:none;
     box-shadow:0 4px 20px rgba(0,0,0,0.5);
   }
-  .sight-shoot:active{transform:scale(0.92);}
-  .sight-shoot:disabled{background:rgba(90,122,99,0.35); border-color:rgba(255,255,255,0.4);}
+  .grade-btn.show{display:block;}
+  .grade-btn:active{transform:scale(0.92);}
+  .grade-btn.on{background:rgba(196,67,43,0.92); border-color:#fff;}
+  /* Dwell progress: fills while the crosshair is held steady, and the shot
+     fires when it completes. */
+  .sight-dwell{
+    margin-bottom:calc(env(safe-area-inset-bottom,0px) + 24px);
+    width:56%; max-width:320px; height:6px; border-radius:3px;
+    background:rgba(255,255,255,0.18); overflow:hidden;
+  }
+  .sight-dwell i{display:block; height:100%; width:0%; background:var(--flat); transition:width .08s linear;}
+  .sight-dwell.firing i{background:var(--live);}
   /* The backdrop must not swallow taps meant for the shutter underneath it;
      only the overlay's own controls are interactive. */
   .sight-overlay{pointer-events:none;}
@@ -262,6 +276,9 @@
     background:rgba(0,0,0,0.74); border:2px solid var(--c);
     font-size:11px; color:var(--ink); line-height:1.25;
   }
+  .elev-pin svg{display:block; margin-bottom:1px;}
+  .elev-pin em{font-style:normal; font-size:10px; font-weight:700; color:var(--live); letter-spacing:0.04em;}
+  .elev-pin.unplaced{border-style:dashed; opacity:0.92;}
   .elev-pin b{font-size:11px; font-weight:700;}
   .elev-pin span{font-size:13px; font-weight:700; color:var(--c);}
   .elev-pin.sel{box-shadow:0 0 0 3px rgba(255,255,255,0.35);}
@@ -551,10 +568,8 @@
         <div class="sight-angle" id="sightAngle">—</div>
         <div class="sight-steady" id="sightSteady">HOLD STEADY</div>
       </div>
-      <div class="sight-actions">
-        <button class="mb-btn" id="sightCancel">Cancel</button>
-      </div>
-      <button class="sight-shoot" id="sightCapture">SHOOT</button>
+      <div class="sight-dwell"><i id="sightDwellFill"></i></div>
+
     </div>
     <div class="scale-track" id="scaleX" style="right:189px; bottom:118px;">
       <div class="st-inner" data-axis="x" style="transform:translate(-50%,-50%) rotate(0deg);"><div class="st-knob"></div></div>
@@ -566,6 +581,7 @@
       <div class="st-inner" data-axis="y" style="transform:translate(-50%,-50%) rotate(-90deg);"><div class="st-knob"></div></div>
     </div>
     <button class="snap-btn" id="snapBtn" aria-label="Snap photo pin"></button>
+    <button class="grade-btn" id="gradeBtn">SHOOT<br>GRADE</button>
     <div class="pin-count" id="pinCount"></div>
     <div class="snap-flash" id="snapFlash"></div>
 
@@ -594,7 +610,6 @@
           <button class="mt-btn" id="elevAddObs">+ Observation</button>
           <button class="mt-btn" id="elevAddAnchor">+ Anchor</button>
           <button class="mt-btn" id="elevAddTarget">+ Target</button>
-          <button class="mt-btn go" id="elevShoot">Shoot</button>
           <button class="mt-btn" id="elevExit">Done</button>
         </div>
       </div>
@@ -716,10 +731,11 @@
         lockPlanBtn=$('lockPlanBtn'), exportPinsBtn=$('exportPinsBtn'), centerBtn=$('centerBtn'), lockExtentBtn=$('lockExtentBtn'),
         basemapBtn=$('basemapBtn'), elevBtn=$('elevBtn'),
         sightOverlay=$('sightOverlay'), sightMsg=$('sightMsg'), sightAngle=$('sightAngle'),
-        sightCapture=$('sightCapture'), sightCancel=$('sightCancel'), sightSteady=$('sightSteady'),
+        sightSteady=$('sightSteady'), gradeBtn=$('gradeBtn'),
+        sightDwell=$('sightDwellFill'),
         elevBar=$('elevBar'), elevStatus=$('elevStatus'), elevAddObs=$('elevAddObs'),
         elevAddAnchor=$('elevAddAnchor'), elevAddTarget=$('elevAddTarget'),
-        elevShoot=$('elevShoot'), elevExit=$('elevExit'),
+        elevExit=$('elevExit'),
         annoDraw=$('annoDraw'), drawWrap=$('drawWrap'), drawCanvas=$('drawCanvas'),
         drawSwatches=$('drawSwatches'), drawUndo=$('drawUndo'), drawClear=$('drawClear'), drawDone=$('drawDone'),
         filmStrip=$('filmStrip'), sketchBtn=$('sketchBtn'), measureBtn=$('measureBtn'),
@@ -929,7 +945,7 @@
     isPausedFlat=false; segStart=Date.now();
     startVideoClip();
     setState('recording'); showMap(false);
-    snapBtn.classList.add('show'); annoBar.classList.add('show'); refreshAnnoUI(); updatePinCount();
+    snapBtn.classList.add('show'); gradeBtn.classList.add('show'); annoBar.classList.add('show'); refreshAnnoUI(); updatePinCount();
   }
   function pauseRec(){
     if(drawWrap.classList.contains('show')) return;
@@ -938,7 +954,7 @@
     if(segStart){ recordedMs += Date.now()-segStart; segStart=0; }
     stopVideoClip();
     setState('paused');
-    snapBtn.classList.remove('show'); annoBar.classList.remove('show'); annoOverlay.classList.remove('show'); pinCount.classList.remove('show');
+    snapBtn.classList.remove('show'); gradeBtn.classList.remove('show'); annoBar.classList.remove('show'); annoOverlay.classList.remove('show'); pinCount.classList.remove('show');
     scaleTracks.forEach(t=>t.classList.remove('show'));
     showMap(true);
   }
@@ -975,7 +991,7 @@
     reviewBtn.style.display = finalAudioBlob ? 'block' : 'none';
     dlPins.style.display = pins.length ? 'block' : 'none';
     showMap(false); drawWrap.classList.remove('show');
-    snapBtn.classList.remove('show'); annoBar.classList.remove('show'); annoOverlay.classList.remove('show'); pinCount.classList.remove('show');
+    snapBtn.classList.remove('show'); gradeBtn.classList.remove('show'); annoBar.classList.remove('show'); annoOverlay.classList.remove('show'); pinCount.classList.remove('show');
     scaleTracks.forEach(t=>t.classList.remove('show'));
     donePanel.classList.add('show');
     endBtn.classList.remove('show'); clockEl.classList.remove('show');
@@ -1008,7 +1024,14 @@
   function startGeo(){
     if(!('geolocation' in navigator)) { gpsReadout.textContent='no GPS available'; return; }
     geoWatchId = navigator.geolocation.watchPosition(pos=>{
+      const first = !lastFix;
       lastFix = pos;
+      // If the map opened before GPS had a fix it is sitting on the fallback
+      // centre, tens of km away. Recentre on the FIRST fix only, so this can
+      // never yank the view out from under someone later.
+      if(first && map && !extentLocked){
+        map.setView([pos.coords.latitude, pos.coords.longitude], Math.max(map.getZoom(), 19));
+      }
       const acc = Math.round(pos.coords.accuracy*3.281); // feet
       gpsReadout.textContent = `GPS ±${acc} ft`;
       updateMyMarker();
@@ -1697,7 +1720,8 @@
     }));
     elevPoints=(data.elevationPoints||[]).map(e=>({
       id:e.id, remoteId:e.id, kind:e.kind, label:e.label, lat:e.lat, lng:e.lng,
-      gpsLat:e.gps_lat, gpsLng:e.gps_lng, marker:null
+      gpsLat:e.gps_lat, gpsLng:e.gps_lng, placed:e.placed!==false,
+      photoUrl:e.photoUrl||null, marker:null
     }));
     elevShots=(data.elevationShots||[]).map(sh=>({
       id:sh.id, remoteId:sh.id, observationId:sh.observation_id, pointId:sh.point_id,
@@ -2593,62 +2617,42 @@
   }
 
   // ---------- relative elevation survey ----------
-  // OBSERVATION -> ANCHOR -> unlimited TARGETS.
+  // SHOOT FIRST, PLACE SECOND. All shots are taken from one standing position
+  // with the iPad up; the pins are dragged onto the map afterwards, using the
+  // reference photo captured with each shot to identify what was aimed at.
   //
-  // Height above the device is d*tan(angle). Taking two sightings from the
-  // SAME observation position, the device's own height cancels, so a target's
-  // elevation relative to the anchor is d_t*tan(t) - d_a*tan(a). The anchor is
-  // 0.00' by definition; nothing here is absolute.
+  // Height above the device is d*tan(angle). Two sightings from the SAME
+  // observation cancel the device's own height, so a target is
+  // d_t*tan(t) - d_a*tan(a) relative to the anchor. The anchor is 0.00'.
   //
-  // Horizontal distance comes from where the pins sit ON THE MAP, never from
-  // GPS. GPS is 3-5m; against an aligned plan a tapped pin is far better, and
-  // it is what makes the numbers worth anything. GPS only seeds the first
-  // observation, and the user drags it to the truth.
-  //
-  // IMPORTANT: a second observation position must re-shoot the anchor. The
-  // anchor angle is measured relative to THAT position's horizontal plane and
-  // device height; reusing another observation's anchor shot silently
-  // produces nonsense.
+  // Horizontal distance comes from where the pins sit ON THE MAP. GPS only
+  // fixes the observation. Until a pin is placed its elevation is NOT a
+  // measurement, and the UI says so rather than showing a number.
   let elevPoints=[], elevShots=[];
-  let elevSurveyOn=false, elevActiveObs=null, elevPlacing=null, elevSelected=null, elevSighting=null;
+  let elevSurveyOn=false, elevActiveObs=null, elevSelected=null, elevPlacing=null;
+  let gradeOn=false, gradeObsId=null, gradeArmed=true, dwellStart=0, lastHeading=null;
   const tiltSamples=[];
   const TILT_WINDOW_MS=800;   // averaged into one shot
-  // Sample spread below this counts as steady. 0.4 was unusably tight for a
-  // handheld iPad. The shot is the MEAN of the window, so with ~13 samples the
-  // averaged error lands well under the raw spread -- the gate is there to
-  // reject a real wobble, not to demand tripod stillness.
+  // 0.4 was unusably tight for a handheld iPad. The shot is the MEAN of the
+  // window, so ~13 samples put the averaged error well under the raw spread.
   const STEADY_DEG=1.2;
+  const DWELL_MS=1400;        // hold the crosshair this long and it fires
+  const REARM_DEG=2.5;        // must move at least this far before it fires again
+  const PROVISIONAL_M=15;     // how far out a just-shot pin is parked
 
   const rad=x=>x*Math.PI/180;
   const mean=a=>a.reduce((x,y)=>x+y,0)/a.length;
   const halfRange=a=>a.length>1 ? (Math.max.apply(null,a)-Math.min.apply(null,a))/2 : null;
 
-  // Existing tilt is 0 flat (rear camera pointing down) and 90 upright (camera
-  // horizontal), so elevation above horizontal is tilt-90.
   function tiltWindow(){
     const cutoff=Date.now()-TILT_WINDOW_MS;
     const recent=tiltSamples.filter(x=>x.t>=cutoff);
     return recent.length?recent:tiltSamples.slice(-1);
   }
-  function sightAngleNow(){
-    const w=tiltWindow();
-    return w.length ? mean(w.map(x=>x.angle)) : null;
-  }
+  function sightAngleNow(){ const w=tiltWindow(); return w.length?mean(w.map(x=>x.angle)):null; }
   function sightSpreadNow(){
     const w=tiltWindow();
     return w.length>1 ? (Math.max.apply(null,w.map(x=>x.angle))-Math.min.apply(null,w.map(x=>x.angle))) : 0;
-  }
-
-  // Steadiness gate: a shot taken mid-wobble is worse than no shot. Called
-  // both from handleOrientation and the moment the overlay opens, so Shoot is
-  // never live before the gate has had a say.
-  function sightRefresh(){
-    const a=sightAngleNow(), sp=sightSpreadNow();
-    sightAngle.textContent = (a===null) ? '—' : ((a>=0?'+':'')+a.toFixed(1)+'°');
-    const steady = (a!==null && sp<=STEADY_DEG);
-    sightSteady.textContent = steady ? 'READY' : 'HOLD STEADY';
-    sightSteady.classList.toggle('ready', steady);
-    sightCapture.disabled = !steady;
   }
 
   function elevPoint(id){ return elevPoints.find(p=>p.id===id) || null; }
@@ -2660,47 +2664,38 @@
     return 'Target '+n;
   }
 
-  // Elevation is DERIVED, never stored: drag a pin and every dependent number
-  // corrects itself. One estimate per target shot, using that observation's
-  // mean anchor angle.
+  // Elevation is DERIVED, never stored: move a pin and every dependent number
+  // corrects itself. Unplaced pins are excluded — their position is a parking
+  // spot, not a measurement.
   function elevationOf(pointId){
     const anchor=elevAnchorPoint();
-    if(!anchor) return null;
     const pt=elevPoint(pointId);
-    if(!pt) return null;
-    if(pt.kind==='anchor') return {ft:0, shots:elevShots.filter(s=>s.pointId===anchor.id).length, isAnchor:true};
+    if(!anchor || !pt) return null;
+    if(pt.kind==='anchor') return {ft:0, isAnchor:true};
+    if(!pt.placed || !anchor.placed) return {needsPlacing:true};
     const perObs=[], all=[];
     elevPoints.filter(o=>o.kind==='observation').forEach(obs=>{
-      const aShots=elevShots.filter(s=>s.observationId===obs.id && s.pointId===anchor.id);
-      const pShots=elevShots.filter(s=>s.observationId===obs.id && s.pointId===pt.id);
+      const aShots=elevShots.filter(x=>x.observationId===obs.id && x.pointId===anchor.id);
+      const pShots=elevShots.filter(x=>x.observationId===obs.id && x.pointId===pt.id);
       if(!aShots.length || !pShots.length) return;
-      const dA=metresBetween(obs, anchor), dP=metresBetween(obs, pt);
-      const hA=dA*Math.tan(rad(mean(aShots.map(s=>s.angleDeg))));
-      const est=pShots.map(s=>(dP*Math.tan(rad(s.angleDeg))-hA)/M_PER_FT);
+      const dA=metresBetween(obs,anchor), dP=metresBetween(obs,pt);
+      const hA=dA*Math.tan(rad(mean(aShots.map(x=>x.angleDeg))));
+      const est=pShots.map(x=>(dP*Math.tan(rad(x.angleDeg))-hA)/M_PER_FT);
       est.forEach(e=>all.push(e));
       perObs.push(mean(est));
     });
     if(!all.length) return null;
-    return {
-      ft: mean(perObs),          // each observation weighs equally
-      shots: all.length,
-      obsCount: perObs.length,
-      // Repeatability: agreement between shots. Says nothing about whether the
-      // pin is in the right place.
-      repeat: halfRange(all),
-      // Cross-observation agreement: the only check that can catch a badly
-      // placed pin or a mis-set observation.
-      agree: halfRange(perObs)
-    };
+    return { ft:mean(perObs), shots:all.length, obsCount:perObs.length,
+             repeat:halfRange(all), agree:halfRange(perObs) };
   }
-
   function fmtElev(e){
-    if(!e) return '—';
-    if(e.isAnchor) return "0.00' anchor";
+    if(!e) return 'not shot';
+    if(e.isAnchor) return "0.00'";
+    if(e.needsPlacing) return 'place pin';
     return (e.ft>=0?'+':'')+e.ft.toFixed(2)+"'";
   }
   function elevConfidence(e){
-    if(!e || e.isAnchor) return '';
+    if(!e || e.isAnchor || e.needsPlacing) return '';
     const bits=[e.shots+' shot'+(e.shots===1?'':'s')];
     if(e.repeat!=null) bits.push('±'+e.repeat.toFixed(2)+"' repeat");
     if(e.obsCount>1 && e.agree!=null) bits.push(e.obsCount+' obs ±'+e.agree.toFixed(2)+"' agree");
@@ -2708,7 +2703,29 @@
     return bits.join(' · ');
   }
 
-  // ---------- rendering ----------
+  // ---------- distinct map icons ----------
+  // Deliberately NOT the standard photo-pin graphic: an observation, an anchor
+  // and a target are different things and must be tellable apart at a glance.
+  function elevGlyph(kind, colour){
+    if(kind==='observation'){   // where you stood: a tripod over a spot
+      return '<svg viewBox="0 0 32 32" width="32" height="32">'
+           + '<circle cx="16" cy="9" r="4.5" fill="none" stroke="'+colour+'" stroke-width="2.5"/>'
+           + '<path d="M16 13.5 L9 26 M16 13.5 L23 26 M16 13.5 L16 26" stroke="'+colour+'" stroke-width="2.5" fill="none" stroke-linecap="round"/>'
+           + '</svg>';
+    }
+    if(kind==='anchor'){        // the datum: a survey benchmark triangle
+      return '<svg viewBox="0 0 32 32" width="32" height="32">'
+           + '<path d="M16 5 L27 25 L5 25 Z" fill="none" stroke="'+colour+'" stroke-width="2.5" stroke-linejoin="round"/>'
+           + '<circle cx="16" cy="19" r="3" fill="'+colour+'"/>'
+           + '</svg>';
+    }
+    return '<svg viewBox="0 0 32 32" width="32" height="32">'   // target: crosshair
+         + '<circle cx="16" cy="16" r="8.5" fill="none" stroke="'+colour+'" stroke-width="2.5"/>'
+         + '<path d="M16 2 L16 8 M16 24 L16 30 M2 16 L8 16 M24 16 L30 16" stroke="'+colour+'" stroke-width="2.5" stroke-linecap="round"/>'
+         + '<circle cx="16" cy="16" r="2" fill="'+colour+'"/>'
+         + '</svg>';
+  }
+
   function elevClearLayers(){
     elevPoints.forEach(p=>{
       if(p.marker && map){ try{ map.removeLayer(p.marker); }catch(e){} }
@@ -2718,31 +2735,37 @@
   function elevRenderAll(){
     if(!map) return;
     elevClearLayers();
-    if(!elevSurveyOn && !elevPoints.length) return;
     elevPoints.forEach(pt=>{
       const isObs=pt.kind==='observation', isAnchor=pt.kind==='anchor';
       const colour=isObs?'#8b887f':isAnchor?'#5a7a63':'#c4432b';
-      const active=(isObs && pt.id===elevActiveObs);
-      const sel=(pt.id===elevSelected);
       const e=elevationOf(pt.id);
-      const line = isObs ? (active?'standing here':'observation')
-                 : isAnchor ? "0.00'"
-                 : (e ? fmtElev(e) : 'not shot');
-      const html='<div class="elev-pin'+(sel?' sel':'')+(active?' active':'')+'" style="--c:'+colour+'">'
-               + '<b>'+(pt.label||'')+'</b><span>'+line+'</span></div>';
+      const value=isObs ? (pt.id===elevActiveObs?'standing':'observation') : fmtElev(e);
+      const cls='elev-pin'+(pt.id===elevSelected?' sel':'')+(pt.placed?'':' unplaced');
+      const html='<div class="'+cls+'" style="--c:'+colour+'">'
+               + elevGlyph(pt.kind, colour)
+               + '<b>'+(pt.label||'')+'</b><span>'+value+'</span>'
+               + (pt.placed?'':'<em>drag me</em>')
+               + '</div>';
       const m=L.marker([pt.lat,pt.lng],{
-        draggable:elevSurveyOn,
+        draggable:true,
         icon:L.divIcon({className:'', html:html, iconSize:[0,0], iconAnchor:[0,0]})
       }).addTo(map);
-      m.on('click', ()=>{ elevSelect(pt.id); });
+      // The reference photo is what makes placing the pin possible at all.
+      if(pt.photoUrl) m.bindPopup('<div style="text-align:center"><b>'+(pt.label||'')+'</b><br>'
+        + '<img src="'+pt.photoUrl+'" style="width:220px;max-width:60vw;border-radius:6px;margin-top:6px"></div>',
+        {maxWidth:260});
+      m.on('click', ()=> elevSelect(pt.id));
       m.on('dragstart', ()=>{ pinDragging=true; });
       m.on('dragend', ()=>{
         pinDragging=false;
         const ll=m.getLatLng();
         pt.lat=ll.lat; pt.lng=ll.lng;
+        const firstPlacement=!pt.placed;
+        pt.placed=true;
+        if(pt.remoteId) apiPatch('/elevation-points/'+pt.remoteId, {lat:pt.lat, lng:pt.lng, placed:true});
         // Moving a pin changes distance, so every dependent elevation moves.
-        if(pt.remoteId) apiPatch('/elevation-points/'+pt.remoteId, {lat:pt.lat, lng:pt.lng});
         elevRenderAll(); elevStatusUpdate();
+        if(firstPlacement) elevSelect(pt.id);
       });
       pt.marker=m;
     });
@@ -2757,152 +2780,221 @@
 
   function elevStatusUpdate(){
     if(!elevSurveyOn) return;
-    const anchor=elevAnchorPoint();
-    const obs=elevPoint(elevActiveObs);
+    const unplaced=elevPoints.filter(p=>!p.placed).length;
     const sel=elevPoint(elevSelected);
     let msg;
     if(elevPlacing) msg='Tap the map to place the '+elevPlacing;
-    else if(!obs) msg='Add an observation position — where you are standing';
-    else if(!anchor) msg='Add an anchor — the point that becomes 0.00\u2032';
-    else if(!sel) msg='Tap a point to select it, then Shoot';
-    else {
+    else if(unplaced) msg='<b>'+unplaced+' pin'+(unplaced===1?'':'s')+' still to place</b> — tap one to see its photo, then drag it where it belongs';
+    else if(sel){
       const e=elevationOf(sel.id);
       msg='<b>'+sel.label+'</b> — '+fmtElev(e)+(elevConfidence(e)?' · '+elevConfidence(e):'');
     }
+    else if(!elevPoints.length) msg='No survey yet — hold the iPad up and use SHOOT GRADE';
+    else msg='Tap a pin to inspect it';
     elevStatus.innerHTML=msg;
-    const canShoot=!!(obs && sel && !elevPlacing);
-    elevShoot.disabled=!canShoot;
-    elevShoot.textContent = (sel && anchor && sel.id===anchor.id) ? 'Shoot anchor'
-                          : (sel ? 'Shoot '+(sel.kind==='observation'?'—':sel.label) : 'Shoot');
-    elevShoot.style.display = (sel && sel.kind==='observation') ? 'none' : '';
   }
 
-  // ---------- placing points ----------
+  // ---------- grade mode: shoot first ----------
+  function gradeSetMode(on){
+    gradeOn=on;
+    gradeBtn.classList.toggle('on', on);
+    gradeBtn.innerHTML = on ? 'END<br>GRADE' : 'SHOOT<br>GRADE';
+    sightOverlay.classList.toggle('show', on);
+    if(on){
+      // Log where we are standing NOW. GPS is coarse but it is a real
+      // position; everything else starts provisional.
+      const ll = lastFix ? L.latLng(lastFix.coords.latitude, lastFix.coords.longitude)
+                         : (map ? map.getCenter() : L.latLng(41.32,-87.20));
+      const obs=elevAddPoint('observation', ll, true,
+        lastFix?{lat:lastFix.coords.latitude,lng:lastFix.coords.longitude}:null);
+      gradeObsId=obs.id; elevActiveObs=obs.id;
+      gradeArmed=true; dwellStart=0;
+      gradeStatus();
+    } else {
+      gradeObsId=null; dwellStart=0;
+      sightDwell.style.width='0%';
+      if(map){
+        elevRenderAll();
+        // Bring the survey on screen. Freshly shot pins are parked near the
+        // observation and are useless if they are off the viewport.
+        const ll=elevPoints.map(pt=>[pt.lat,pt.lng]);
+        if(ll.length && !extentLocked){
+          try{ map.fitBounds(L.latLngBounds(ll), {padding:[60,60], maxZoom:20}); }catch(e){}
+        }
+      }
+      elevSetSurvey(true);
+    }
+  }
+
+  function gradeStatus(msg){
+    const anchor=elevAnchorPoint();
+    const shotHere=elevShots.filter(x=>x.observationId===gradeObsId).length;
+    const anchorShotHere=anchor && elevShots.some(x=>x.observationId===gradeObsId && x.pointId===anchor.id);
+    sightMsg.innerHTML = msg || (!anchorShotHere
+      ? 'Aim at your <b>ANCHOR</b> — the point that becomes 0.00\u2032 — and hold steady'
+      : 'Aim at a <b>target</b> and hold steady &nbsp;·&nbsp; '+shotHere+' shot'+(shotHere===1?'':'s')+' from here');
+  }
+
+  function elevAddPoint(kind, latlng, placed, gps){
+    const pt={ id:'local-'+uuid(), remoteId:null, kind:kind, label:elevLabelFor(kind),
+               lat:latlng.lat, lng:latlng.lng, placed:!!placed, photoUrl:null,
+               gpsLat:gps?gps.lat:null, gpsLng:gps?gps.lng:null, marker:null };
+    elevPoints.push(pt);
+    if(sessionId){
+      apiPost('/sessions/'+sessionId+'/elevation-points', {
+        kind:pt.kind, label:pt.label, lat:pt.lat, lng:pt.lng,
+        gpsLat:pt.gpsLat, gpsLng:pt.gpsLng, placed:pt.placed
+      }).then(row=>{ if(row && row.id){ pt.remoteId=row.id; elevFlushPending(); } });
+    }
+    return pt;
+  }
+
+  // Park a just-shot pin near the observation. Heading, when the device
+  // offers one, only points it roughly the right way to shorten the drag --
+  // it never enters the elevation maths.
+  function provisionalLatLng(obs, index){
+    const bearing = (lastHeading!=null) ? lastHeading : (index*47)%360;
+    const b=rad(bearing);
+    const dLat=(PROVISIONAL_M*Math.cos(b))/111320;
+    const dLng=(PROVISIONAL_M*Math.sin(b))/(111320*Math.cos(rad(obs.lat)));
+    return L.latLng(obs.lat+dLat, obs.lng+dLng);
+  }
+
+  // Camera frame with the crosshair burned in, so the pin can be identified
+  // later. Without this, a yard full of "Target 3" pins is unplaceable.
+  function gradeSnapshot(){
+    try{
+      const c=document.createElement('canvas');
+      c.width=liveVideo.videoWidth||1280; c.height=liveVideo.videoHeight||720;
+      const x=c.getContext('2d');
+      x.drawImage(liveVideo,0,0,c.width,c.height);
+      const cx=c.width/2, cy=c.height/2, r=Math.round(Math.min(c.width,c.height)*0.09);
+      x.strokeStyle='#c4432b'; x.lineWidth=Math.max(3, Math.round(c.width/320)); x.beginPath();
+      x.moveTo(cx-r*1.9,cy); x.lineTo(cx-r*0.35,cy); x.moveTo(cx+r*0.35,cy); x.lineTo(cx+r*1.9,cy);
+      x.moveTo(cx,cy-r*1.9); x.lineTo(cx,cy-r*0.35); x.moveTo(cx,cy+r*0.35); x.lineTo(cx,cy+r*1.9);
+      x.stroke();
+      x.beginPath(); x.arc(cx,cy,r,0,Math.PI*2); x.stroke();
+      return c.toDataURL('image/jpeg',0.8);
+    }catch(e){ console.warn('[grade] snapshot failed', e); return null; }
+  }
+  function elevUploadPhoto(pt){
+    if(!pt.remoteId || !pt.pendingPhoto) return;
+    const dataUrl=pt.pendingPhoto;
+    pt.pendingPhoto=null;             // clear first so a retry can't double-send
+    apiUpload('/elevation-points/'+pt.remoteId+'/photo', dataUrlToBlob(dataUrl))
+      .then(res=>{ if(res && res.url) pt.photoUrl=res.url; });
+  }
+
+  // A shot is taken the instant its point is created, so neither id exists yet.
+  // Anything that could not be sent is retried here as soon as the ids land --
+  // dropping it silently would lose the measurement while still showing it
+  // on screen, which is the worst of both worlds.
+  function elevFlushPending(){
+    elevPoints.forEach(pt=>{ if(pt.remoteId && pt.pendingPhoto) elevUploadPhoto(pt); });
+    if(!sessionId) return;
+    elevShots.forEach(sh=>{
+      if(sh.remoteId || sh.sending) return;
+      const obs=elevPoint(sh.observationId), pt=elevPoint(sh.pointId);
+      if(!obs || !pt || !obs.remoteId || !pt.remoteId) return;
+      sh.sending=true;
+      apiPost('/sessions/'+sessionId+'/elevation-shots', {
+        observationId:obs.remoteId, pointId:pt.remoteId,
+        angleDeg:sh.angleDeg, angleSpreadDeg:sh.angleSpreadDeg, distanceM:sh.distanceM
+      }).then(row=>{ sh.sending=false; if(row && row.id) sh.remoteId=row.id; });
+    });
+  }
+
+  function gradeFire(){
+    const obs=elevPoint(gradeObsId);
+    if(!obs) return;
+    const angle=sightAngleNow(); if(angle===null) return;
+    const spread=sightSpreadNow();
+    const anchor=elevAnchorPoint();
+    const anchorShotHere = anchor && elevShots.some(x=>x.observationId===obs.id && x.pointId===anchor.id);
+
+    // First shot from this position is always the anchor: either it creates
+    // the datum, or it re-establishes it for a new standing position (whose
+    // horizontal plane and device height differ, so the old angle is useless).
+    let pt;
+    if(!anchor) pt=elevAddPoint('anchor', provisionalLatLng(obs, 0), false, null);
+    else if(!anchorShotHere) pt=anchor;
+    else pt=elevAddPoint('target', provisionalLatLng(obs, elevPoints.length), false, null);
+
+    const shot={ id:'local-'+uuid(), observationId:obs.id, pointId:pt.id,
+                 angleDeg:angle, angleSpreadDeg:spread, distanceM:null };
+    elevShots.push(shot);
+
+    const snap=gradeSnapshot();
+    if(snap){ pt.pendingPhoto=snap; pt.photoUrl=snap; }
+    elevFlushPending();
+
+    snapFlash.classList.remove('go'); void snapFlash.offsetWidth; snapFlash.classList.add('go');
+    gradeArmed=false; dwellStart=0;
+    sightDwell.style.width='0%';
+    gradeStatus('<b>'+pt.label+'</b> captured at '+(angle>=0?'+':'')+angle.toFixed(1)+'\u00b0 — move to the next point');
+  }
+
+  // Called from handleOrientation. Runs the steadiness gate and the dwell
+  // timer; the shot fires by itself when the crosshair has been held.
+  function sightRefresh(){
+    const a=sightAngleNow(), sp=sightSpreadNow();
+    sightAngle.textContent = (a===null) ? '\u2014' : ((a>=0?'+':'')+a.toFixed(1)+'\u00b0');
+    const steady=(a!==null && sp<=STEADY_DEG);
+    sightSteady.textContent = steady ? (gradeArmed?'HOLDING':'MOVE OFF TO RE-ARM') : 'HOLD STEADY';
+    sightSteady.classList.toggle('ready', steady && gradeArmed);
+    if(!gradeOn) return;
+
+    // Re-arm only once the user has genuinely moved off the last point,
+    // otherwise one long hold would machine-gun shots at the same spot.
+    if(!gradeArmed){
+      const last=elevShots[elevShots.length-1];
+      if(a!==null && last && Math.abs(a-last.angleDeg)>=REARM_DEG){ gradeArmed=true; gradeStatus(); }
+      return;
+    }
+    if(!steady){ dwellStart=0; sightDwell.style.width='0%'; return; }
+    if(!dwellStart) dwellStart=Date.now();
+    const held=Date.now()-dwellStart;
+    const pct=Math.min(100, (held/DWELL_MS)*100);
+    sightDwell.style.width=pct+'%';
+    if(held>=DWELL_MS) gradeFire();
+  }
+
+  gradeBtn.addEventListener('click', ()=> gradeSetMode(!gradeOn));
+
+  // ---------- manual placement / review on the map ----------
   function elevBeginPlace(kind){
     if(kind==='anchor' && elevAnchorPoint()){
       elevStatus.textContent='There is already an anchor — drag it to move it';
       return;
     }
-    elevPlacing=kind;
-    elevStatusUpdate();
+    elevPlacing=kind; elevStatusUpdate();
   }
-
-  function elevPlaceAt(latlng, gps){
-    const kind=elevPlacing;
-    const pt={
-      id:'local-'+uuid(), remoteId:null, kind:kind, label:elevLabelFor(kind),
-      lat:latlng.lat, lng:latlng.lng,
-      gpsLat: gps?gps.lat:null, gpsLng: gps?gps.lng:null, marker:null
-    };
-    elevPoints.push(pt);
-    elevPlacing=null;
-    if(kind==='observation') elevActiveObs=pt.id;
-    elevSelected=pt.id;
-    if(sessionId){
-      apiPost('/sessions/'+sessionId+'/elevation-points', {
-        kind:pt.kind, label:pt.label, lat:pt.lat, lng:pt.lng, gpsLat:pt.gpsLat, gpsLng:pt.gpsLng
-      }).then(row=>{ if(row && row.id) pt.remoteId=row.id; });
-    }
-    elevRenderAll(); elevStatusUpdate();
-  }
-
   function elevMapTap(latlng){
-    if(elevPlacing){ elevPlaceAt(latlng, null); return; }
+    if(!elevPlacing) return;
+    const pt=elevAddPoint(elevPlacing, latlng, true, null);
+    elevPlacing=null; elevSelect(pt.id);
   }
-
-  // ---------- sighting ----------
-  function elevBeginSight(){
-    const sel=elevPoint(elevSelected), obs=elevPoint(elevActiveObs);
-    if(!sel || !obs) return;
-    const anchor=elevAnchorPoint();
-    // A fresh observation position has to re-shoot the anchor before its
-    // targets mean anything -- the anchor angle is relative to THIS position.
-    if(anchor && sel.id!==anchor.id &&
-       !elevShots.some(s=>s.observationId===obs.id && s.pointId===anchor.id)){
-      elevStatus.innerHTML='Shoot the <b>anchor</b> from this observation first — '
-                         + 'its angle is relative to where you are standing now';
-      elevSelect(anchor.id);
-      return;
-    }
-    elevSighting=sel.id;
-    const d=metresBetween(obs, sel);
-    sightMsg.innerHTML='Sight <b>'+sel.label+'</b> — '+Math.round(d/M_PER_FT)+' ft away';
-    sightCapture.textContent='SHOOT';
-    sightCancel.textContent='Cancel';
-    sightCapture.disabled=true;          // until the gate says otherwise
-    sightSteady.textContent='HOLD STEADY';
-    sightSteady.classList.remove('ready');
-    sightOverlay.classList.add('show');
-    sightRefresh();
-  }
-
-  function elevShootNow(){
-    const pt=elevPoint(elevSighting), obs=elevPoint(elevActiveObs);
-    if(!pt || !obs) return;
-    const angle=sightAngleNow();
-    if(angle===null){ sightMsg.textContent='No tilt reading yet — move the iPad slightly'; return; }
-    const spread=sightSpreadNow();
-    const d=metresBetween(obs, pt);
-    const shot={ id:'local-'+uuid(), observationId:obs.id, pointId:pt.id,
-                 angleDeg:angle, angleSpreadDeg:spread, distanceM:d };
-    elevShots.push(shot);
-    if(sessionId && obs.remoteId && pt.remoteId){
-      apiPost('/sessions/'+sessionId+'/elevation-shots', {
-        observationId:obs.remoteId, pointId:pt.remoteId,
-        angleDeg:angle, angleSpreadDeg:spread, distanceM:d
-      }).then(row=>{ if(row && row.id) shot.remoteId=row.id; });
-    }
-    // Stay on the point. Repeat shots are the whole basis of the confidence
-    // model, and making the user lie the iPad flat between them would mean
-    // nobody ever takes a second one.
-    elevRenderAll(); elevStatusUpdate();
-    const e=elevationOf(pt.id);
-    sightMsg.innerHTML='<b>'+pt.label+'</b> '+fmtElev(e)
-                     + (elevConfidence(e)?'<br>'+elevConfidence(e):'')
-                     + '<br>Shoot again to improve it, or Done';
-    sightCapture.textContent='AGAIN';
-    sightCancel.textContent='Done';
-  }
-
   function elevReset(){
     elevClearLayers();
     elevPoints=[]; elevShots=[];
-    elevActiveObs=null; elevPlacing=null; elevSelected=null; elevSighting=null;
+    elevActiveObs=null; elevSelected=null; elevPlacing=null;
+    gradeOn=false; gradeObsId=null; dwellStart=0;
+    gradeBtn.classList.remove('on'); gradeBtn.innerHTML='SHOOT<br>GRADE';
     sightOverlay.classList.remove('show');
   }
-
   function elevSetSurvey(on){
     elevSurveyOn=on;
     elevBar.classList.toggle('show', on);
     elevBtn.classList.toggle('active', on);
-    if(!on){ elevPlacing=null; elevSighting=null; sightOverlay.classList.remove('show'); }
+    if(!on) elevPlacing=null;
     elevRenderAll();
     if(on) elevStatusUpdate();
   }
-
-  elevBtn.addEventListener('click', ()=>{
-    if(elevSurveyOn){ elevSetSurvey(false); return; }
-    if(mapMode){ clearMeasureDraft(); setMapMode(null); }
-    elevSetSurvey(true);
-    // Seed the first observation from GPS so there is something to drag,
-    // exactly as the spec asks: GPS proposes, the map position decides.
-    if(!elevPoints.length && lastFix){
-      elevPlacing='observation';
-      elevPlaceAt(L.latLng(lastFix.coords.latitude, lastFix.coords.longitude),
-                  {lat:lastFix.coords.latitude, lng:lastFix.coords.longitude});
-      elevStatus.innerHTML='GPS placed <b>Observation A</b> — drag it onto your real position';
-    }
-  });
+  elevBtn.addEventListener('click', ()=> elevSetSurvey(!elevSurveyOn));
   elevAddObs.addEventListener('click', ()=> elevBeginPlace('observation'));
   elevAddAnchor.addEventListener('click', ()=> elevBeginPlace('anchor'));
   elevAddTarget.addEventListener('click', ()=> elevBeginPlace('target'));
-  elevShoot.addEventListener('click', elevBeginSight);
   elevExit.addEventListener('click', ()=> elevSetSurvey(false));
-
-  sightCapture.addEventListener('click', elevShootNow);
-  sightCancel.addEventListener('click', ()=>{
-    elevSighting=null; sightOverlay.classList.remove('show'); elevStatusUpdate();
-  });
 
   // ---------- map ----------
   function initMap(){
@@ -3216,12 +3308,18 @@
     const cosTilt=Math.max(-1,Math.min(1,Math.cos(b)*Math.cos(g)));
     const tilt=Math.acos(cosTilt)*180/Math.PI;
     tiltReadout.textContent='tilt '+Math.round(tilt)+'°';
-    // Rolling buffer for elevation sighting: tilt is 0 flat (rear camera
-    // pointing straight down) and 90 upright (camera horizontal), so the
-    // camera's elevation above horizontal is tilt-90.
+    // Heading is a PLACEMENT HINT ONLY -- it parks a just-shot pin roughly the
+    // right way round to shorten the drag. It never enters the elevation maths,
+    // so iOS compass calibration cannot corrupt a measurement.
+    if(typeof evt.webkitCompassHeading==='number' && !isNaN(evt.webkitCompassHeading)) lastHeading=evt.webkitCompassHeading;
+    else if(typeof evt.alpha==='number' && evt.absolute) lastHeading=(360-evt.alpha)%360;
     tiltSamples.push({t:Date.now(), angle:tilt-90});
     if(tiltSamples.length>240) tiltSamples.splice(0, tiltSamples.length-240);
     if(sightOverlay.classList.contains('show')) sightRefresh();
+    // Grade mode pins the app to the camera view: shots are taken at whatever
+    // angle the target demands, including pointing at the ground, and flipping
+    // to the map mid-survey would be unusable.
+    if(gradeOn) return;
     const wantUpright = currentlyUpright ? tilt>UPRIGHT_OFF : tilt>UPRIGHT_ON;
     if(wantUpright!==candidateState){ candidateState=wantUpright; candidateSince=Date.now(); }
     if(candidateState!==currentlyUpright && Date.now()-candidateSince>HOLD_MS){
