@@ -354,6 +354,11 @@
   }
   .film-thumb.sel{border-color:var(--live); transform:scale(1.04);}
   .film-thumb.nogps{opacity:0.55;}
+  /* Grade shots sit in the same strip as photo pins but are a different kind
+     of picture: a survey reference, not a site photo. */
+  .film-thumb.elev{border-color:rgba(90,122,99,0.55);}
+  .film-thumb.elev.sel{border-color:var(--live);}
+  .film-thumb.elev .fnum{letter-spacing:0.04em;}
   .leaflet-marker-icon.pin-sel{
     filter:drop-shadow(0 0 0 #c4432b) drop-shadow(0 0 6px #c4432b) drop-shadow(0 0 10px #c4432b);
   }
@@ -1719,10 +1724,13 @@
       uuid:k.id, sessionId:s.id, colour:k.colour, lengthFt:k.length_ft,
       latlngs:k.latlngs||[], time:k.created_at, layer:null
     }));
+    const startedMs = s.started_at ? new Date(s.started_at).getTime() : null;
     elevPoints=(data.elevationPoints||[]).map(e=>({
       id:e.id, remoteId:e.id, kind:e.kind, label:e.label, lat:e.lat, lng:e.lng,
       gpsLat:e.gps_lat, gpsLng:e.gps_lng, placed:e.placed!==false,
-      photoUrl:e.photoUrl||null, marker:null
+      photoUrl:e.photoUrl||null, photoLocal:null, marker:null,
+      // Rebuild the timeline offset so grade shots interleave with the photos.
+      offset: (startedMs && e.created_at) ? (new Date(e.created_at).getTime()-startedMs) : null
     }));
     elevShots=(data.elevationShots||[]).map(sh=>({
       id:sh.id, remoteId:sh.id, observationId:sh.observation_id, pointId:sh.point_id,
@@ -2365,18 +2373,75 @@
 
 
   // ---------- photo filmstrip <-> pin selection ----------
+  // Photo pins and grade-shot reference frames are all pictures of the same
+  // site taken minutes apart, so they share one strip in capture order.
+  // Tapping either highlights whatever it belongs to -- a photo pin or an
+  // elevation marker.
+  function stripItems(){
+    const items=[];
+    pins.forEach(pin=>items.push({
+      kind:'pin', ref:pin, offset:pin.offset, photo:pin.photo,
+      badge:String(pin.id), dim:pin.lat===null, sel:pin.id===selectedPinId
+    }));
+    elevPoints.forEach(pt=>{
+      const src=pt.photoUrl||pt.photoLocal;
+      if(!src) return;
+      const badge = pt.kind==='anchor' ? 'A'
+                  : 'T'+(pt.label||'').replace(/[^0-9]/g,'');
+      items.push({
+        kind:'elev', ref:pt, offset:pt.offset, photo:src,
+        badge:badge, dim:!pt.placed, sel:pt.id===elevSelected,
+        colour: pt.kind==='anchor' ? '#5a7a63' : '#c4432b'
+      });
+    });
+    // Anything without an offset (older rows) sorts to the end rather than
+    // jumping to the front.
+    items.sort((a,b)=>(a.offset==null?Infinity:a.offset)-(b.offset==null?Infinity:b.offset));
+    return items;
+  }
+
   function renderStrip(){
-    if(!pins.length){ filmStrip.classList.remove('show'); filmStrip.innerHTML=''; return; }
+    const items=stripItems();
+    if(!items.length){ filmStrip.classList.remove('show'); filmStrip.innerHTML=''; return; }
     filmStrip.innerHTML='';
-    pins.forEach(pin=>{
+    items.forEach(it=>{
       const b=document.createElement('button');
-      b.className='film-thumb' + (pin.lat===null ? ' nogps' : '') + (pin.id===selectedPinId ? ' sel' : '');
-      b.dataset.pin=pin.id;
-      b.innerHTML='<img src="'+pin.photo+'" alt="Pin '+pin.id+'"><span class="fnum">'+pin.id+'</span>';
-      b.addEventListener('click', ()=> selectPin(pin, 'strip'));
+      b.className='film-thumb'+(it.dim?' nogps':'')+(it.sel?' sel':'')+(it.kind==='elev'?' elev':'');
+      b.dataset.kind=it.kind;
+      b.dataset.id=(it.kind==='pin') ? it.ref.id : it.ref.id;
+      const img=document.createElement('img');
+      img.alt=it.badge;
+      // A stored URL can fail in the field; the locally captured frame is the
+      // same picture, so fall back rather than showing an empty box.
+      if(it.kind==='elev' && it.ref.photoLocal){
+        img.onerror=()=>{ if(img.src!==it.ref.photoLocal) img.src=it.ref.photoLocal; };
+      }
+      img.src=it.photo;
+      b.appendChild(img);
+      const n=document.createElement('span');
+      n.className='fnum'; n.textContent=it.badge;
+      if(it.colour) n.style.background=it.colour;
+      b.appendChild(n);
+      b.addEventListener('click', ()=>{
+        if(it.kind==='pin') selectPin(it.ref, 'strip');
+        else elevSelectFromStrip(it.ref);
+      });
       filmStrip.appendChild(b);
     });
     filmStrip.classList.add('show');
+  }
+
+  // Tapping a grade photo highlights its elevation marker, the same way a
+  // photo thumbnail highlights its pin.
+  function elevSelectFromStrip(pt){
+    const already = (elevSelected===pt.id);
+    selectedPinId=null; markSelectedMarkers();
+    if(already){ elevSelected=null; elevRenderAll(); renderStrip(); return; }
+    if(map){
+      map.setView([pt.lat, pt.lng], Math.max(map.getZoom(), 20), {animate:true});
+    }
+    elevSelect(pt.id);
+    renderStrip();
   }
 
   function markSelectedMarkers(){
@@ -2387,14 +2452,14 @@
   }
 
   function scrollThumbIntoView(){
-    const el=filmStrip.querySelector('.film-thumb[data-pin="'+selectedPinId+'"]');
+    const el=filmStrip.querySelector('.film-thumb[data-kind="pin"][data-id="'+selectedPinId+'"]');
     if(el && el.scrollIntoView) el.scrollIntoView({behavior:'smooth', block:'nearest', inline:'center'});
   }
 
   function selectPin(pin, source){
     selectedPinId = (selectedPinId===pin.id && source==='strip') ? null : pin.id;
-    [...filmStrip.children].forEach(el=>
-      el.classList.toggle('sel', Number(el.dataset.pin)===selectedPinId));
+    if(selectedPinId!==null && elevSelected){ elevSelected=null; elevRenderAll(); }
+    renderStrip();
     markSelectedMarkers();
     if(selectedPinId===null) return;
     if(source==='strip'){
@@ -2789,7 +2854,7 @@
     elevSelected=id;
     const pt=elevPoint(id);
     if(pt && pt.kind==='observation') elevActiveObs=id;
-    elevRenderAll(); elevStatusUpdate();
+    elevRenderAll(); elevStatusUpdate(); renderStrip();
     // elevRenderAll() rebuilds every marker, so the popup Leaflet was about to
     // open on the click belongs to an element that no longer exists. Reopen it
     // on the new one.
@@ -2843,6 +2908,7 @@
         }
       }
       elevSetSurvey(true);
+      renderStrip();
     }
   }
 
@@ -2858,6 +2924,7 @@
   function elevAddPoint(kind, latlng, placed, gps){
     const pt={ id:'local-'+uuid(), remoteId:null, kind:kind, label:elevLabelFor(kind),
                lat:latlng.lat, lng:latlng.lng, placed:!!placed, photoUrl:null,
+               offset: sessionT0 ? (Date.now()-sessionT0) : null,
                gpsLat:gps?gps.lat:null, gpsLng:gps?gps.lng:null, marker:null };
     elevPoints.push(pt);
     if(sessionId){
@@ -2957,6 +3024,7 @@
     snapFlash.classList.remove('go'); void snapFlash.offsetWidth; snapFlash.classList.add('go');
     gradeArmed=false; dwellStart=0;
     sightDwell.style.width='0%';
+    renderStrip();          // the new frame joins the filmstrip straight away
     gradeStatus('<b>'+pt.label+'</b> captured at '+(angle>=0?'+':'')+angle.toFixed(1)+'\u00b0 — move to the next point');
   }
 

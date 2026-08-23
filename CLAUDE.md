@@ -321,9 +321,18 @@ calls `elevSelect()`, which calls `elevRenderAll()`, which destroys and
 rebuilds every marker *during the click* — so the popup Leaflet was opening
 belonged to an element that no longer existed, and the photo silently could
 never be seen. `elevSelect()` therefore reopens the popup on the freshly
-built marker. The photo lives on the pin and nowhere else — it was briefly
-mirrored into a panel in the survey bar, and a permanent photo-sized hole in
-the map was worse than the problem it solved.
+built marker.
+
+**Grade frames share the one filmstrip with the photo pins**, in capture
+order — they are pictures of the same site taken minutes apart, so a
+separate gallery would be an odd split. `stripItems()` merges both by
+`offset` (elevation points carry one from shoot time, rebuilt from
+`created_at` on archived sessions). Grade thumbs are badged `A`/`T1`/`T2`
+and tapping one highlights its **elevation marker**, exactly as tapping a
+photo highlights its pin; selecting either clears the other, so only one
+thing is ever lit. Don't reintroduce a second photo panel — one was tried in
+the survey bar and a permanent photo-sized hole in the map was worse than the
+problem it solved.
 
 The locally captured frame is kept in `photoLocal` even after upload, and the
 popup falls back to it if the Storage URL fails to load.
