@@ -48,6 +48,7 @@ Endpoints under `/functions/v1/upright-api`:
 `PATCH /sessions/:id` (assign property), `GET /properties` (address picker),
 `POST /sessions/:id/audio|clips|photos|sketches|measures|plan`,
 `POST /sessions/:id/elevation-points|elevation-shots`,
+`POST /sessions/:id/elevation-slopes`, `DELETE /elevation-slopes/:id`,
 `PATCH /elevation-points/:id`, `DELETE /elevation-points/:id`,
 `DELETE /elevation-points/:id/shots` (all, or `?observationId=` for one
 position's sightings), `POST /elevation-points/:id/photo`,
@@ -58,7 +59,7 @@ Requires secret `ASSEMBLYAI_API_KEY` (set in Supabase → Edge Functions →
 Secrets — NOT Vault, and NOT Vercel env vars; neither reaches the function).
 
 If editing the function, pull current source with `Supabase:get_edge_function`
-rather than reconstructing it. Currently **v15**.
+rather than reconstructing it. Currently **v16**.
 
 **Replacing an image writes a NEW storage path, never an upsert in place.**
 Storage public URLs are cached by the browser and by the CDN in front of the
@@ -398,6 +399,34 @@ Pressing the button again ends the mode, restores tilt-to-map, opens the
 survey bar and fits the map to the survey. There are no manual add-point buttons, because every point comes
 from a shot; a point with no shot has no elevation and is just clutter.
 
+### Slope runs
+
+**Slope** on the survey bar arms the next two pin taps; tapping two points
+draws a line between them labelled with the percent grade and the fall over the
+run. Tapping the line or its label removes it. It disarms after one run —
+leaving the mode open would make every later tap on a pin do something the user
+did not ask for.
+
+**A slope stores only which two points it joins** (`upright_elevation_slopes`,
+just `from_point_id` / `to_point_id`). Percent, fall and run are all worked out
+in `slopeOf()` at draw time from where the pins sit and what `elevationOf()`
+makes of each — so dragging either pin corrects the slope, which a stored
+number could not do. Same rule as elevations, for the same reason.
+
+**The arrow points downhill**, not from-first-tapped-to-second: it is drawn on
+a landscape site to show which way water runs, and the percent is reported as a
+magnitude because the arrow already carries the sign. A run whose ends are
+level within 0.05% gets a bar instead of an arrowhead. A run to a point with no
+elevation yet (unplaced or unshot) draws dashed and says *not measured* rather
+than inventing a number.
+
+The unique index is on the **unordered pair**, so the same two points are one
+run either way round; a duplicate POST returns the existing row rather than an
+error, since in the field that is the client re-sending, not a mistake.
+
+Deleting a point cascades its runs server-side; `slopesDropFor()` keeps the map
+and the in-memory list in step without waiting for the round trip.
+
 ### Sets
 
 A **set** is one observation position plus the targets shot from it. Targets
@@ -581,9 +610,8 @@ not just abandoned starts.
   will need fetch-and-zip when it is.
 - Absolute elevations. Everything is relative to the anchor; nothing ties a
   survey to a plan's spot elevations or a real benchmark.
-- Grade between two measured points (`Δelev / distance × 100`), and everything
-  downstream of it: contours, slope/drainage arrows, colour-coded zones,
-  cut/fill. All cheap now that elevations exist and are derived live.
+- Everything downstream of slope runs: contours, colour-coded drainage zones,
+  cut/fill. All cheap now that elevations and slopes are both derived live.
 - Renaming survey points. They auto-label (Observation A/B, Target 1/2) so
   nobody types in a yard; renaming at the desk is not built yet.
 - Aligning a plan to known GPS points rather than by eye. This is the piece

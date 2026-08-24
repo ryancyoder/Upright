@@ -13,6 +13,7 @@
     --flat:#5a7a63;
     --anchor-sight:#e8c33a;   /* the sight is YELLOW while the next shot is the anchor */
     --obs-sight:#4fd07a;      /* and GREEN while it is documenting where you stand */
+    --slope:#63b3e8;          /* slope runs -- a relationship, not a survey point */
   }
   *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
   html,body{height:100%;}
@@ -367,6 +368,26 @@
   .elev-pin.unplaced svg{opacity:0.75;}
   .elev-pin.unplaced span{color:#fff; opacity:0.9;}
   .elev-pin.sel svg{filter:drop-shadow(0 0 4px #fff) drop-shadow(0 1px 2px rgba(0,0,0,0.9));}
+
+  /* Slope run: a line between two survey points, labelled with the fall.
+     Same rule as the pins -- glyph and text, no box; drop-shadows carry it
+     over bright satellite. */
+  .slope-label{
+    transform:translate(-50%,-50%);
+    display:flex; flex-direction:column; align-items:center; gap:1px;
+    white-space:nowrap; line-height:1.1; text-align:center; pointer-events:auto;
+  }
+  .slope-label svg{display:block; filter:drop-shadow(0 1px 2px rgba(0,0,0,0.9));}
+  .slope-label b{
+    font-size:13px; font-weight:700; color:var(--slope);
+    text-shadow:0 1px 3px rgba(0,0,0,0.95), 0 0 2px rgba(0,0,0,0.95);
+  }
+  .slope-label span{
+    font-size:10px; font-weight:700; color:#fff; opacity:0.8;
+    text-shadow:0 1px 3px rgba(0,0,0,0.95), 0 0 2px rgba(0,0,0,0.95);
+  }
+  .slope-label.flat b{color:#fff; opacity:0.85;}
+  .mt-btn.arm{background:var(--slope); border-color:var(--slope); color:var(--bg);}
   .sight-steady{
     font-size:11px; font-weight:700; letter-spacing:0.1em; text-transform:uppercase;
     color:var(--dim);
@@ -741,6 +762,7 @@
       <div class="elev-bar" id="elevBar">
         <span class="elev-status" id="elevStatus"></span>
         <div class="elev-actions">
+          <button class="mt-btn" id="slopeBtn">Slope</button>
           <button class="mt-btn" id="elevExit">Done</button>
         </div>
       </div>
@@ -876,7 +898,7 @@
         sightSteady=$('sightSteady'), gradeBtn=$('gradeBtn'),
         sightDwell=$('sightDwellFill'), sightCross=$('sightCross'), sightCrossGlyph=$('sightCrossGlyph'),
         elevBar=$('elevBar'), elevStatus=$('elevStatus'),
-        elevExit=$('elevExit'),
+        elevExit=$('elevExit'), slopeBtn=$('slopeBtn'),
         annoDraw=$('annoDraw'), drawWrap=$('drawWrap'), drawCanvas=$('drawCanvas'),
         drawSwatches=$('drawSwatches'), drawUndo=$('drawUndo'), drawClear=$('drawClear'), drawDone=$('drawDone'),
         filmStrip=$('filmStrip'), sketchBtn=$('sketchBtn'), measureBtn=$('measureBtn'),
@@ -1993,6 +2015,9 @@
       id:sh.id, remoteId:sh.id, observationId:sh.observation_id, pointId:sh.point_id,
       angleDeg:sh.angle_deg, angleSpreadDeg:sh.angle_spread_deg, distanceM:sh.distance_m
     }));
+    elevSlopes=(data.elevationSlopes||[]).map(sl=>({
+      id:sl.id, remoteId:sl.id, fromId:sl.from_point_id, toId:sl.to_point_id, layers:null
+    }));
     elevActiveObs=(elevPoints.find(p=>p.kind==='observation')||{}).id || null;
     elevSelected=null;
     measures=(data.measures||[]).map(m=>({
@@ -2718,6 +2743,7 @@
               if(!confirm('Remove the anchor? Nothing is measured against it any more.')) return;
               if(anchor.remoteId) apiDelete('/elevation-points/'+anchor.remoteId);
               if(anchor.marker && map){ try{ map.removeLayer(anchor.marker); }catch(e){} }
+              slopesDropFor([anchor.id]);
               elevPoints=elevPoints.filter(x=>x.id!==anchor.id);
               if(elevSelected===anchor.id) elevSelected=null;
               elevRenderAll(); renderStrip(); elevStatusUpdate();
@@ -3064,6 +3090,7 @@
   let elevSurveyOn=false, elevActiveObs=null, elevSelected=null;
   let gradeOn=false, gradeObsId=null, gradeArmed=true, dwellStart=0, lastHeading=null;
   let gradeResuming=false, gradeReshootId=null, gradeAnchorBaseline=null, gradeNote='', lastShotAngle=null;
+  let elevSlopes=[], slopeArming=false, slopeFirstId=null;
   // How far a resumed set's fresh anchor shot may differ from the one already
   // on file before we call the stance into question. Every target in a set is
   // measured against that set's anchor angle, so a changed stance silently
@@ -3169,6 +3196,107 @@
       if(p.marker && map){ try{ map.removeLayer(p.marker); }catch(e){} }
       p.marker=null;
     });
+    elevSlopes.forEach(sl=>{
+      if(map) (sl.layers||[]).forEach(l=>{ try{ map.removeLayer(l); }catch(e){} });
+      sl.layers=null;
+    });
+  }
+
+  // ---------- slope runs ----------
+  // A slope is a RELATIONSHIP between two points, so nothing about it is
+  // stored but the pair. Fall, run and percent are all worked out from where
+  // the pins sit and what each one's elevation comes to -- drag either pin and
+  // the slope corrects itself, exactly as elevations do.
+  function slopeOf(sl){
+    const a=elevPoint(sl.fromId), b=elevPoint(sl.toId);
+    if(!a || !b) return null;
+    if(isHidden(a) || isHidden(b)) return {hidden:true};
+    const ea=elevationOf(a.id), eb=elevationOf(b.id);
+    const ftOf=e => (e && !e.needsPlacing && typeof e.ft==='number') ? e.ft : null;
+    const fa=ftOf(ea), fb=ftOf(eb);
+    const runFt=metresBetween(a,b)/M_PER_FT;
+    if(fa===null || fb===null) return {a:a, b:b, runFt:runFt, unknown:true};
+    // The arrow points DOWNHILL -- the way water runs, which is the whole
+    // reason to draw one on a landscape site. The percent is reported as a
+    // magnitude because the arrow already carries the sign.
+    const high = fa>=fb ? a : b, low = fa>=fb ? b : a;
+    const fallFt=Math.abs(fa-fb);
+    const pct = runFt>0.01 ? (fallFt/runFt)*100 : null;
+    return {a:a, b:b, high:high, low:low, fallFt:fallFt, runFt:runFt, pct:pct,
+            flat: pct!==null && pct<0.05};
+  }
+  function fmtSlope(r){
+    if(!r) return '';
+    if(r.unknown) return 'not measured';
+    if(r.pct===null) return 'pins too close';
+    return r.flat ? 'level' : r.pct.toFixed(1)+'%';
+  }
+  function slopeArrowSvg(bearingDeg, flat){
+    // Drawn pointing right, then rotated to the run's bearing. A level run has
+    // no downhill direction, so it gets a bar rather than an arrowhead.
+    const body = flat
+      ? '<path d="M6 12 L26 12" stroke="var(--slope)" stroke-width="3" stroke-linecap="round"/>'
+      : '<path d="M4 12 L24 12 M17 6 L24 12 L17 18" fill="none" stroke="var(--slope)" '
+        + 'stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>';
+    return '<svg viewBox="0 0 32 24" width="34" height="26" style="transform:rotate('
+         + bearingDeg.toFixed(1)+'deg)">'+body+'</svg>';
+  }
+  function bearingDeg(from, to){
+    // Screen bearing, not compass: the label sits on the map, so it should
+    // follow what is drawn rather than true north.
+    if(!map) return 0;
+    const p1=map.latLngToLayerPoint([from.lat,from.lng]), p2=map.latLngToLayerPoint([to.lat,to.lng]);
+    return Math.atan2(p2.y-p1.y, p2.x-p1.x)*180/Math.PI;
+  }
+  function drawSlopes(){
+    if(!map) return;
+    elevSlopes.forEach(sl=>{
+      const r=slopeOf(sl);
+      if(!r || r.hidden) return;
+      const from = r.unknown ? r.a : r.high, to = r.unknown ? r.b : r.low;
+      const line=L.polyline([[from.lat,from.lng],[to.lat,to.lng]], {
+        color:'#63b3e8', weight:3, opacity:0.9,
+        dashArray: r.unknown ? '6 6' : null
+      }).addTo(map);
+      const mid=[(from.lat+to.lat)/2, (from.lng+to.lng)/2];
+      const cls='slope-label'+(r.flat?' flat':'');
+      const html='<div class="'+cls+'">'
+               + slopeArrowSvg(bearingDeg(from,to), !!r.flat)
+               + '<b>'+fmtSlope(r)+'</b>'
+               + (r.unknown?'':'<span>'+r.fallFt.toFixed(2)+"' over "+r.runFt.toFixed(1)+"'</span>")
+               + '</div>';
+      const lbl=L.marker(mid,{icon:L.divIcon({className:'',html:html,iconSize:[0,0],iconAnchor:[0,0]})}).addTo(map);
+      const remove=()=>{
+        if(!confirm('Remove this slope run?\n\nThe two survey points stay.')) return;
+        slopeDelete(sl);
+      };
+      line.on('click', remove); lbl.on('click', remove);
+      sl.layers=[line,lbl];
+    });
+  }
+  // The server cascades these when the point row goes; this keeps the map and
+  // the in-memory list in step without waiting for a round trip.
+  function slopesDropFor(pointIds){
+    const gone=new Set(pointIds);
+    elevSlopes.filter(sl=>gone.has(sl.fromId)||gone.has(sl.toId)).forEach(sl=>{
+      if(map) (sl.layers||[]).forEach(l=>{ try{ map.removeLayer(l); }catch(e){} });
+    });
+    elevSlopes=elevSlopes.filter(sl=>!gone.has(sl.fromId) && !gone.has(sl.toId));
+  }
+  function slopeDelete(sl){
+    if(sl.remoteId) apiDelete('/elevation-slopes/'+sl.remoteId);
+    if(map) (sl.layers||[]).forEach(l=>{ try{ map.removeLayer(l); }catch(e){} });
+    elevSlopes=elevSlopes.filter(x=>x.id!==sl.id);
+    elevRenderAll(); elevStatusUpdate();
+  }
+  function slopeAdd(fromId, toId){
+    if(fromId===toId) return null;
+    const dup=elevSlopes.find(s=>(s.fromId===fromId&&s.toId===toId)||(s.fromId===toId&&s.toId===fromId));
+    if(dup) return dup;
+    const sl={id:'local-'+uuid(), remoteId:null, sending:false, fromId:fromId, toId:toId, layers:null};
+    elevSlopes.push(sl);
+    elevFlushPending();
+    return sl;
   }
   function elevRenderAll(){
     if(!map) return;
@@ -3224,9 +3352,31 @@
       });
       pt.marker=m;
     });
+    drawSlopes();
+  }
+
+  // Arming turns the next two pin taps into a slope run instead of an
+  // inspection. Two taps, then it disarms -- holding the mode open would make
+  // every later tap on a pin do something the user did not ask for.
+  function slopeArm(on){
+    slopeArming=!!on; slopeFirstId=null;
+    slopeBtn.classList.toggle('arm', slopeArming);
+    slopeBtn.textContent = slopeArming ? 'Cancel' : 'Slope';
+    elevStatusUpdate();
+  }
+  function slopePick(id){
+    const pt=elevPoint(id);
+    if(!pt) return;
+    if(!slopeFirstId){ slopeFirstId=id; elevSelected=id; elevRenderAll(); elevStatusUpdate(); return; }
+    if(slopeFirstId===id){ slopeFirstId=null; elevStatusUpdate(); return; }
+    slopeAdd(slopeFirstId, id);
+    slopeArm(false);
+    elevSelected=null;
+    elevRenderAll(); elevStatusUpdate();
   }
 
   function elevSelect(id){
+    if(slopeArming){ slopePick(id); return; }
     elevSelected=id;
     const pt=elevPoint(id);
     if(pt && pt.kind==='observation') elevActiveObs=id;
@@ -3242,6 +3392,13 @@
 
   function elevStatusUpdate(){
     if(!elevSurveyOn) return;
+    if(slopeArming){
+      const first=elevPoint(slopeFirstId);
+      elevStatus.innerHTML = first
+        ? '<b>Slope from '+first.label+'</b> \u2014 now tap the point at the other end'
+        : '<b>Tap the two points</b> to connect as a slope';
+      return;
+    }
     const unplaced=elevPoints.filter(p=>!p.placed).length;
     const sel=elevPoint(elevSelected);
     let msg;
@@ -3448,6 +3605,17 @@
   function elevFlushPending(){
     elevPoints.forEach(pt=>{ if(pt.remoteId && pt.pendingPhoto) elevUploadPhoto(pt); });
     if(!sessionId) return;
+    // A slope can be drawn the moment two pins are placed, which may be before
+    // either point's row id has come back. Send it once both exist.
+    elevSlopes.forEach(sl=>{
+      if(sl.remoteId || sl.sending) return;
+      const a=elevPoint(sl.fromId), b=elevPoint(sl.toId);
+      if(!a || !b || !a.remoteId || !b.remoteId) return;
+      sl.sending=true;
+      apiPost('/sessions/'+sessionId+'/elevation-slopes', {fromPointId:a.remoteId, toPointId:b.remoteId})
+        .then(row=>{ sl.sending=false; if(row && row.id) sl.remoteId=row.id; })
+        .catch(()=>{ sl.sending=false; });
+    });
     // A target is created in the same breath as its observation, so its set id
     // could not be sent at insert time. Send it as soon as both ids exist.
     elevPoints.forEach(pt=>{
@@ -3578,6 +3746,15 @@
     if(held>=DWELL_MS) gradeFire();
   }
 
+  slopeBtn.addEventListener('click', ()=>{
+    if(slopeArming){ slopeArm(false); elevRenderAll(); return; }
+    if(elevPoints.filter(p=>p.placed).length<2){
+      elevStatus.innerHTML='<b>Two placed points are needed</b> for a slope \u2014 drag the pins where they belong first';
+      return;
+    }
+    slopeArm(true);
+  });
+
   gradeBtn.addEventListener('click', ()=> gradeSetMode(!gradeOn));
 
   // ---------- sets: one observation and the targets shot from it ----------
@@ -3626,6 +3803,7 @@
     });
     elevPoints=elevPoints.filter(p=>!doomed.has(p.id));
     elevShots=elevShots.filter(sh=>!doomed.has(sh.pointId) && sh.observationId!==obs.id);
+    slopesDropFor([...doomed]);
     if(elevActiveObs===obs.id) elevActiveObs=null;
     if(doomed.has(elevSelected)) elevSelected=null;
     elevRenderAll(); renderStrip(); elevStatusUpdate();
@@ -3636,6 +3814,7 @@
     if(pt.marker && map){ try{ map.removeLayer(pt.marker); }catch(e){} }
     elevPoints=elevPoints.filter(p=>p.id!==pt.id);
     elevShots=elevShots.filter(sh=>sh.pointId!==pt.id);
+    slopesDropFor([pt.id]);
     if(elevSelected===pt.id) elevSelected=null;
     elevRenderAll(); renderStrip(); elevStatusUpdate();
   }
@@ -3660,8 +3839,10 @@
   // ---------- review / adjust on the map ----------
   function elevReset(){
     elevClearLayers();
-    elevPoints=[]; elevShots=[];
+    elevPoints=[]; elevShots=[]; elevSlopes=[];
     elevActiveObs=null; elevSelected=null;
+    slopeArming=false; slopeFirstId=null;
+    if(slopeBtn){ slopeBtn.classList.remove('arm'); slopeBtn.textContent='Slope'; }
     gradeOn=false; gradeObsId=null; dwellStart=0;
     gradeBtn.classList.remove('on'); gradeBtn.innerHTML='SHOOT<br>GRADE';
     gradeResuming=false; gradeReshootId=null; gradeAnchorBaseline=null; gradeNote=''; lastShotAngle=null;
@@ -3669,6 +3850,7 @@
   }
   function elevSetSurvey(on){
     elevSurveyOn=on;
+    if(!on && slopeArming) slopeArm(false);   // don't leave the next tap armed
     elevBar.classList.toggle('show', on);
     elevBtn.classList.toggle('active', on);
     elevRenderAll();
