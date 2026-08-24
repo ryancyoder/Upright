@@ -875,6 +875,8 @@
         <button class="ev-tab" data-side="east">East</button>
         <button class="ev-tab" data-side="west">West</button>
         <div class="ev-sep"></div>
+        <button class="mt-btn" id="evLockBtn">Scale locked</button>
+        <button class="mt-btn" id="evFitBtn">Fit</button>
         <span class="mt-label">V.E.</span>
         <button class="mt-btn" id="evExag">1&times;</button>
         <button class="mt-btn" id="evPlanBtn">Elevation plan</button>
@@ -1006,6 +1008,7 @@
         elevPanel=$('elevPanel'), evStage=$('evStage'), evSvg=$('evSvg'), viewSwitch=$('viewSwitch'),
         evPlanImg=$('evPlanImg'), evPhotoImg=$('evPhotoImg'), evNote=$('evNote'), evEmpty=$('evEmpty'),
         evTabTop=$('evTabTop'), evExag=$('evExag'), evPlanBtn=$('evPlanBtn'), evPhotoBtn=$('evPhotoBtn'),
+        evLockBtn=$('evLockBtn'), evFitBtn=$('evFitBtn'),
         evSkewBtn=$('evSkewBtn'), evPlaceBtn=$('evPlaceBtn'), evClearImg=$('evClearImg'),
         evFile=$('evFile'), evXray=$('evXray'),
         sightOverlay=$('sightOverlay'), sightMsg=$('sightMsg'), sightAngle=$('sightAngle'),
@@ -4038,7 +4041,12 @@
   let cutOffsets={north:0, south:0, east:0, west:0};      // metres along each normal
   let evViews={};                                          // side -> {vertExag, plan*, photo*}
   let cutLayers=[], cutObjs=null, evActive=null, evSkew=false, evSlot='plan';
-  let evPan=0, evScale=null, evDragging=null, evSaveTimer=null;
+  let evScale=null, evDragging=null, evSaveTimer=null;
+  // The VIEW transform, separate from where any image sits. Locked by default
+  // so a stray drag cannot move the datum; unlock and the stage pinches to
+  // zoom and drags to pan, which is the only way to get far enough out to see
+  // the edges of an imported photo.
+  let evViewLocked=true;
   // What a view is allowed to show:
   //   cut   -- strictly what lies beyond this view's own cut plane
   //   sight -- everything except what the HOUSE hides: a point is blocked only
@@ -4052,8 +4060,11 @@
 
   function evView(side){
     if(!evViews[side]) evViews[side]={vertExag:null, planUrl:null, planCorners:null, planOpacity:0.6,
-                                      photoUrl:null, photoCorners:null, photoOpacity:0.85};
-    return evViews[side];
+                                      photoUrl:null, photoCorners:null, photoOpacity:0.85,
+                                      zoom:1, panX:0, panY:0};
+    const v=evViews[side];
+    if(v.zoom==null){ v.zoom=1; v.panX=0; v.panY=0; }   // hydrated rows carry no framing
+    return v;
   }
   function nHat(){ return {e:Math.sin(rad(cutRot)), n:Math.cos(rad(cutRot))}; }
   function eHat(){ return {e:Math.cos(rad(cutRot)), n:-Math.sin(rad(cutRot))}; }
@@ -4311,12 +4322,12 @@
     });
     return out.sort((a,b)=>a.x-b.x);
   }
-  const EXAG_STEPS=[1,2,3,5,10,20,50];
-  function evAutoExag(pts, H){
+  const EXAG_STEPS=[0.5,1,2,3,5,10,20,50];
+  function evAutoExag(pts, H, sx){
     const up=Math.max(0.01, ...pts.map(p=>Math.max(0,p.ft)));
     const dn=Math.max(0.01, ...pts.map(p=>Math.max(0,-p.ft)));
     const datumY=H*2/3;
-    const sx=evScale||2;
+    sx = sx || evScale || 2;
     const fitUp=(datumY-24)*0.75/(up*sx), fitDn=(H-datumY-24)*0.75/(dn*sx);
     const want=Math.min(fitUp, fitDn);
     let best=1;
@@ -4327,21 +4338,27 @@
     const v=evView(side), all=evProject(side);
     const pts = evMode==='xray' ? all : all.filter(p=>p.shown);
     const W=Math.max(1, evStage.clientWidth), H=Math.max(1, evStage.clientHeight);
-    const datumY=H*2/3;                       // the anchor sits 1/3 up from the bottom
+    // The fit is taken from ALL points, not the visible subset, so switching
+    // visibility mode does not jump the framing under you.
     let x0=-30, x1=30;
-    if(pts.length){
-      x0=Math.min.apply(null, pts.map(p=>p.x));
-      x1=Math.max.apply(null, pts.map(p=>p.x));
+    if(all.length){
+      x0=Math.min.apply(null, all.map(p=>p.x));
+      x1=Math.max.apply(null, all.map(p=>p.x));
       if(x1-x0 < 10){ const c=(x0+x1)/2; x0=c-15; x1=c+15; }
       const pad=(x1-x0)*0.12; x0-=pad; x1+=pad;
     }
-    evScale = W/(x1-x0);
-    const exag = v.vertExag || evAutoExag(pts, H);
-    return {pts:pts, all:all, W:W, H:H, datumY:datumY, x0:x0, x1:x1, sx:evScale, exag:exag,
-            toX: x => (x-x0)*evScale + evPan,
-            toY: ft => datumY - ft*evScale*exag,
-            fromX: px => (px-evPan)/evScale + x0,
-            fromY: py => (datumY-py)/(evScale*exag)};
+    const fit = W/(x1-x0);
+    const sx = fit*(v.zoom||1);
+    evScale = sx;
+    const datumY = H*2/3 + (v.panY||0);       // the anchor sits 1/3 up, then pans
+    const px = (v.panX||0);
+    const exag = v.vertExag || evAutoExag(pts, H, sx);
+    return {pts:pts, all:all, W:W, H:H, datumY:datumY, x0:x0, x1:x1, fit:fit, sx:sx, exag:exag,
+            zoom:(v.zoom||1),
+            toX: x => (x-x0)*sx + px,
+            toY: ft => datumY - ft*sx*exag,
+            fromX: q => (q-px)/sx + x0,
+            fromY: q => (datumY-q)/(sx*exag)};
   }
 
   // ---------- 4-corner homography, for a photo taken at an angle ----------
@@ -4476,9 +4493,11 @@
       + ({north:'south',south:'north',east:'west',west:'east'}[side])
       + ' · ' + visible + ' of ' + total + ' point'+(total===1?'':'s')
       + (evMode!=='cut' ? ' <span class="ev-warn">('+EV_MODE_LABEL[evMode].toLowerCase()+')</span>' : '')
-      + ' · ' + (G.x1-G.x0).toFixed(0) + "' wide"
-      + (G.exag!==1 ? ' · <span class="ev-warn">vertical ×'+G.exag+'</span>' : ' · true proportion');
-    evExag.innerHTML = G.exag+'&times;';
+      + ' · ' + ((G.W/G.sx)).toFixed(0) + "' across"
+      + (Math.abs(G.zoom-1)>0.01 ? ' · zoom '+(G.zoom<1?G.zoom.toFixed(2):G.zoom.toFixed(1))+'×' : '')
+      + (G.exag!==1 ? ' · <span class="ev-warn">vertical ×'+(G.exag<1?G.exag.toFixed(1):G.exag)+'</span>'
+                    : ' · true proportion');
+    evExag.innerHTML = (G.exag<1 ? G.exag.toFixed(1) : G.exag)+'&times;';
     evExag.classList.toggle('active', G.exag!==1);
   }
 
@@ -4511,33 +4530,52 @@
     return {n:2, cx:(t[0].x+t[1].x)/2, cy:(t[0].y+t[1].y)/2,
             dist:Math.hypot(dx,dy)||1, ang:Math.atan2(dy,dx)*180/Math.PI};
   }
+  function evGestArmed(){ return !!evActive && (evPlace || !evViewLocked); }
   function evGestStart(info){
-    if(!evPlace || !evActive) return;
-    const arr=evCornersOf(evActive, evSlot);
-    if(!arr) return;
-    evGest={start:info, snap:arr.map(c=>({x:c.x, y:c.y}))};
+    if(!evGestArmed()) return;
+    if(evPlace){
+      const arr=evCornersOf(evActive, evSlot);
+      if(!arr) return;
+      evGest={kind:'img', start:info, snap:arr.map(c=>({x:c.x, y:c.y}))};
+    } else {
+      const v=evView(evActive), H=Math.max(1, evStage.clientHeight);
+      evGest={kind:'view', start:info,
+              snap:{zoom:v.zoom||1, panX:v.panX||0, datumY:H*2/3+(v.panY||0), H:H}};
+    }
   }
   function evGestMove(info){
     if(!evGest || !evActive) return;
-    const G=evGeom(evActive), s=evGest.start;
+    const s=evGest.start;
     const two = (s.n===2 && info.n===2);
-    const o={ cx:s.cx, cy:s.cy,
-              scale: two ? info.dist/s.dist : 1,
-              rotDeg: two ? (info.ang - s.ang) : 0,
-              dx: info.cx - s.cx, dy: info.cy - s.cy };
-    const out=evXformCorners(evGest.snap, G, o);
-    const arr=evCornersOf(evActive, evSlot);
-    for(let i=0;i<4;i++) arr[i]=out[i];
+    const k = two ? info.dist/s.dist : 1;
+    const tx = info.cx - s.cx, ty = info.cy - s.cy;
+    if(evGest.kind==='img'){
+      const G=evGeom(evActive);
+      const out=evXformCorners(evGest.snap, G,
+        {cx:s.cx, cy:s.cy, scale:k, rotDeg: two ? (info.ang - s.ang) : 0, dx:tx, dy:ty});
+      const arr=evCornersOf(evActive, evSlot);
+      for(let i=0;i<4;i++) arr[i]=out[i];
+    } else {
+      // Zoom about the point under the fingers, so what you are looking at
+      // stays put; a one-finger drag is pure pan, and its vertical component
+      // is what moves the anchor line up and down.
+      const v=evView(evActive), q=evGest.snap;
+      v.zoom = Math.max(0.05, Math.min(60, q.zoom*k));
+      const actual = v.zoom/q.zoom;
+      v.panX = s.cx + (q.panX - s.cx)*actual + tx;
+      v.panY = (s.cy + (q.datumY - s.cy)*actual + ty) - q.H*2/3;
+    }
     evRender();
   }
   function evGestEnd(){
     if(!evGest) return;
-    evGest=null;
+    const kind=evGest.kind; evGest=null;
+    if(kind!=='img') return;                 // framing is a view preference, not data
     const arr=evCornersOf(evActive, evSlot);
     evSaveSide(evActive, evSlot==='plan' ? {planCorners:arr} : {photoCorners:arr});
   }
   evStage.addEventListener('touchstart', e=>{
-    if(!evPlace || !evActive) return;
+    if(!evGestArmed()) return;
     e.preventDefault();
     evGestStart(evTouchInfo(e));
   }, {passive:false});
@@ -4553,7 +4591,7 @@
   // Mouse: drag to pan, wheel to scale about the pointer. The iPad never sees
   // this, but it keeps the tool usable at a desk.
   evStage.addEventListener('pointerdown', e=>{
-    if(!evPlace || !evActive || e.pointerType==='touch') return;
+    if(!evGestArmed() || e.pointerType==='touch') return;
     e.preventDefault(); evStage.setPointerCapture(e.pointerId);
     const r=evStage.getBoundingClientRect();
     evGestStart({n:1, cx:e.clientX-r.left, cy:e.clientY-r.top, dist:1, ang:0});
@@ -4568,16 +4606,25 @@
     evGestEnd();
   }));
   evStage.addEventListener('wheel', e=>{
-    if(!evPlace || !evActive) return;
+    if(!evGestArmed()) return;
     e.preventDefault();
-    const arr=evCornersOf(evActive, evSlot); if(!arr) return;
-    const r=evStage.getBoundingClientRect(), G=evGeom(evActive);
-    const out=evXformCorners(arr.map(c=>({x:c.x,y:c.y})), G,
-      {cx:e.clientX-r.left, cy:e.clientY-r.top, scale: e.deltaY<0 ? 1.08 : 1/1.08});
-    for(let i=0;i<4;i++) arr[i]=out[i];
-    evRender();
-    clearTimeout(evGest && evGest.t);
-    evSaveSide(evActive, evSlot==='plan' ? {planCorners:arr} : {photoCorners:arr});
+    const r=evStage.getBoundingClientRect();
+    const cx=e.clientX-r.left, cy=e.clientY-r.top, k = e.deltaY<0 ? 1.08 : 1/1.08;
+    if(evPlace){
+      const arr=evCornersOf(evActive, evSlot); if(!arr) return;
+      const out=evXformCorners(arr.map(c=>({x:c.x,y:c.y})), evGeom(evActive), {cx:cx, cy:cy, scale:k});
+      for(let i=0;i<4;i++) arr[i]=out[i];
+      evRender();
+      evSaveSide(evActive, evSlot==='plan' ? {planCorners:arr} : {photoCorners:arr});
+    } else {
+      const v=evView(evActive), H=Math.max(1, evStage.clientHeight);
+      const z0=v.zoom||1, d0=H*2/3+(v.panY||0);
+      v.zoom=Math.max(0.05, Math.min(60, z0*k));
+      const a=v.zoom/z0;
+      v.panX = cx + ((v.panX||0) - cx)*a;
+      v.panY = (cy + (d0 - cy)*a) - H*2/3;
+      evRender();
+    }
   }, {passive:false});
 
   // ---------- dragging the image corners ----------
@@ -4634,7 +4681,7 @@
   function evOpen(side){
     if(!EV_SIDES.includes(side)) return;
     evEnsurePivot();
-    evActive=side; evPan=0; evSkew=false; evPlace=false; evGest=null;
+    evActive=side; evSkew=false; evPlace=false; evGest=null; evViewLocked=true;
     const v=evView(side);
     evPlanImg.src = v.planUrl || '';
     evPhotoImg.src = v.photoUrl || '';
@@ -4670,6 +4717,11 @@
       b.classList.toggle('on', b.dataset.side===evActive));
     evSkewBtn.classList.toggle('active', evSkew);
     evPlaceBtn.classList.toggle('active', evPlace);
+    evLockBtn.textContent = evViewLocked ? 'Scale locked' : 'Scale unlocked';
+    evLockBtn.classList.toggle('active', !evViewLocked);
+    evLockBtn.title = evViewLocked
+      ? 'Unlock to pinch the scale and drag the anchor line'
+      : 'Pinch to zoom, drag to pan — the vertical drag moves the anchor line';
     evXray.textContent = EV_MODE_LABEL[evMode];
     evXray.classList.toggle('active', evMode!=='cut');
     const v=evActive?evView(evActive):null;
@@ -4699,11 +4751,24 @@
     evSyncTabs(); evRender();
   });
   evPlaceBtn.addEventListener('click', ()=>{
-    evPlace=!evPlace; if(evPlace) evSkew=false;
+    evPlace=!evPlace;
+    // Only one thing owns the stage at a time: move the image, or frame the view.
+    if(evPlace){ evSkew=false; evViewLocked=true; }
+    evSyncTabs(); evRender();
+  });
+  evLockBtn.addEventListener('click', ()=>{
+    evViewLocked=!evViewLocked;
+    if(!evViewLocked){ evPlace=false; evSkew=false; }
+    evSyncTabs(); evRender();
+  });
+  evFitBtn.addEventListener('click', ()=>{
+    if(!evActive) return;
+    const v=evView(evActive);
+    v.zoom=1; v.panX=0; v.panY=0; v.vertExag=null;   // back to the auto framing
     evSyncTabs(); evRender();
   });
   evSkewBtn.addEventListener('click', ()=>{
-    evSkew=!evSkew; if(evSkew) evPlace=false;
+    evSkew=!evSkew; if(evSkew){ evPlace=false; evViewLocked=true; }
     evSyncTabs(); evRender();
   });
   evClearImg.addEventListener('click', ()=>{
@@ -4726,7 +4791,7 @@
       const corners=evDefaultCorners(G, el);
       if(slot==='plan'){ v.planUrl=url; v.planCorners=corners; }
       else { v.photoUrl=url; v.photoCorners=corners; }
-      evPlace=true; evSkew=false; evSyncTabs(); evRender();
+      evPlace=true; evSkew=false; evViewLocked=true; evSyncTabs(); evRender();
       if(sessionId) apiUpload('/sessions/'+sessionId+'/elevation-views/'+side+'/'+slot, f,
         {corners:corners, opacity: slot==='plan'? v.planOpacity : v.photoOpacity})
         .then(row=>{ if(row && row.url){ if(slot==='plan') v.planUrl=row.url; else v.photoUrl=row.url; } });

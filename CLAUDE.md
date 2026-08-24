@@ -665,9 +665,20 @@ slopes here.
 
 - **The anchor datum sits one third up from the bottom** — two thirds above for
   positive elevations, one third below for negative, as specified.
+- **The scale locks and unlocks.** Locked by default, so a stray drag cannot
+  move the datum. Unlocked, the stage pinches to zoom and drags to pan — the
+  vertical component of a pan is what moves the anchor line up and down. **Fit**
+  returns to the automatic framing. Zoom runs 0.05×–60×, which is what makes it
+  possible to get far enough out to see the edges of an imported photo.
+- **One thing owns the stage at a time.** Move / scale (the image), Skew
+  corners, and an unlocked scale (the view) are mutually exclusive — including
+  on import, which hands the stage to the image and re-locks the view. Two
+  claimants would leave a lock button reading a lie.
+- The horizontal fit is taken from **all** points, not the visible subset, so
+  changing visibility mode does not jump the framing under you.
 - **Vertical exaggeration is unavoidable and is always announced.** A yard with
   a 6 ft fall over 200 ft is a flat line at true proportion, so the view
-  auto-picks an exaggeration from 1/2/3/5/10/20/50 and says which
+  auto-picks an exaggeration from 0.5/1/2/3/5/10/20/50 and says which
   (`vertical ×3`) or says `true proportion`. **An overlaid photo only aligns at
   ×1** — the tab shows the factor at all times so an exaggerated profile can
   never be mistaken for a measured one.
