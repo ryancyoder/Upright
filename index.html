@@ -405,12 +405,12 @@
     pointer-events:auto;
   }
   .cut-handle{
-    transform:translate(-50%,-50%);
-    width:22px; height:22px; border-radius:50%;
+    width:26px; height:26px; border-radius:50%; box-sizing:border-box;
     border:2px solid #fff; background:var(--cut);
     box-shadow:0 1px 6px rgba(0,0,0,0.6);
   }
-  .cut-handle.rot{background:var(--anchor-sight); border-radius:4px;}
+  .cut-handle.rot{background:var(--anchor-sight); border-radius:6px;}
+  .cut-handle.pivot{background:#fff;}
   .cut-handle.locked{opacity:0.45;}
 
   /* The same five-way switch, on the map. Without it the only way back into a
@@ -1116,7 +1116,7 @@
   let recordedMs=0, segStart=0, clockTimer=null;
   let finalAudioBlob=null, wakeLock=null;
   let sessionT0=null;
-  let lastFix=null, geoWatchId=null;
+  let lastFix=null, geoWatchId=null, geoOn=true;
   let pins=[], pinSeq=0;
   let map=null, myMarker=null, accCircle=null, mapInited=false;
   let sessionId=null, sessionStartedAt=null;
@@ -1415,8 +1415,18 @@
   });
 
   // ---------- GPS ----------
+  // Used when the continuous watch is off but something genuinely needs a
+  // position -- entering grade mode. One fix, then the radio goes quiet again.
+  function geoOneShot(){
+    if(geoOn || !('geolocation' in navigator)) return;
+    try{
+      navigator.geolocation.getCurrentPosition(pos=>{ lastFix=pos; },
+        ()=>{}, {enableHighAccuracy:true, maximumAge:10000, timeout:8000});
+    }catch(e){}
+  }
   function startGeo(){
     if(!('geolocation' in navigator)) { gpsReadout.textContent='no GPS available'; return; }
+    if(geoWatchId!==null) return;
     geoWatchId = navigator.geolocation.watchPosition(pos=>{
       const first = !lastFix;
       lastFix = pos;
@@ -1428,7 +1438,7 @@
       }
       const acc = Math.round(pos.coords.accuracy*3.281); // feet
       gpsReadout.textContent = `GPS ±${acc} ft`;
-      updateMyMarker();
+      if(geoOn) updateMyMarker();
     }, err=>{
       gpsReadout.textContent = 'GPS: ' + (err.code===1 ? 'denied' : 'no fix');
     }, {enableHighAccuracy:true, maximumAge:2000, timeout:15000});
@@ -3207,7 +3217,7 @@
     const c=map.getContainer();
     // The cuts are drawn as segments long enough to cross the viewport, so they
     // have to be re-cut whenever the viewport changes.
-    map.on('moveend zoomend', ()=>{ if(cutsOn) cutsRender(); });
+    map.on('moveend zoomend', ()=>{ if(cutsOn) cutsRefresh(); });
     c.addEventListener('pointerdown', e=>{
       if(mapMode!=='sketch') return;
       sketching=true; sketchPts=[];
@@ -3589,6 +3599,7 @@
     gradeBtn.innerHTML = on ? 'END<br>GRADE' : 'SHOOT<br>GRADE';
     sightOverlay.classList.toggle('show', on);
     if(on){
+      geoOneShot();          // seed an observation even with the locator off
       if(resumeObsId && elevPoint(resumeObsId)){
         gradeObsId=resumeObsId;
       } else {
@@ -4023,7 +4034,7 @@
   let cutPivot=null, cutRot=0, cutLocked=false;
   let cutOffsets={north:0, south:0, east:0, west:0};      // metres along each normal
   let evViews={};                                          // side -> {vertExag, plan*, photo*}
-  let cutLayers=[], evActive=null, evSkew=false, evSlot='plan';
+  let cutLayers=[], cutObjs=null, evActive=null, evSkew=false, evSlot='plan';
   let evPan=0, evScale=null, evDragging=null, evSaveTimer=null;
 
   function evView(side){
@@ -4069,8 +4080,21 @@
                     src.reduce((a,p)=>a+p.lng,0)/src.length);
   }
   function evEnsurePivot(){
-    if(!cutPivot) cutPivot=evDefaultPivot();
+    if(!cutPivot){ cutPivot=evDefaultPivot(); cutDefaultOffsets(); }
     return !!cutPivot;
+  }
+  // Four cuts through one point is not a useful starting position -- and every
+  // handle lands on top of the pivot. Open them out to a box that brackets the
+  // survey instead.
+  function cutDefaultOffsets(){
+    if(!cutPivot) return;
+    const pts=elevPoints.filter(p=>p.placed).map(p=>localEN(L.latLng(p.lat,p.lng)));
+    const reach=(v)=>{
+      if(!pts.length) return 15;
+      const d=pts.map(p=>dot(p,v));
+      return Math.max(10, Math.max.apply(null,d.concat([0]))*1.15 + 6);
+    };
+    EV_SIDES.forEach(side=>{ cutOffsets[side]=reach(sideAxes(side).normal); });
   }
 
   function evSaveCross(){
@@ -4092,7 +4116,7 @@
   // ---------- the cuts, drawn on the map ----------
   function cutsClear(){
     cutLayers.forEach(l=>{ if(map){ try{ map.removeLayer(l); }catch(e){} } });
-    cutLayers=[];
+    cutLayers=[]; cutObjs=null;
   }
   function cutSpanM(){
     if(!map) return 200;
@@ -4108,58 +4132,98 @@
     const b={e:c.e + ax.along.e*half, n:c.n + ax.along.n*half};
     return {a:fromEN(a.e,a.n), b:fromEN(b.e,b.n), mid:fromEN(c.e,c.n), ax:ax, off:off};
   }
-  function cutsRender(){
+  // Held at a fixed SCREEN distance from the pivot, not a fraction of the
+  // viewport in metres -- that put it off the edge of the map at most zooms,
+  // where it cannot be grabbed at all.
+  function cutRotHandleLL(){
+    if(!map || !cutPivot) return cutPivot;
+    const c=map.latLngToContainerPoint(cutPivot), th=rad(cutRot), d=110;
+    return map.containerPointToLatLng([c.x + d*Math.sin(th), c.y - d*Math.cos(th)]);
+  }
+  // Each side's handle rides a fixed distance ALONG its own line, so the four
+  // never pile up on the pivot -- which is exactly what they did while every
+  // offset was still zero.
+  function cutHandleLL(side){
+    const g=cutEndpoints(side);
+    if(!map) return g.mid;
+    const c=map.latLngToContainerPoint(g.mid);
+    const a=map.latLngToContainerPoint(g.b), v={x:a.x-c.x, y:a.y-c.y};
+    const len=Math.hypot(v.x,v.y)||1, d=95;
+    return map.containerPointToLatLng([c.x + v.x/len*d, c.y + v.y/len*d]);
+  }
+  function cutHandleIcon(extra){
+    // A REAL 26px icon box. With iconSize [0,0] the grab target is a zero-size
+    // element and only the overflowing circle is visible -- fine to look at,
+    // hopeless to catch with a thumb.
+    return L.divIcon({className:'', iconSize:[26,26], iconAnchor:[13,13],
+      html:'<div class="cut-handle'+(extra||'')+(cutLocked?' locked':'')+'"></div>'});
+  }
+
+  // Built ONCE. Everything after that repositions the same layers -- a drag
+  // handler that rebuilds destroys the very marker Leaflet is dragging, and the
+  // drag dies on the first move. (Same trap as the image corner handles.)
+  function cutsBuild(){
     cutsClear();
     if(!map || !cutsOn || !evEnsurePivot()) return;
+    cutObjs={lines:{}, labels:{}, handles:{}, rot:null, pivot:null};
+
     EV_SIDES.forEach(side=>{
       const g=cutEndpoints(side);
       const line=L.polyline([g.a,g.b],{color:'#c9a227', weight:2.5, opacity:0.9,
+        className:'cut-path',
         dashArray: side==='north'||side==='south' ? null : '10 6'}).addTo(map);
       line.on('click', ()=>evOpen(side));
-      cutLayers.push(line);
+      cutObjs.lines[side]=line; cutLayers.push(line);
 
       const lab=L.marker(g.b,{interactive:true, icon:L.divIcon({className:'',
         html:'<div class="cut-line-label">'+side.toUpperCase()+'</div>',
         iconSize:[0,0], iconAnchor:[0,0]})}).addTo(map);
       lab.on('click', ()=>evOpen(side));
-      cutLayers.push(lab);
+      cutObjs.labels[side]=lab; cutLayers.push(lab);
 
-      // One handle per cut. Dragging it slides the plane along its OWN normal
+      // One handle per cut. Dragging it slides that plane along its OWN normal
       // only -- the four can never come out of square.
-      const h=L.marker(g.mid,{draggable:!cutLocked, icon:L.divIcon({className:'',
-        html:'<div class="cut-handle'+(cutLocked?' locked':'')+'"></div>',
-        iconSize:[0,0], iconAnchor:[0,0]})}).addTo(map);
+      const h=L.marker(cutHandleLL(side),{draggable:!cutLocked, icon:cutHandleIcon()}).addTo(map);
       h.on('drag', ()=>{
-        const p=localEN(h.getLatLng());
-        cutOffsets[side]=dot(p, g.ax.normal);
-        cutsRender();
+        cutOffsets[side]=dot(localEN(h.getLatLng()), sideAxes(side).normal);
+        cutsRefresh(side);
       });
-      h.on('dragend', ()=>{ cutsRender(); evSaveCross(); });
-      cutLayers.push(h);
+      h.on('dragend', ()=>{ cutsRefresh(); evSaveCross(); });
+      cutObjs.handles[side]=h; cutLayers.push(h);
     });
 
-    // Rotate the whole cross. Bearing from the pivot to this handle IS the
+    // Rotate the whole cross. The bearing from the pivot to this handle IS the
     // rotation, so all four turn together and stay perpendicular.
-    const rh=fromEN(nHat().e*cutSpanM()*0.45, nHat().n*cutSpanM()*0.45);
-    const rot=L.marker(rh,{draggable:!cutLocked, icon:L.divIcon({className:'',
-      html:'<div class="cut-handle rot'+(cutLocked?' locked':'')+'"></div>',
-      iconSize:[0,0], iconAnchor:[0,0]})}).addTo(map);
+    const rot=L.marker(cutRotHandleLL(),{draggable:!cutLocked, icon:cutHandleIcon(' rot')}).addTo(map);
     rot.on('drag', ()=>{
       const p=localEN(rot.getLatLng());
-      if(Math.hypot(p.e,p.n) < 2) return;               // too close to read a bearing
+      if(Math.hypot(p.e,p.n) < 2) return;          // too close to read a bearing
       cutRot=(Math.atan2(p.e, p.n)*180/Math.PI+360)%360;
-      cutsRender();
+      cutsRefresh('rot');
     });
-    rot.on('dragend', ()=>{ cutsRender(); evSaveCross(); });
-    cutLayers.push(rot);
+    rot.on('dragend', ()=>{ cutsRefresh(); evSaveCross(); });
+    cutObjs.rot=rot; cutLayers.push(rot);
 
-    const pv=L.marker(cutPivot,{draggable:!cutLocked, icon:L.divIcon({className:'',
-      html:'<div class="cut-handle'+(cutLocked?' locked':'')+'" style="background:#fff"></div>',
-      iconSize:[0,0], iconAnchor:[0,0]})}).addTo(map);
-    pv.on('drag', ()=>{ cutPivot=pv.getLatLng(); cutsRender(); });
-    pv.on('dragend', ()=>{ cutsRender(); evSaveCross(); });
-    cutLayers.push(pv);
+    const pv=L.marker(cutPivot,{draggable:!cutLocked, icon:cutHandleIcon(' pivot')}).addTo(map);
+    pv.on('drag', ()=>{ cutPivot=pv.getLatLng(); cutsRefresh('pivot'); });
+    pv.on('dragend', ()=>{ cutsRefresh(); evSaveCross(); });
+    cutObjs.pivot=pv; cutLayers.push(pv);
   }
+
+  // Reposition only. `dragging` names the one layer under the finger, which is
+  // left alone so it tracks the touch instead of being snapped back.
+  function cutsRefresh(dragging){
+    if(!cutObjs || !cutPivot) return;
+    EV_SIDES.forEach(side=>{
+      const g=cutEndpoints(side);
+      cutObjs.lines[side].setLatLngs([g.a, g.b]);
+      cutObjs.labels[side].setLatLng(g.b);
+      if(dragging!==side) cutObjs.handles[side].setLatLng(cutHandleLL(side));
+    });
+    if(dragging!=='rot') cutObjs.rot.setLatLng(cutRotHandleLL());
+    if(dragging!=='pivot') cutObjs.pivot.setLatLng(cutPivot);
+  }
+  function cutsRender(){ cutsBuild(); }
 
   let cutsOn=false;
   function cutsSet(on){
@@ -4565,9 +4629,42 @@
       if(mapMode){ clearMeasureDraft(); setMapMode(null); }
     }
   }
+  // My location is a TOGGLE, not just a recentre. The blue dot and its accuracy
+  // circle sit over the work, and a continuous high-accuracy watch is the most
+  // expensive thing the app asks of the battery -- neither is wanted once the
+  // pins are placed. Turning it off clears the watch as well as the graphics.
+  //
+  // Nothing downstream breaks: distance has never come from the live fix, and
+  // grade mode takes a ONE-SHOT fix when it needs to seed an observation.
+  function setGeoOn(on){
+    geoOn=!!on;
+    centerBtn.classList.toggle('active', geoOn);
+    centerBtn.textContent = geoOn ? 'My location' : 'Location off';
+    if(geoOn){
+      if(geoWatchId===null) startGeo();
+      updateMyMarker();
+      if(map && lastFix) map.setView([lastFix.coords.latitude,lastFix.coords.longitude],
+                                     Math.max(map.getZoom(),19));
+    } else {
+      if(geoWatchId!==null){ try{ navigator.geolocation.clearWatch(geoWatchId); }catch(e){} geoWatchId=null; }
+      if(map){
+        if(myMarker){ try{ map.removeLayer(myMarker); }catch(e){} myMarker=null; }
+        if(accCircle){ try{ map.removeLayer(accCircle); }catch(e){} accCircle=null; }
+      }
+      gpsReadout.textContent='GPS off';
+    }
+  }
   centerBtn.addEventListener('click', ()=>{
-    if(map && lastFix) map.setView([lastFix.coords.latitude,lastFix.coords.longitude], Math.max(map.getZoom(),19));
+    // On, and already centred on you: the next tap turns it off.
+    if(!geoOn){ setGeoOn(true); return; }
+    if(map && lastFix){
+      const c=map.getCenter();
+      const near = metresBetween(c, L.latLng(lastFix.coords.latitude, lastFix.coords.longitude)) < 6;
+      if(!near){ map.setView([lastFix.coords.latitude,lastFix.coords.longitude], Math.max(map.getZoom(),19)); return; }
+    }
+    setGeoOn(false);
   });
+  centerBtn.title='Tap to centre on your position; tap again to turn the locator and its GPS watch off';
 
   // ---------- extent lock ----------
   let extentLocked=false;

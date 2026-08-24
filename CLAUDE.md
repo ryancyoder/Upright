@@ -118,6 +118,17 @@ Two things this exposed:
   `overflow-y:auto` with `margin-top/bottom:auto` on the end children, so they
   centre when they fit and scroll when they do not.
 
+## My location is a toggle
+
+The blue dot and its accuracy circle sit over the work, and a continuous
+high-accuracy `watchPosition` is the most expensive thing the app asks of the
+battery. **My location** centres on first tap and, once you are already
+centred, turns the whole thing off on the next — graphics *and* `clearWatch`.
+
+Nothing downstream depends on it: distance has never come from the live fix,
+and entering grade mode takes a **one-shot** `getCurrentPosition` to seed the
+observation, then lets the radio go quiet again.
+
 ## Data durability — important
 
 All Supabase writes are **fire-and-forget**. Failures are `console.warn`'d,
@@ -622,6 +633,28 @@ moves every time a pin is dragged, and the cuts must not wander with it. With
 They are perpendicular *by construction*, so no drag can put the four out of
 square. Each side's handle slides its plane along its **own normal** only; the
 rotate handle sets `rot` from its bearing off the pivot.
+
+**The cut layers are built once and thereafter only repositioned.**
+`cutsBuild()` creates them; `cutsRefresh(dragging)` moves them, leaving the one
+layer named by `dragging` alone so it tracks the finger. A drag handler that
+rebuilds destroys the very marker Leaflet is dragging and the drag dies on the
+first move — which is exactly why the cuts would not drag at all, and the same
+trap as the image corner handles.
+
+Three more things that stopped them being grabbable:
+
+- `iconSize:[0,0]` makes the grab target a zero-size element with the visible
+  circle merely overflowing it. The handles carry a real 26px icon box.
+- Every offset started at 0, so all four side handles and the pivot **stacked on
+  one point**. `cutDefaultOffsets()` opens them into a box that brackets the
+  survey, and each side's handle rides a fixed 95px along its own line.
+- The rotate handle sat at 0.45 × the viewport diagonal *in metres*, which put
+  it off the edge of the map at most zooms. It is now held 110px from the pivot
+  in screen space.
+
+Cut polylines carry `className:'cut-path'` — the GPS accuracy circle is also a
+path in the overlay pane, and its degenerate start/end angle was polluting
+geometry readings.
 
 Tapping a cut — or the five-way switch, which sits on the map as well as in the
 panel — opens that **profile**. Everything plotted on the horizontal plan is
