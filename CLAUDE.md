@@ -49,6 +49,8 @@ Endpoints under `/functions/v1/upright-api`:
 `POST /sessions/:id/audio|clips|photos|sketches|measures|plan`,
 `POST /sessions/:id/elevation-points|elevation-shots`,
 `POST /sessions/:id/elevation-slopes`, `DELETE /elevation-slopes/:id`,
+`PATCH /sessions/:id/elevation-views/:side`,
+`POST|DELETE /sessions/:id/elevation-views/:side/plan|photo`,
 `PATCH /elevation-points/:id`, `DELETE /elevation-points/:id`,
 `DELETE /elevation-points/:id/shots` (all, or `?observationId=` for one
 position's sightings), `POST /elevation-points/:id/photo`,
@@ -61,7 +63,7 @@ Secrets — NOT Vault, and NOT Vercel env vars; neither reaches the function).
 If editing the function, pull current source with `Supabase:get_edge_function`
 rather than reconstructing it. The source is now vendored at
 `supabase/functions/upright-api/index.ts` so edits are diffable; keep it in
-step with what is deployed. Currently **v17**.
+step with what is deployed. Currently **v18**.
 
 **Replacing an image writes a NEW storage path, never an upsert in place.**
 Storage public URLs are cached by the browser and by the CDN in front of the
@@ -602,6 +604,53 @@ dragged. Recentring is first-fix-only so it can never yank the view later.
 
 No compass is needed — bearings come from map geometry, which sidesteps iOS
 compass calibration entirely.
+
+## Elevation view (branch `claude/elevation-view`)
+
+Four vertical section planes through the survey, held perpendicular to each
+other and rotated as **one cross**, so they can be squared to a building that
+does not face true north. **Section cuts** on the map toolbar shows them; a
+second tap locks the orientation, a third unlocks.
+
+The cross hangs off a **pivot lat/lng**, not the survey centroid — the centroid
+moves every time a pin is dragged, and the cuts must not wander with it. With
+`rot` clockwise from true north, in (east, north) metres:
+
+    nHat = ( sin rot,  cos rot)
+    eHat = ( cos rot, -sin rot)
+
+They are perpendicular *by construction*, so no drag can put the four out of
+square. Each side's handle slides its plane along its **own normal** only; the
+rotate handle sets `rot` from its bearing off the pivot.
+
+Tapping a cut — or the five-way switch, which sits on the map as well as in the
+panel — opens that **profile**. Everything plotted on the horizontal plan is
+re-plotted vertically: x is distance along the section, y is what
+`elevationOf()` derives. Nothing new is stored; drag a pin on the map and the
+profile follows, exactly as the plan numbers do. Slope runs are drawn as real
+slopes here.
+
+- **The anchor datum sits one third up from the bottom** — two thirds above for
+  positive elevations, one third below for negative, as specified.
+- **Vertical exaggeration is unavoidable and is always announced.** A yard with
+  a 6 ft fall over 200 ft is a flat line at true proportion, so the view
+  auto-picks an exaggeration from 1/2/3/5/10/20/50 and says which
+  (`vertical ×3`) or says `true proportion`. **An overlaid photo only aligns at
+  ×1** — the tab shows the factor at all times so an exaggerated profile can
+  never be mistaken for a measured one.
+- Points **in front of** the cut plane draw solid, points behind draw faded.
+  That split is what sliding a cut actually decides.
+
+**Images are placed by four corners, in view coordinates (feet along, feet
+up).** Four corners is a full homography, which is exactly what a facade
+photographed from the ground needs; a drawing just uses a rectangle.
+`quadMatrix()` is the classic unit-square-to-quad solve, pre-scaled by the
+image's own pixel size and emitted as a CSS `matrix3d`.
+
+`evCornerHandles()` **repositions the handles, never rebuilds them.** A drag
+holds pointer capture on the handle; replacing the element mid-drag drops that
+capture and with it every later move and the pointerup that saves the result —
+the same trap that once made elevation reference photos unreachable on the map.
 
 ### Session history
 

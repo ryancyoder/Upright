@@ -117,6 +117,12 @@ function planUpdateFrom(body: Record<string, unknown>) {
   // Scale set from a known dimension on the drawing is a measurement, not a
   // preference -- it has to survive reopening the session.
   if (body.planScaleLocked !== undefined) u.plan_scale_locked = body.planScaleLocked;
+  // Elevation view: the section-cut cross. Pivot lat/lng, rotation of the whole
+  // cross, and whether the orientation has been locked.
+  if (body.elevCutLat !== undefined) u.elev_cut_lat = body.elevCutLat;
+  if (body.elevCutLng !== undefined) u.elev_cut_lng = body.elevCutLng;
+  if (body.elevCutRotDeg !== undefined) u.elev_cut_rot_deg = body.elevCutRotDeg;
+  if (body.elevCutLocked !== undefined) u.elev_cut_locked = body.elevCutLocked;
   if (body.basemap !== undefined) u.basemap = body.basemap;
   return u;
 }
@@ -205,7 +211,7 @@ Deno.serve(async (req) => {
     // GET /sessions/:id
     if (req.method === "GET" && parts.length === 2 && parts[0] === "sessions") {
       const sessionId = parts[1];
-      const [{ data: session, error: sErr }, { data: clips }, { data: photos }, { data: sketches }, { data: measures }, { data: elevPoints }, { data: elevShots }, { data: elevSlopes }] =
+      const [{ data: session, error: sErr }, { data: clips }, { data: photos }, { data: sketches }, { data: measures }, { data: elevPoints }, { data: elevShots }, { data: elevSlopes }, { data: elevViews }] =
         await Promise.all([
           supabase.from("upright_sessions").select("*, properties(id,address,latitude,longitude)").eq("id", sessionId).single(),
           supabase.from("upright_clips").select("*").eq("session_id", sessionId).order("start_offset_ms"),
@@ -215,6 +221,7 @@ Deno.serve(async (req) => {
           supabase.from("upright_elevation_points").select("*").eq("session_id", sessionId).order("created_at"),
           supabase.from("upright_elevation_shots").select("*").eq("session_id", sessionId).order("created_at"),
           supabase.from("upright_elevation_slopes").select("*").eq("session_id", sessionId).order("created_at"),
+          supabase.from("upright_elevation_views").select("*").eq("session_id", sessionId),
         ]);
       if (sErr || !session) return err("session not found", 404);
       const prop = firstOf<{ id: number; address: string }>((session as Record<string, unknown>).properties);
@@ -233,6 +240,11 @@ Deno.serve(async (req) => {
         })),
         elevationShots: elevShots || [],
         elevationSlopes: elevSlopes || [],
+        elevationViews: (elevViews || []).map((v) => ({
+          ...v,
+          planUrl: v.plan_storage_path ? publicUrl(v.plan_storage_path) : null,
+          photoUrl: v.photo_storage_path ? publicUrl(v.photo_storage_path) : null,
+        })),
       });
     }
 
@@ -389,6 +401,80 @@ Deno.serve(async (req) => {
       const { error } = await supabase.from("upright_elevation_slopes").delete().eq("id", parts[1]);
       if (error) return err(error.message, 500);
       return json({ ok: true, deleted: parts[1] });
+    }
+
+    // ---------- elevation view: four perpendicular section cuts ----------
+    // One row per side, created on first touch. The cross's rotation and pivot
+    // live on the session; each side owns only its own offset, exaggeration and
+    // overlays.
+    const SIDES = ["north", "south", "east", "west"];
+
+    // PATCH /sessions/:id/elevation-views/:side
+    if (req.method === "PATCH" && parts.length === 4 && parts[0] === "sessions" && parts[2] === "elevation-views") {
+      const sessionId = parts[1], side = parts[3];
+      if (!SIDES.includes(side)) return err("side must be north|south|east|west");
+      const body = await req.json();
+      const row: Record<string, unknown> = { session_id: sessionId, side };
+      if (body.offsetM !== undefined) row.offset_m = body.offsetM;
+      if (body.vertExag !== undefined) row.vert_exag = body.vertExag;
+      if (body.planOpacity !== undefined) row.plan_opacity = body.planOpacity;
+      if (body.planCorners !== undefined) row.plan_corners = body.planCorners;
+      if (body.photoOpacity !== undefined) row.photo_opacity = body.photoOpacity;
+      if (body.photoCorners !== undefined) row.photo_corners = body.photoCorners;
+      const { data, error } = await supabase.from("upright_elevation_views")
+        .upsert(row, { onConflict: "session_id,side" }).select().single();
+      if (error) return err(error.message, 500);
+      return json(data);
+    }
+
+    // POST /sessions/:id/elevation-views/:side/plan|photo  (multipart: file, meta)
+    // Versioned paths for the same caching reason as every other replaceable
+    // image: re-shooting a facade must not hand back the previous picture.
+    if (req.method === "POST" && parts.length === 5 && parts[0] === "sessions"
+        && parts[2] === "elevation-views" && (parts[4] === "plan" || parts[4] === "photo")) {
+      const sessionId = parts[1], side = parts[3], slot = parts[4];
+      if (!SIDES.includes(side)) return err("side must be north|south|east|west");
+      const form = await req.formData();
+      const file = form.get("file");
+      const metaRaw = form.get("meta");
+      if (!(file instanceof File)) return err("file required");
+      const meta = metaRaw ? JSON.parse(String(metaRaw)) : {};
+      const { data: existing } = await supabase.from("upright_elevation_views")
+        .select("plan_storage_path, photo_storage_path").eq("session_id", sessionId).eq("side", side).maybeSingle();
+      const ext = extFromMime(file.type, "jpg");
+      const path = `sessions/${sessionId}/elevation-views/${side}-${slot}-${Date.now()}.${ext}`;
+      const { error: upErr } = await supabase.storage.from(BUCKET).upload(path, file, {
+        contentType: file.type || "image/jpeg", upsert: true,
+      });
+      if (upErr) return err(upErr.message, 500);
+      const row: Record<string, unknown> = { session_id: sessionId, side };
+      row[slot === "plan" ? "plan_storage_path" : "photo_storage_path"] = path;
+      if (meta.corners !== undefined) row[slot === "plan" ? "plan_corners" : "photo_corners"] = meta.corners;
+      if (meta.opacity !== undefined) row[slot === "plan" ? "plan_opacity" : "photo_opacity"] = meta.opacity;
+      const { data, error: updErr } = await supabase.from("upright_elevation_views")
+        .upsert(row, { onConflict: "session_id,side" }).select().single();
+      if (updErr) return err(updErr.message, 500);
+      await dropOldObject(existing ? (slot === "plan" ? existing.plan_storage_path : existing.photo_storage_path) : null, path);
+      return json({ ...data, path, url: publicUrl(path) });
+    }
+
+    // DELETE /sessions/:id/elevation-views/:side/plan|photo
+    if (req.method === "DELETE" && parts.length === 5 && parts[0] === "sessions"
+        && parts[2] === "elevation-views" && (parts[4] === "plan" || parts[4] === "photo")) {
+      const sessionId = parts[1], side = parts[3], slot = parts[4];
+      if (!SIDES.includes(side)) return err("side must be north|south|east|west");
+      const { data: existing } = await supabase.from("upright_elevation_views")
+        .select("plan_storage_path, photo_storage_path").eq("session_id", sessionId).eq("side", side).maybeSingle();
+      if (!existing) return json({ ok: true });
+      const old = slot === "plan" ? existing.plan_storage_path : existing.photo_storage_path;
+      const row: Record<string, unknown> = { session_id: sessionId, side };
+      row[slot === "plan" ? "plan_storage_path" : "photo_storage_path"] = null;
+      row[slot === "plan" ? "plan_corners" : "photo_corners"] = null;
+      const { error } = await supabase.from("upright_elevation_views")
+        .upsert(row, { onConflict: "session_id,side" });
+      if (error) return err(error.message, 500);
+      if (old) { try { await supabase.storage.from(BUCKET).remove([old]); } catch (_e) { /* orphan is harmless */ } }
+      return json({ ok: true });
     }
 
     // POST /sessions/:id/plan  (multipart: file, meta)

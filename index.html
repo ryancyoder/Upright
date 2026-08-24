@@ -14,6 +14,7 @@
     --anchor-sight:#e8c33a;   /* the sight is YELLOW while the next shot is the anchor */
     --obs-sight:#4fd07a;      /* and GREEN while it is documenting where you stand */
     --slope:#63b3e8;          /* slope runs -- a relationship, not a survey point */
+    --cut:#c9a227;            /* section cuts: a frame of reference, not a measurement */
   }
   *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
   html,body{height:100%;}
@@ -394,6 +395,76 @@
   }
   .sight-steady.ready{color:var(--flat);}
 
+  /* ---------- ELEVATION VIEW ----------
+     Four vertical section planes through the survey, always perpendicular to
+     each other. On the map they are lines; tapping one opens the profile. */
+  .cut-line-label{
+    transform:translate(-50%,-50%);
+    font-size:11px; font-weight:700; letter-spacing:0.1em; color:var(--cut);
+    white-space:nowrap; text-shadow:0 1px 3px rgba(0,0,0,0.95), 0 0 2px rgba(0,0,0,0.95);
+    pointer-events:auto;
+  }
+  .cut-handle{
+    transform:translate(-50%,-50%);
+    width:22px; height:22px; border-radius:50%;
+    border:2px solid #fff; background:var(--cut);
+    box-shadow:0 1px 6px rgba(0,0,0,0.6);
+  }
+  .cut-handle.rot{background:var(--anchor-sight); border-radius:4px;}
+  .cut-handle.locked{opacity:0.45;}
+
+  /* The same five-way switch, on the map. Without it the only way back into a
+     profile is a cut line, and "toggle top / front / back / side / side" has to
+     work from either side of the toggle. */
+  .view-switch{
+    position:absolute; z-index:1150; left:12px; top:56px;
+    display:none; gap:6px; padding:5px;
+    border-radius:100px; background:rgba(18,18,14,0.78);
+    -webkit-backdrop-filter:blur(12px); backdrop-filter:blur(12px);
+    border:1px solid rgba(255,255,255,0.14);
+  }
+  .view-switch.show{display:flex;}
+  .view-switch .ev-tab{padding:6px 12px; font-size:12px;}
+
+  .elev-panel{
+    position:absolute; inset:0; z-index:28; background:var(--bg);
+    display:none; flex-direction:column;
+  }
+  .elev-panel.show{display:flex;}
+  .ev-bar{
+    flex:0 0 auto; display:flex; align-items:center; gap:8px;
+    padding:8px 12px; background:var(--bg2); border-bottom:1px solid var(--line);
+    overflow-x:auto; -webkit-overflow-scrolling:touch;
+  }
+  .ev-tab{
+    padding:8px 14px; border-radius:100px; white-space:nowrap;
+    border:1px solid var(--line); background:transparent; color:var(--dim);
+    font-size:13px; font-weight:700;
+  }
+  .ev-tab.on{background:var(--ink); color:var(--bg); border-color:var(--ink);}
+  .ev-sep{width:1px; height:26px; background:var(--line); flex:0 0 auto;}
+  .ev-stage{flex:1 1 auto; position:relative; overflow:hidden; background:#0a0a08;}
+  .ev-img{
+    position:absolute; left:0; top:0; transform-origin:0 0;
+    pointer-events:none; will-change:transform;
+  }
+  .ev-svg{position:absolute; inset:0; width:100%; height:100%;}
+  .ev-corner{
+    position:absolute; width:26px; height:26px; margin:-13px 0 0 -13px;
+    border-radius:50%; border:2px solid #fff; background:rgba(99,179,232,0.9);
+    box-shadow:0 1px 6px rgba(0,0,0,0.6); touch-action:none;
+  }
+  .ev-note{
+    position:absolute; left:12px; bottom:10px;
+    font-size:11px; color:var(--dim); pointer-events:none;
+    text-shadow:0 1px 3px rgba(0,0,0,0.9);
+  }
+  .ev-warn{color:var(--anchor-sight);}
+  .ev-empty{
+    position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+    text-align:center; padding:32px; color:var(--dim); font-size:13px; line-height:1.5;
+  }
+
   /* Draw-over editor */
   .draw-wrap{
     position:absolute; inset:0; z-index:15; display:none;
@@ -765,6 +836,7 @@
         <button class="mb-btn go" id="modeDone">Finish</button>
         <button class="mb-btn" id="modeCancel">Cancel</button>
       </div>
+      <div class="view-switch" id="viewSwitch"></div>
       <div class="film-strip" id="filmStrip"></div>
       <div class="elev-bar" id="elevBar">
         <span class="elev-status" id="elevStatus"></span>
@@ -788,8 +860,35 @@
         <button class="mt-btn" id="sketchBtn">Sketch</button>
         <button class="mt-btn" id="measureBtn">Measure</button>
         <button class="mt-btn" id="elevBtn">Elevation</button>
+        <button class="mt-btn" id="cutsBtn">Section cuts</button>
         <button class="mt-btn" id="lockExtentBtn">Lock extent</button>
         <button class="mt-btn" id="basemapBtn" style="display:none">Plan + satellite</button>
+      </div>
+    </div>
+
+    <div class="elev-panel" id="elevPanel">
+      <div class="ev-bar">
+        <button class="ev-tab" id="evTabTop">Top</button>
+        <div class="ev-sep"></div>
+        <button class="ev-tab" data-side="north">North</button>
+        <button class="ev-tab" data-side="south">South</button>
+        <button class="ev-tab" data-side="east">East</button>
+        <button class="ev-tab" data-side="west">West</button>
+        <div class="ev-sep"></div>
+        <span class="mt-label">V.E.</span>
+        <button class="mt-btn" id="evExag">1&times;</button>
+        <button class="mt-btn" id="evPlanBtn">Elevation plan</button>
+        <button class="mt-btn" id="evPhotoBtn">Photo</button>
+        <button class="mt-btn" id="evSkewBtn">Adjust image</button>
+        <button class="mt-btn" id="evClearImg">Remove image</button>
+        <input type="file" id="evFile" accept="image/*" style="display:none">
+      </div>
+      <div class="ev-stage" id="evStage">
+        <img class="ev-img" id="evPlanImg" alt="">
+        <img class="ev-img" id="evPhotoImg" alt="">
+        <svg class="ev-svg" id="evSvg"></svg>
+        <div class="ev-note" id="evNote"></div>
+        <div class="ev-empty" id="evEmpty"></div>
       </div>
     </div>
 
@@ -901,7 +1000,11 @@
         importPlanBtn=$('importPlanBtn'), planFile=$('planFile'), overlayControls=$('overlayControls'),
         opSlider=$('opSlider'), scaleSlider=$('scaleSlider'), rotSlider=$('rotSlider'),
         lockPlanBtn=$('lockPlanBtn'), scalePlanBtn=$('scalePlanBtn'), exportPinsBtn=$('exportPinsBtn'), centerBtn=$('centerBtn'), lockExtentBtn=$('lockExtentBtn'),
-        basemapBtn=$('basemapBtn'), elevBtn=$('elevBtn'),
+        basemapBtn=$('basemapBtn'), elevBtn=$('elevBtn'), cutsBtn=$('cutsBtn'),
+        elevPanel=$('elevPanel'), evStage=$('evStage'), evSvg=$('evSvg'), viewSwitch=$('viewSwitch'),
+        evPlanImg=$('evPlanImg'), evPhotoImg=$('evPhotoImg'), evNote=$('evNote'), evEmpty=$('evEmpty'),
+        evTabTop=$('evTabTop'), evExag=$('evExag'), evPlanBtn=$('evPlanBtn'), evPhotoBtn=$('evPhotoBtn'),
+        evSkewBtn=$('evSkewBtn'), evClearImg=$('evClearImg'), evFile=$('evFile'),
         sightOverlay=$('sightOverlay'), sightMsg=$('sightMsg'), sightAngle=$('sightAngle'),
         sightSteady=$('sightSteady'), gradeBtn=$('gradeBtn'),
         sightDwell=$('sightDwellFill'), sightCross=$('sightCross'), sightCrossGlyph=$('sightCrossGlyph'),
@@ -2026,6 +2129,20 @@
     elevSlopes=(data.elevationSlopes||[]).map(sl=>({
       id:sl.id, remoteId:sl.id, fromId:sl.from_point_id, toId:sl.to_point_id, layers:null
     }));
+    cutPivot = (s.elev_cut_lat!=null && s.elev_cut_lng!=null)
+      ? L.latLng(s.elev_cut_lat, s.elev_cut_lng) : null;
+    cutRot = s.elev_cut_rot_deg || 0;
+    cutLocked = !!s.elev_cut_locked;
+    cutOffsets={north:0, south:0, east:0, west:0};
+    evViews={};
+    (data.elevationViews||[]).forEach(v=>{
+      cutOffsets[v.side]=v.offset_m||0;
+      evViews[v.side]={
+        vertExag: v.vert_exag || null,
+        planUrl: v.planUrl||null, planCorners: v.plan_corners||null, planOpacity: v.plan_opacity!=null?v.plan_opacity:0.6,
+        photoUrl: v.photoUrl||null, photoCorners: v.photo_corners||null, photoOpacity: v.photo_opacity!=null?v.photo_opacity:0.85
+      };
+    });
     elevActiveObs=(elevPoints.find(p=>p.kind==='observation')||{}).id || null;
     elevSelected=null;
     measures=(data.measures||[]).map(m=>({
@@ -3088,6 +3205,9 @@
   }
   function wireMapAnnotation(){
     const c=map.getContainer();
+    // The cuts are drawn as segments long enough to cross the viewport, so they
+    // have to be re-cut whenever the viewport changes.
+    map.on('moveend zoomend', ()=>{ if(cutsOn) cutsRender(); });
     c.addEventListener('pointerdown', e=>{
       if(mapMode!=='sketch') return;
       sketching=true; sketchPts=[];
@@ -3886,11 +4006,513 @@
   }
 
 
+  // ================= ELEVATION VIEW =================
+  // Four vertical section planes through the survey, held perpendicular to each
+  // other and rotated as ONE cross so they can be squared to a building that
+  // does not face true north.
+  //
+  // The cross hangs off a PIVOT lat/lng, not the survey centroid: the centroid
+  // moves every time a pin is dragged, and the cuts must not wander with it.
+  //
+  // Axes, with rot measured clockwise from true north, as (east, north) metres:
+  //   nHat = (sin rot,  cos rot)   "north" for this cross
+  //   eHat = (cos rot, -sin rot)   "east"  for this cross, perpendicular by
+  //                                 construction -- there is no way to get them
+  //                                 out of square.
+  const EV_SIDES=['north','south','east','west'];
+  let cutPivot=null, cutRot=0, cutLocked=false;
+  let cutOffsets={north:0, south:0, east:0, west:0};      // metres along each normal
+  let evViews={};                                          // side -> {vertExag, plan*, photo*}
+  let cutLayers=[], evActive=null, evSkew=false, evSlot='plan';
+  let evPan=0, evScale=null, evDragging=null, evSaveTimer=null;
+
+  function evView(side){
+    if(!evViews[side]) evViews[side]={vertExag:null, planUrl:null, planCorners:null, planOpacity:0.6,
+                                      photoUrl:null, photoCorners:null, photoOpacity:0.85};
+    return evViews[side];
+  }
+  function nHat(){ return {e:Math.sin(rad(cutRot)), n:Math.cos(rad(cutRot))}; }
+  function eHat(){ return {e:Math.cos(rad(cutRot)), n:-Math.sin(rad(cutRot))}; }
+
+  // Local metres east/north of the pivot. Flat-earth, like planCorners() -- at
+  // site scale the error is sub-centimetre.
+  function localEN(ll){
+    if(!cutPivot) return {e:0, n:0};
+    const mLat=111320, mLng=111320*Math.cos(rad(cutPivot.lat));
+    return {e:(ll.lng-cutPivot.lng)*mLng, n:(ll.lat-cutPivot.lat)*mLat};
+  }
+  function fromEN(e, n){
+    const mLat=111320, mLng=111320*Math.cos(rad(cutPivot.lat));
+    return L.latLng(cutPivot.lat + n/mLat, cutPivot.lng + e/mLng);
+  }
+  function dot(a,b){ return a.e*b.e + a.n*b.n; }
+
+  // Which way each side faces, and how a point lands in its picture.
+  // Standing north of the site you look SOUTH, so east falls to your left --
+  // that is why the north view's x axis runs the opposite way to the south's.
+  function sideAxes(side){
+    const nh=nHat(), eh=eHat();
+    if(side==='north') return {normal:nh, along:{e:-eh.e, n:-eh.n}, sign:1};
+    if(side==='south') return {normal:{e:-nh.e,n:-nh.n}, along:eh, sign:-1};
+    if(side==='east')  return {normal:eh, along:nh, sign:1};
+    return {normal:{e:-eh.e,n:-eh.n}, along:{e:-nh.e,n:-nh.n}, sign:-1};   // west
+  }
+  // Signed offset of a side's plane along the CROSS axes, so north/south share
+  // one axis and east/west share the other.
+  function sideOffset(side){ return cutOffsets[side]||0; }
+
+  function evDefaultPivot(){
+    const placed=elevPoints.filter(p=>p.placed && p.kind!=='observation');
+    const src = placed.length ? placed : elevPoints.filter(p=>p.placed);
+    if(!src.length) return map ? map.getCenter() : null;
+    return L.latLng(src.reduce((a,p)=>a+p.lat,0)/src.length,
+                    src.reduce((a,p)=>a+p.lng,0)/src.length);
+  }
+  function evEnsurePivot(){
+    if(!cutPivot) cutPivot=evDefaultPivot();
+    return !!cutPivot;
+  }
+
+  function evSaveCross(){
+    if(!sessionId || !cutPivot) return;
+    clearTimeout(evSaveTimer);
+    evSaveTimer=setTimeout(()=>{
+      apiPatch('/sessions/'+sessionId, {
+        elevCutLat:cutPivot.lat, elevCutLng:cutPivot.lng,
+        elevCutRotDeg:cutRot, elevCutLocked:cutLocked
+      });
+      EV_SIDES.forEach(s=>evSaveSide(s, {offsetM:cutOffsets[s]}));
+    }, 700);
+  }
+  function evSaveSide(side, patch){
+    if(!sessionId) return;
+    apiPatch('/sessions/'+sessionId+'/elevation-views/'+side, patch);
+  }
+
+  // ---------- the cuts, drawn on the map ----------
+  function cutsClear(){
+    cutLayers.forEach(l=>{ if(map){ try{ map.removeLayer(l); }catch(e){} } });
+    cutLayers=[];
+  }
+  function cutSpanM(){
+    if(!map) return 200;
+    const b=map.getBounds();
+    return Math.max(120, metresBetween(b.getNorthWest(), b.getSouthEast()));
+  }
+  function cutEndpoints(side){
+    const ax=sideAxes(side), off=sideOffset(side), half=cutSpanM();
+    // The plane sits at `off` along its own normal; its line on plan runs along
+    // the perpendicular.
+    const c={e:ax.normal.e*off, n:ax.normal.n*off};
+    const a={e:c.e - ax.along.e*half, n:c.n - ax.along.n*half};
+    const b={e:c.e + ax.along.e*half, n:c.n + ax.along.n*half};
+    return {a:fromEN(a.e,a.n), b:fromEN(b.e,b.n), mid:fromEN(c.e,c.n), ax:ax, off:off};
+  }
+  function cutsRender(){
+    cutsClear();
+    if(!map || !cutsOn || !evEnsurePivot()) return;
+    EV_SIDES.forEach(side=>{
+      const g=cutEndpoints(side);
+      const line=L.polyline([g.a,g.b],{color:'#c9a227', weight:2.5, opacity:0.9,
+        dashArray: side==='north'||side==='south' ? null : '10 6'}).addTo(map);
+      line.on('click', ()=>evOpen(side));
+      cutLayers.push(line);
+
+      const lab=L.marker(g.b,{interactive:true, icon:L.divIcon({className:'',
+        html:'<div class="cut-line-label">'+side.toUpperCase()+'</div>',
+        iconSize:[0,0], iconAnchor:[0,0]})}).addTo(map);
+      lab.on('click', ()=>evOpen(side));
+      cutLayers.push(lab);
+
+      // One handle per cut. Dragging it slides the plane along its OWN normal
+      // only -- the four can never come out of square.
+      const h=L.marker(g.mid,{draggable:!cutLocked, icon:L.divIcon({className:'',
+        html:'<div class="cut-handle'+(cutLocked?' locked':'')+'"></div>',
+        iconSize:[0,0], iconAnchor:[0,0]})}).addTo(map);
+      h.on('drag', ()=>{
+        const p=localEN(h.getLatLng());
+        cutOffsets[side]=dot(p, g.ax.normal);
+        cutsRender();
+      });
+      h.on('dragend', ()=>{ cutsRender(); evSaveCross(); });
+      cutLayers.push(h);
+    });
+
+    // Rotate the whole cross. Bearing from the pivot to this handle IS the
+    // rotation, so all four turn together and stay perpendicular.
+    const rh=fromEN(nHat().e*cutSpanM()*0.45, nHat().n*cutSpanM()*0.45);
+    const rot=L.marker(rh,{draggable:!cutLocked, icon:L.divIcon({className:'',
+      html:'<div class="cut-handle rot'+(cutLocked?' locked':'')+'"></div>',
+      iconSize:[0,0], iconAnchor:[0,0]})}).addTo(map);
+    rot.on('drag', ()=>{
+      const p=localEN(rot.getLatLng());
+      if(Math.hypot(p.e,p.n) < 2) return;               // too close to read a bearing
+      cutRot=(Math.atan2(p.e, p.n)*180/Math.PI+360)%360;
+      cutsRender();
+    });
+    rot.on('dragend', ()=>{ cutsRender(); evSaveCross(); });
+    cutLayers.push(rot);
+
+    const pv=L.marker(cutPivot,{draggable:!cutLocked, icon:L.divIcon({className:'',
+      html:'<div class="cut-handle'+(cutLocked?' locked':'')+'" style="background:#fff"></div>',
+      iconSize:[0,0], iconAnchor:[0,0]})}).addTo(map);
+    pv.on('drag', ()=>{ cutPivot=pv.getLatLng(); cutsRender(); });
+    pv.on('dragend', ()=>{ cutsRender(); evSaveCross(); });
+    cutLayers.push(pv);
+  }
+
+  let cutsOn=false;
+  function cutsSet(on){
+    cutsOn=!!on;
+    cutsBtn.classList.toggle('active', cutsOn);
+    cutsBtn.textContent = cutsOn ? (cutLocked?'Cuts locked':'Cuts: drag to place') : 'Section cuts';
+    if(cutsOn) evEnsurePivot();
+    cutsRender(); evSyncTabs();
+  }
+  cutsBtn.addEventListener('click', ()=>{
+    if(!cutsOn){ cutsSet(true); return; }
+    // Second tap locks the orientation once it is where you want it; a third
+    // unlocks. Locking is the whole point of squaring to a wall.
+    cutLocked=!cutLocked;
+    cutsSet(true); evSaveCross();
+  });
+
+  // ---------- the profile itself ----------
+  // Everything that was plotted on a horizontal plan is re-plotted vertically:
+  // x is distance along the section, y is the elevation elevationOf() derives.
+  // Nothing new is stored -- move a pin on the map and the profile follows,
+  // exactly as the plan numbers do.
+  function evProject(side){
+    const ax=sideAxes(side), off=sideOffset(side), out=[];
+    elevPoints.forEach(pt=>{
+      if(isHidden(pt) || !pt.placed || pt.kind==='observation') return;
+      const e=elevationOf(pt.id);
+      if(!e || e.needsPlacing) return;
+      const ft = e.isAnchor ? 0 : e.ft;
+      if(typeof ft!=='number' || !isFinite(ft)) return;
+      const p=localEN(L.latLng(pt.lat, pt.lng));
+      out.push({ pt:pt, ft:ft,
+                 x: dot(p, ax.along)/M_PER_FT,
+                 // Positive = on the viewer's side of the cut plane. The slider
+                 // is what decides that split, which is the whole reason to
+                 // slide it.
+                 depth: (dot(p, ax.normal) - off)/M_PER_FT });
+    });
+    return out.sort((a,b)=>a.x-b.x);
+  }
+  const EXAG_STEPS=[1,2,3,5,10,20,50];
+  function evAutoExag(pts, H){
+    const up=Math.max(0.01, ...pts.map(p=>Math.max(0,p.ft)));
+    const dn=Math.max(0.01, ...pts.map(p=>Math.max(0,-p.ft)));
+    const datumY=H*2/3;
+    const sx=evScale||2;
+    const fitUp=(datumY-24)*0.75/(up*sx), fitDn=(H-datumY-24)*0.75/(dn*sx);
+    const want=Math.min(fitUp, fitDn);
+    let best=1;
+    EXAG_STEPS.forEach(v=>{ if(v<=want) best=v; });
+    return best;
+  }
+  function evGeom(side){
+    const v=evView(side), pts=evProject(side);
+    const W=Math.max(1, evStage.clientWidth), H=Math.max(1, evStage.clientHeight);
+    const datumY=H*2/3;                       // the anchor sits 1/3 up from the bottom
+    let x0=-30, x1=30;
+    if(pts.length){
+      x0=Math.min.apply(null, pts.map(p=>p.x));
+      x1=Math.max.apply(null, pts.map(p=>p.x));
+      if(x1-x0 < 10){ const c=(x0+x1)/2; x0=c-15; x1=c+15; }
+      const pad=(x1-x0)*0.12; x0-=pad; x1+=pad;
+    }
+    evScale = W/(x1-x0);
+    const exag = v.vertExag || evAutoExag(pts, H);
+    return {pts:pts, W:W, H:H, datumY:datumY, x0:x0, x1:x1, sx:evScale, exag:exag,
+            toX: x => (x-x0)*evScale + evPan,
+            toY: ft => datumY - ft*evScale*exag,
+            fromX: px => (px-evPan)/evScale + x0,
+            fromY: py => (datumY-py)/(evScale*exag)};
+  }
+
+  // ---------- 4-corner homography, for a photo taken at an angle ----------
+  // A facade shot from the ground has perspective in it; four draggable corners
+  // map it onto the orthographic plane the profile is drawn in. This is the
+  // classic unit-square-to-quad solve, pre-scaled by the image's own size.
+  function quadMatrix(w, h, q){
+    const [p0,p1,p2,p3]=q;                                  // TL, TR, BR, BL
+    const dx1=p1.x-p2.x, dy1=p1.y-p2.y;
+    const dx2=p3.x-p2.x, dy2=p3.y-p2.y;
+    const sx=p0.x-p1.x+p2.x-p3.x, sy=p0.y-p1.y+p2.y-p3.y;
+    const den=dx1*dy2-dx2*dy1;
+    if(!den) return null;
+    const g=(sx*dy2-dx2*sy)/den, hh=(dx1*sy-sx*dy1)/den;
+    const a=p1.x-p0.x+g*p1.x, b=p3.x-p0.x+hh*p3.x, c=p0.x;
+    const d=p1.y-p0.y+g*p1.y, e=p3.y-p0.y+hh*p3.y, f=p0.y;
+    if(!w || !h) return null;
+    return 'matrix3d('+[a/w,d/w,0,g/w, b/h,e/h,0,hh/h, 0,0,1,0, c,f,0,1]
+      .map(n=>(isFinite(n)?n:0).toFixed(8)).join(',')+')';
+  }
+  function evPlaceImg(el, corners, G, opacity){
+    if(!el.src || !corners || corners.length!==4 || !el.naturalWidth){
+      el.style.display='none'; return;
+    }
+    const q=corners.map(c=>({x:G.toX(c.x), y:G.toY(c.y)}));
+    const m=quadMatrix(el.naturalWidth, el.naturalHeight, q);
+    if(!m){ el.style.display='none'; return; }
+    el.style.display='block';
+    el.style.opacity=opacity;
+    el.style.transform=m;
+  }
+  function evDefaultCorners(G, el){
+    const wFt=Math.max(20, (G.x1-G.x0)*0.7);
+    const aspect=(el.naturalHeight||1)/(el.naturalWidth||1);
+    const hFt=wFt*aspect/ (G.exag||1);      // drawn at the view's exaggeration
+    const cx=(G.x0+G.x1)/2, x0=cx-wFt/2, x1=cx+wFt/2;
+    return [{x:x0,y:hFt},{x:x1,y:hFt},{x:x1,y:0},{x:x0,y:0}];
+  }
+
+  function ns(t){ return document.createElementNS('http://www.w3.org/2000/svg', t); }
+  function evRender(){
+    if(!evActive) return;
+    const side=evActive, v=evView(side), G=evGeom(side);
+    evSvg.setAttribute('viewBox','0 0 '+G.W+' '+G.H);
+    while(evSvg.firstChild) evSvg.removeChild(evSvg.firstChild);
+
+    // images first, under the geometry
+    evPlaceImg(evPlanImg, v.planCorners, G, v.planOpacity);
+    evPlaceImg(evPhotoImg, v.photoCorners, G, v.photoOpacity);
+
+    const line=(x1,y1,x2,y2,stroke,w,dash,op)=>{
+      const l=ns('line');
+      l.setAttribute('x1',x1); l.setAttribute('y1',y1);
+      l.setAttribute('x2',x2); l.setAttribute('y2',y2);
+      l.setAttribute('stroke',stroke); l.setAttribute('stroke-width',w||1);
+      if(dash) l.setAttribute('stroke-dasharray',dash);
+      if(op!=null) l.setAttribute('opacity',op);
+      evSvg.appendChild(l); return l;
+    };
+    const text=(x,y,t,fill,size,anchor)=>{
+      const e=ns('text');
+      e.setAttribute('x',x); e.setAttribute('y',y);
+      e.setAttribute('fill',fill); e.setAttribute('font-size',size||11);
+      e.setAttribute('font-weight','700');
+      e.setAttribute('text-anchor',anchor||'middle');
+      e.setAttribute('style','paint-order:stroke;stroke:rgba(0,0,0,.85);stroke-width:3px');
+      e.textContent=t; evSvg.appendChild(e); return e;
+    };
+
+    // horizontal grid, every foot of elevation that fits
+    const ftPx=G.sx*G.exag;
+    let step=1;
+    [1,2,5,10,25,50].some(s=>{ step=s; return s*ftPx>=34; });
+    for(let f=-Math.ceil((G.H-G.datumY)/ftPx/step)*step; f*ftPx<=G.datumY; f+=step){
+      const y=G.toY(f);
+      if(y<0 || y>G.H) continue;
+      if(Math.abs(f)<1e-9) continue;
+      line(0,y,G.W,y,'#33322a',1,null,0.9);
+      text(6,y-3,(f>0?'+':'')+f+"'", '#8b887f',10,'start');
+    }
+    // the datum: the anchor, 0.00', one third up from the bottom
+    line(0,G.datumY,G.W,G.datumY,'#e8c33a',2,null,0.95);
+    text(6,G.datumY-5,"0.00' anchor",'#e8c33a',11,'start');
+
+    // slope runs become real slopes here
+    const byId={}; G.pts.forEach(p=>byId[p.pt.id]=p);
+    elevSlopes.forEach(sl=>{
+      const a=byId[sl.fromId], b=byId[sl.toId];
+      if(!a || !b) return;
+      line(G.toX(a.x),G.toY(a.ft),G.toX(b.x),G.toY(b.ft),'#63b3e8',2.5,null,0.9);
+    });
+
+    // the points
+    G.pts.forEach(p=>{
+      const x=G.toX(p.x), y=G.toY(p.ft);
+      const behind = p.depth < 0;
+      const col = p.pt.kind==='anchor' ? ANCHOR_SIGHT : TARGET_SIGHT;
+      const g=ns('g');
+      g.setAttribute('opacity', behind ? 0.42 : 1);
+      const stem=ns('line');
+      stem.setAttribute('x1',x); stem.setAttribute('y1',y);
+      stem.setAttribute('x2',x); stem.setAttribute('y2',G.datumY);
+      stem.setAttribute('stroke',col); stem.setAttribute('stroke-width',1);
+      stem.setAttribute('stroke-dasharray','3 4'); stem.setAttribute('opacity',0.55);
+      g.appendChild(stem);
+      const c=ns('circle');
+      c.setAttribute('cx',x); c.setAttribute('cy',y); c.setAttribute('r',5);
+      c.setAttribute('fill','none'); c.setAttribute('stroke',col); c.setAttribute('stroke-width',2.5);
+      g.appendChild(c);
+      const t=ns('text');
+      t.setAttribute('x',x); t.setAttribute('y',y-11);
+      t.setAttribute('fill',col); t.setAttribute('font-size',11); t.setAttribute('font-weight','700');
+      t.setAttribute('text-anchor','middle');
+      t.setAttribute('style','paint-order:stroke;stroke:rgba(0,0,0,.9);stroke-width:3px');
+      t.textContent=(p.ft>=0?'+':'')+p.ft.toFixed(2)+"'";
+      g.appendChild(t);
+      evSvg.appendChild(g);
+    });
+
+    evCornerHandles(G);
+
+    const n=G.pts.length;
+    evEmpty.style.display = n ? 'none' : 'flex';
+    evEmpty.innerHTML = n ? '' :
+      'Nothing to draw on this section yet.<br><br>Shoot grade and place the pins on the map, '
+      + 'and every point appears here at its elevation.';
+    evNote.innerHTML = '<b>'+side.toUpperCase()+'</b> — looking '
+      + ({north:'south',south:'north',east:'west',west:'east'}[side])
+      + ' · ' + n + ' point'+(n===1?'':'s')
+      + ' · ' + (G.x1-G.x0).toFixed(0) + "' wide"
+      + (G.exag!==1 ? ' · <span class="ev-warn">vertical ×'+G.exag+'</span>' : ' · true proportion');
+    evExag.innerHTML = G.exag+'&times;';
+    evExag.classList.toggle('active', G.exag!==1);
+  }
+
+  // ---------- dragging the image corners ----------
+  function evCornersOf(side, slot){
+    const v=evView(side);
+    return slot==='plan' ? v.planCorners : v.photoCorners;
+  }
+  function evMakeCorner(i){
+    const d=document.createElement('div');
+    d.className='ev-corner';
+    d.addEventListener('pointerdown', e=>{
+      e.preventDefault(); e.stopPropagation();
+      try{ d.setPointerCapture(e.pointerId); }catch(_e){}
+      evDragging={i:i, slot:evSlot, side:evActive};
+    });
+    d.addEventListener('pointermove', e=>{
+      if(!evDragging || evDragging.i!==i) return;
+      e.preventDefault();
+      const arr=evCornersOf(evDragging.side, evDragging.slot);
+      if(!arr) return;
+      const r=evStage.getBoundingClientRect(), G=evGeom(evDragging.side);
+      arr[i]={x:G.fromX(e.clientX-r.left), y:G.fromY(e.clientY-r.top)};
+      evRender();
+    });
+    ['pointerup','pointercancel'].forEach(ev=>d.addEventListener(ev, ()=>{
+      if(!evDragging || evDragging.i!==i) return;
+      const side=evDragging.side, slot=evDragging.slot;
+      evDragging=null;
+      const arr=evCornersOf(side, slot);
+      evSaveSide(side, slot==='plan' ? {planCorners:arr} : {photoCorners:arr});
+    }));
+    return d;
+  }
+  function evCornerHandles(G){
+    const corners=evCornersOf(evActive, evSlot);
+    let have=[...evStage.querySelectorAll('.ev-corner')];
+    if(!evSkew || !corners){ have.forEach(e=>e.remove()); return; }
+    // Reposition in place, NEVER rebuild. A drag holds pointer capture on the
+    // handle; replacing the element mid-drag drops that capture and with it
+    // every later move and the pointerup that saves the result -- the same trap
+    // that made elevation reference photos unreachable on the map.
+    if(have.length!==corners.length){
+      have.forEach(e=>e.remove());
+      corners.forEach((_c,i)=>evStage.appendChild(evMakeCorner(i)));
+      have=[...evStage.querySelectorAll('.ev-corner')];
+    }
+    have.forEach((d,i)=>{
+      d.style.left=G.toX(corners[i].x)+'px';
+      d.style.top=G.toY(corners[i].y)+'px';
+    });
+  }
+
+  // ---------- open / close / toggle ----------
+  function evOpen(side){
+    if(!EV_SIDES.includes(side)) return;
+    evEnsurePivot();
+    evActive=side; evPan=0; evSkew=false;
+    const v=evView(side);
+    evPlanImg.src = v.planUrl || '';
+    evPhotoImg.src = v.photoUrl || '';
+    elevPanel.classList.add('show');
+    evSyncTabs();
+    requestAnimationFrame(evRender);
+  }
+  function evClose(){
+    evActive=null; evSkew=false;
+    elevPanel.classList.remove('show');
+    evSyncTabs();
+  }
+  function buildViewSwitch(){
+    if(viewSwitch.childElementCount) return;
+    const mk=(label, side)=>{
+      const b=document.createElement('button');
+      b.className='ev-tab'; b.textContent=label;
+      if(side) b.dataset.side=side;
+      b.addEventListener('click', ()=> side ? evOpen(side) : evClose());
+      viewSwitch.appendChild(b);
+      return b;
+    };
+    mk('Top', null);
+    EV_SIDES.forEach(sd=>mk(sd[0].toUpperCase()+sd.slice(1), sd));
+  }
+  function evSyncTabs(){
+    buildViewSwitch();
+    viewSwitch.classList.toggle('show', cutsOn && !evActive);
+    [...viewSwitch.children].forEach(b=>
+      b.classList.toggle('on', (b.dataset.side||null)===evActive));
+    evTabTop.classList.toggle('on', !evActive);
+    [...elevPanel.querySelectorAll('.ev-tab[data-side]')].forEach(b=>
+      b.classList.toggle('on', b.dataset.side===evActive));
+    evSkewBtn.classList.toggle('active', evSkew);
+    const v=evActive?evView(evActive):null;
+    const has=!!(v && (evSlot==='plan'?v.planUrl:v.photoUrl));
+    evSkewBtn.style.display=has?'':'none';
+    evClearImg.style.display=has?'':'none';
+    evPlanBtn.classList.toggle('active', evSlot==='plan' && !!(v&&v.planUrl));
+    evPhotoBtn.classList.toggle('active', evSlot==='photo' && !!(v&&v.photoUrl));
+  }
+  evTabTop.addEventListener('click', evClose);
+  [...elevPanel.querySelectorAll('.ev-tab[data-side]')].forEach(b=>
+    b.addEventListener('click', ()=>evOpen(b.dataset.side)));
+
+  evExag.addEventListener('click', ()=>{
+    if(!evActive) return;
+    const v=evView(evActive), G=evGeom(evActive);
+    const i=EXAG_STEPS.indexOf(G.exag);
+    v.vertExag = EXAG_STEPS[(i+1) % EXAG_STEPS.length];
+    evSaveSide(evActive, {vertExag:v.vertExag});
+    evRender();
+  });
+  evPlanBtn.addEventListener('click', ()=>{ evSlot='plan';  evSyncTabs(); evFile.click(); });
+  evPhotoBtn.addEventListener('click', ()=>{ evSlot='photo'; evSyncTabs(); evFile.click(); });
+  evSkewBtn.addEventListener('click', ()=>{ evSkew=!evSkew; evSyncTabs(); evRender(); });
+  evClearImg.addEventListener('click', ()=>{
+    if(!evActive) return;
+    const v=evView(evActive);
+    if(!confirm('Remove this '+(evSlot==='plan'?'elevation plan':'photo')+'?')) return;
+    if(evSlot==='plan'){ v.planUrl=null; v.planCorners=null; evPlanImg.src=''; }
+    else { v.photoUrl=null; v.photoCorners=null; evPhotoImg.src=''; }
+    if(sessionId) apiDelete('/sessions/'+sessionId+'/elevation-views/'+evActive+'/'+evSlot);
+    evSkew=false; evSyncTabs(); evRender();
+  });
+  evFile.addEventListener('change', e=>{
+    const f=e.target.files[0]; e.target.value='';
+    if(!f || !evActive) return;
+    const side=evActive, slot=evSlot, v=evView(side);
+    const url=URL.createObjectURL(f);
+    const el = slot==='plan' ? evPlanImg : evPhotoImg;
+    el.onload=()=>{
+      const G=evGeom(side);
+      const corners=evDefaultCorners(G, el);
+      if(slot==='plan'){ v.planUrl=url; v.planCorners=corners; }
+      else { v.photoUrl=url; v.photoCorners=corners; }
+      evSkew=true; evSyncTabs(); evRender();
+      if(sessionId) apiUpload('/sessions/'+sessionId+'/elevation-views/'+side+'/'+slot, f,
+        {corners:corners, opacity: slot==='plan'? v.planOpacity : v.photoOpacity})
+        .then(row=>{ if(row && row.url){ if(slot==='plan') v.planUrl=row.url; else v.photoUrl=row.url; } });
+    };
+    el.src=url;
+  });
+  window.addEventListener('resize', ()=>{ if(evActive) evRender(); });
+
   // ---------- review / adjust on the map ----------
   function elevReset(){
     elevClearLayers();
     elevPoints=[]; elevShots=[]; elevSlopes=[];
     elevActiveObs=null; elevSelected=null;
+    evClose(); cutsClear(); cutsOn=false; cutLocked=false;
+    cutPivot=null; cutRot=0; cutOffsets={north:0, south:0, east:0, west:0}; evViews={};
+    if(cutsBtn){ cutsBtn.classList.remove('active'); cutsBtn.textContent='Section cuts'; }
     slopeArming=false; slopeFirstId=null;
     if(slopeBtn){ slopeBtn.classList.remove('arm'); slopeBtn.textContent='Slope'; }
     gradeOn=false; gradeObsId=null; dwellStart=0;
