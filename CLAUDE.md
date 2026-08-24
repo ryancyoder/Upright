@@ -296,9 +296,48 @@ to the point. Without that photo a yard full of "Target 3" pins is
 impossible to place afterwards.
 
 Pressing the button again ends the mode, restores tilt-to-map, opens the
-survey bar and fits the map to the survey. The bar is status plus **Done** —
-there are no manual add-point buttons, because every point comes from a shot;
-a point with no shot has no elevation and is just clutter.
+survey bar and fits the map to the survey. The bar is status, **Sets** and
+**Done** — there are no manual add-point buttons, because every point comes
+from a shot; a point with no shot has no elevation and is just clutter.
+
+### Sets
+
+A **set** is one observation position plus the targets shot from it. Targets
+carry `set_observation_id` so a set survives its shots being deleted (a
+reshoot) and can be hidden, locked or removed as a unit. The anchor belongs
+to *every* set, so it is never hidden by a set operation and carries its own
+lock.
+
+The **Sets** panel lists each set with its targets nested underneath:
+
+- **Hide / Show** — purely visual, and it changes no number, since each
+  target is computed from its own observation. Hidden sets drop out of the
+  map *and* the filmstrip.
+- **Lock / Unlock** — stops the set's pins being dragged once positioned.
+  This is what guards a finished survey against a stray thumb.
+- **Delete** — the observation, its shots and its targets. One server-side
+  DELETE does the lot: the FKs from targets (`set_observation_id`) and shots
+  (`observation_id`) both cascade, and the reference photos are purged from
+  Storage first so nothing is orphaned.
+- **Add shots** — resume the set, adding more targets to it.
+- Per target: **Reshoot** (replace its sightings) and **Remove**.
+
+**Resuming or reshooting re-establishes the anchor first, and checks it.**
+Every target in a set is measured against that set's anchor angle, which is
+only valid for the stance it was taken from. So the fresh anchor shot is
+compared with the one already on file, and if it differs by more than
+`ANCHOR_DRIFT_DEG` the shot is **refused** — you are not standing where you
+were, and anything shot now would silently disagree with the targets already
+in the set. The refusal sets `gradeBlocked`, which stops the dwell and the
+re-arm handler; without that the warning was overwritten a fraction of a
+second later and the user never saw it. The fix is to start a NEW set, which
+shares the anchor and cross-checks it (`N obs ± agree`).
+
+Grade mode can now be entered **from the map** (Add shots / Reshoot), so it
+forces the camera view on entry and syncs `currentlyUpright` — the tilt lock
+means raising the iPad will not bring the camera back by itself, and leaving
+the state machine stale meant lowering it afterwards never brought the map
+back either.
 
 **Shot points start `placed=false`** at a provisional position fanned around
 the observation, and their elevation reads *place pin* rather than a number —

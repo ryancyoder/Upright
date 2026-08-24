@@ -408,7 +408,17 @@
   .hist-when{font-size:12px; color:var(--dim); margin-top:3px;}
   .hist-sum{font-size:12px; color:var(--dim); margin-top:3px;}
   .hist-sum .warn{color:var(--live);}
-  .hist-actions{flex:0 0 auto; display:flex; gap:8px;}
+  .hist-actions{flex:0 0 auto; display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end;}
+  /* Targets sit under their set, indented, so the grouping is obvious. */
+  .set-target{padding-left:34px; background:rgba(255,255,255,0.02);}
+  .set-target .hist-title{font-size:13px; font-weight:400;}
+  .hist-row.dim{opacity:0.45;}
+  .set-flag{
+    font-size:10px; font-weight:700; letter-spacing:0.06em; text-transform:uppercase;
+    color:var(--dim); border:1px solid var(--line); border-radius:100px;
+    padding:1px 7px; margin-left:7px; white-space:nowrap;
+  }
+  .hist-btn.danger{border-color:var(--live); color:var(--live);}
   .hist-btn{
     padding:9px 14px; border-radius:100px; border:1px solid var(--line);
     background:transparent; color:var(--ink); font-size:12px; font-weight:700; white-space:nowrap;
@@ -617,6 +627,7 @@
       <div class="elev-bar" id="elevBar">
         <span class="elev-status" id="elevStatus"></span>
         <div class="elev-actions">
+          <button class="mt-btn" id="elevSets">Sets</button>
           <button class="mt-btn" id="elevExit">Done</button>
         </div>
       </div>
@@ -685,6 +696,17 @@
       <div class="hist-list" id="propList"></div>
     </div>
 
+    <div class="history-panel" id="setsPanel">
+      <div class="review-head">
+        <span class="title">Grade sets</span>
+        <div class="review-head-actions">
+          <button class="review-close" id="setsClose">Close</button>
+        </div>
+      </div>
+      <div class="hist-status" id="setsStatus"></div>
+      <div class="hist-list" id="setsList"></div>
+    </div>
+
     <div class="review-panel" id="reviewPanel">
       <div class="review-head">
         <span class="title">Session review</span>
@@ -740,7 +762,9 @@
         sightOverlay=$('sightOverlay'), sightMsg=$('sightMsg'), sightAngle=$('sightAngle'),
         sightSteady=$('sightSteady'), gradeBtn=$('gradeBtn'),
         sightDwell=$('sightDwellFill'),
-        elevBar=$('elevBar'), elevStatus=$('elevStatus'),
+        elevBar=$('elevBar'), elevStatus=$('elevStatus'), elevSets=$('elevSets'),
+        setsPanel=$('setsPanel'), setsList=$('setsList'), setsStatus=$('setsStatus'),
+        setsClose=$('setsClose'),
         elevExit=$('elevExit'),
         annoDraw=$('annoDraw'), drawWrap=$('drawWrap'), drawCanvas=$('drawCanvas'),
         drawSwatches=$('drawSwatches'), drawUndo=$('drawUndo'), drawClear=$('drawClear'), drawDone=$('drawDone'),
@@ -798,6 +822,13 @@
       headers:{'Authorization':'Bearer '+SUPABASE_ANON_KEY}
     }).then(r=> r.ok ? r.json() : Promise.reject(new Error('HTTP '+r.status)))
       .catch(e=>{ console.warn('[upright-api] GET '+path+' failed', e); return null; });
+  }
+  function apiDelete(path){
+    return fetch(API_BASE+path, {
+      method:'DELETE',
+      headers:{'Authorization':'Bearer '+SUPABASE_ANON_KEY}
+    }).then(r=> r.ok ? r.json().catch(()=>({ok:true})) : Promise.reject(new Error('HTTP '+r.status)))
+      .catch(e=>{ console.warn('[upright-api] DELETE '+path+' failed', e); return null; });
   }
   function apiPatch(path, bodyObj){
     return fetch(API_BASE+path, {
@@ -1729,6 +1760,8 @@
       id:e.id, remoteId:e.id, kind:e.kind, label:e.label, lat:e.lat, lng:e.lng,
       gpsLat:e.gps_lat, gpsLng:e.gps_lng, placed:e.placed!==false,
       photoUrl:e.photoUrl||null, photoLocal:null, marker:null,
+      setObservationId:e.set_observation_id||null, setSent:true,
+      hidden:!!e.hidden, locked:!!e.locked,
       // Rebuild the timeline offset so grade shots interleave with the photos.
       offset: (startedMs && e.created_at) ? (new Date(e.created_at).getTime()-startedMs) : null
     }));
@@ -2385,7 +2418,7 @@
     }));
     elevPoints.forEach(pt=>{
       const src=pt.photoUrl||pt.photoLocal;
-      if(!src) return;
+      if(!src || isHidden(pt)) return;
       const badge = pt.kind==='anchor' ? 'A'
                   : 'T'+(pt.label||'').replace(/[^0-9]/g,'');
       items.push({
@@ -2696,6 +2729,12 @@
   let elevPoints=[], elevShots=[];
   let elevSurveyOn=false, elevActiveObs=null, elevSelected=null;
   let gradeOn=false, gradeObsId=null, gradeArmed=true, dwellStart=0, lastHeading=null;
+  let gradeResuming=false, gradeReshootId=null, gradeAnchorBaseline=null, gradeBlocked=false;
+  // How far a resumed set's fresh anchor shot may differ from the one already
+  // on file before we call the stance into question. Every target in a set is
+  // measured against that set's anchor angle, so a changed stance silently
+  // shifts all of them.
+  const ANCHOR_DRIFT_DEG=0.5;
   const tiltSamples=[];
   const TILT_WINDOW_MS=800;   // averaged into one shot
   // 0.4 was unusably tight for a handheld iPad. The shot is the MEAN of the
@@ -2801,6 +2840,7 @@
     if(!map) return;
     elevClearLayers();
     elevPoints.forEach(pt=>{
+      if(isHidden(pt)) return;
       const isObs=pt.kind==='observation', isAnchor=pt.kind==='anchor';
       const colour=isObs?'#8b887f':isAnchor?'#5a7a63':'#c4432b';
       const e=elevationOf(pt.id);
@@ -2814,7 +2854,7 @@
                + (value?'<span>'+value+'</span>':'')
                + '</div>';
       const m=L.marker([pt.lat,pt.lng],{
-        draggable:true,
+        draggable:!isLocked(pt),
         icon:L.divIcon({className:'', html:html, iconSize:[0,0], iconAnchor:[0,0]})
       }).addTo(map);
       // The reference photo is what makes placing the pin possible at all.
@@ -2880,23 +2920,41 @@
   }
 
   // ---------- grade mode: shoot first ----------
-  function gradeSetMode(on){
+  function gradeSetMode(on, resumeObsId){
     gradeOn=on;
     gradeBtn.classList.toggle('on', on);
     gradeBtn.innerHTML = on ? 'END<br>GRADE' : 'SHOOT<br>GRADE';
     sightOverlay.classList.toggle('show', on);
     if(on){
-      // Log where we are standing NOW. GPS is coarse but it is a real
-      // position; everything else starts provisional.
-      const ll = lastFix ? L.latLng(lastFix.coords.latitude, lastFix.coords.longitude)
-                         : (map ? map.getCenter() : L.latLng(41.32,-87.20));
-      const obs=elevAddPoint('observation', ll, true,
-        lastFix?{lat:lastFix.coords.latitude,lng:lastFix.coords.longitude}:null);
-      gradeObsId=obs.id; elevActiveObs=obs.id;
+      if(resumeObsId && elevPoint(resumeObsId)){
+        gradeObsId=resumeObsId;
+      } else {
+        // Log where we are standing NOW. GPS is coarse but it is a real
+        // position; everything else starts provisional.
+        const ll = lastFix ? L.latLng(lastFix.coords.latitude, lastFix.coords.longitude)
+                           : (map ? map.getCenter() : L.latLng(41.32,-87.20));
+        const obs=elevAddPoint('observation', ll, true,
+          lastFix?{lat:lastFix.coords.latitude,lng:lastFix.coords.longitude}:null);
+        gradeObsId=obs.id;
+        gradeResuming=false; gradeReshootId=null; gradeAnchorBaseline=null;
+      }
+      gradeBlocked=false;
+      elevActiveObs=gradeObsId;
       gradeArmed=true; dwellStart=0;
+      // Grade mode can be entered from the map (Add shots / Reshoot), and the
+      // tilt lock means raising the iPad will NOT bring the camera back by
+      // itself. Force the camera view on entry or the user is left aiming at
+      // a map.
+      showMap(false);
+      if(sessionActive && isPausedFlat) resumeRec();
+      // Keep the tilt state machine in step with the view we just forced.
+      // Without this it still believes the iPad is flat, so lowering it after
+      // grade mode produces no transition and the map never comes back.
+      currentlyUpright=true; candidateState=true; candidateSince=Date.now();
       gradeStatus();
     } else {
       gradeObsId=null; dwellStart=0;
+      gradeResuming=false; gradeReshootId=null; gradeAnchorBaseline=null; gradeBlocked=false;
       sightDwell.style.width='0%';
       if(map){
         elevRenderAll();
@@ -2909,28 +2967,41 @@
       }
       elevSetSurvey(true);
       renderStrip();
+      if(setsPanel.classList.contains('show')) renderSets();
     }
   }
 
   function gradeStatus(msg){
+    if(msg){ sightMsg.innerHTML=msg; return; }
     const anchor=elevAnchorPoint();
     const shotHere=elevShots.filter(x=>x.observationId===gradeObsId).length;
     const anchorShotHere=anchor && elevShots.some(x=>x.observationId===gradeObsId && x.pointId===anchor.id);
-    sightMsg.innerHTML = msg || (!anchorShotHere
-      ? 'Aim at your <b>ANCHOR</b> — the point that becomes 0.00\u2032 — and hold steady'
-      : 'Aim at a <b>target</b> and hold steady &nbsp;·&nbsp; '+shotHere+' shot'+(shotHere===1?'':'s')+' from here');
+    const needAnchor = !anchorShotHere || (gradeResuming && gradeAnchorBaseline!==null);
+    if(needAnchor){
+      sightMsg.innerHTML = gradeResuming
+        ? 'Re-sight the <b>ANCHOR</b> first — this set\u2019s targets are measured against it, '
+          + 'so it has to be re-established from where you are standing now'
+        : 'Aim at your <b>ANCHOR</b> — the point that becomes 0.00\u2032 — and hold steady';
+      return;
+    }
+    const re=gradeReshootId && elevPoint(gradeReshootId);
+    sightMsg.innerHTML = re
+      ? 'Re-shooting <b>'+re.label+'</b> — its earlier shots will be replaced'
+      : 'Aim at a <b>target</b> and hold steady &nbsp;·&nbsp; '+shotHere+' shot'+(shotHere===1?'':'s')+' from here';
   }
 
-  function elevAddPoint(kind, latlng, placed, gps){
+  function elevAddPoint(kind, latlng, placed, gps, setObsId){
     const pt={ id:'local-'+uuid(), remoteId:null, kind:kind, label:elevLabelFor(kind),
                lat:latlng.lat, lng:latlng.lng, placed:!!placed, photoUrl:null,
                offset: sessionT0 ? (Date.now()-sessionT0) : null,
+               setObservationId: setObsId || null, hidden:false, locked:false,
                gpsLat:gps?gps.lat:null, gpsLng:gps?gps.lng:null, marker:null };
     elevPoints.push(pt);
     if(sessionId){
       apiPost('/sessions/'+sessionId+'/elevation-points', {
         kind:pt.kind, label:pt.label, lat:pt.lat, lng:pt.lng,
-        gpsLat:pt.gpsLat, gpsLng:pt.gpsLng, placed:pt.placed
+        gpsLat:pt.gpsLat, gpsLng:pt.gpsLng, placed:pt.placed,
+        setObservationId: null   // filled in once the observation has a remote id
       }).then(row=>{ if(row && row.id){ pt.remoteId=row.id; elevFlushPending(); } });
     }
     return pt;
@@ -2985,6 +3056,15 @@
   function elevFlushPending(){
     elevPoints.forEach(pt=>{ if(pt.remoteId && pt.pendingPhoto) elevUploadPhoto(pt); });
     if(!sessionId) return;
+    // A target is created in the same breath as its observation, so its set id
+    // could not be sent at insert time. Send it as soon as both ids exist.
+    elevPoints.forEach(pt=>{
+      if(pt.kind!=='target' || !pt.remoteId || !pt.setObservationId || pt.setSent) return;
+      const obs=elevPoint(pt.setObservationId);
+      if(!obs || !obs.remoteId) return;
+      pt.setSent=true;
+      apiPatch('/elevation-points/'+pt.remoteId, {setObservationId: obs.remoteId});
+    });
     elevShots.forEach(sh=>{
       if(sh.remoteId || sh.sending) return;
       const obs=elevPoint(sh.observationId), pt=elevPoint(sh.pointId);
@@ -3008,10 +3088,40 @@
     // First shot from this position is always the anchor: either it creates
     // the datum, or it re-establishes it for a new standing position (whose
     // horizontal plane and device height differ, so the old angle is useless).
+    const needAnchor = !anchorShotHere || (gradeResuming && gradeAnchorBaseline!==null);
     let pt;
-    if(!anchor) pt=elevAddPoint('anchor', provisionalLatLng(obs, 0), false, null);
-    else if(!anchorShotHere) pt=anchor;
-    else pt=elevAddPoint('target', provisionalLatLng(obs, elevPoints.length), false, null);
+    if(!anchor) pt=elevAddPoint('anchor', provisionalLatLng(obs, 0), false, null, null);
+    else if(needAnchor){
+      pt=anchor;
+      // Resuming: compare the fresh anchor angle with the one this set was
+      // built on. A real difference means we are not standing where we were,
+      // and every target already in the set would shift with it.
+      if(gradeResuming && gradeAnchorBaseline!==null){
+        const drift=Math.abs(angle-gradeAnchorBaseline);
+        gradeResuming=false; gradeAnchorBaseline=null;
+        if(drift>ANCHOR_DRIFT_DEG){
+          // Nothing has been pushed yet, so there is nothing to undo -- an
+          // earlier version popped here and silently destroyed the PREVIOUS
+          // shot. Just refuse, and block further shooting so the warning
+          // cannot be overwritten by the re-arm handler a moment later.
+          gradeBlocked=true;
+          gradeArmed=false; dwellStart=0; sightDwell.style.width='0%';
+          gradeStatus('<b>Stance has moved</b> — the anchor now reads '+drift.toFixed(1)
+            +'\u00b0 off this set\u2019s original. Shots taken now would not match the '
+            +'targets already in it. Press END GRADE and start a NEW set instead.');
+          return;
+        }
+      }
+    }
+    else if(gradeReshootId && elevPoint(gradeReshootId)){
+      pt=elevPoint(gradeReshootId);
+      // "Replace" means replace: drop this point's earlier sightings so the
+      // new one stands alone rather than being averaged with the old aim.
+      elevShots=elevShots.filter(x=>x.pointId!==pt.id);
+      if(pt.remoteId) apiDelete('/elevation-points/'+pt.remoteId+'/shots');
+      gradeReshootId=null;
+    }
+    else pt=elevAddPoint('target', provisionalLatLng(obs, elevPoints.length), false, null, obs.id);
 
     const shot={ id:'local-'+uuid(), observationId:obs.id, pointId:pt.id,
                  angleDeg:angle, angleSpreadDeg:spread, distanceM:null };
@@ -3020,6 +3130,7 @@
     const snap=gradeSnapshot();
     if(snap){ pt.pendingPhoto=snap; pt.photoLocal=snap; pt.photoUrl=snap; }
     elevFlushPending();
+    if(setsPanel.classList.contains('show')) renderSets();
 
     snapFlash.classList.remove('go'); void snapFlash.offsetWidth; snapFlash.classList.add('go');
     gradeArmed=false; dwellStart=0;
@@ -3037,6 +3148,7 @@
     sightSteady.textContent = steady ? (gradeArmed?'HOLDING':'MOVE OFF TO RE-ARM') : 'HOLD STEADY';
     sightSteady.classList.toggle('ready', steady && gradeArmed);
     if(!gradeOn) return;
+    if(gradeBlocked){ sightDwell.style.width='0%'; return; }
 
     // Re-arm only once the user has genuinely moved off the last point,
     // otherwise one long hold would machine-gun shots at the same spot.
@@ -3055,6 +3167,162 @@
 
   gradeBtn.addEventListener('click', ()=> gradeSetMode(!gradeOn));
 
+  // ---------- sets: one observation and the targets shot from it ----------
+  function setObsOf(pt){
+    if(!pt) return null;
+    if(pt.kind==='observation') return pt;
+    return pt.setObservationId ? elevPoint(pt.setObservationId) : null;
+  }
+  function isHidden(pt){
+    if(pt.kind==='anchor') return false;    // the anchor belongs to every set
+    const obs=setObsOf(pt);
+    return !!(obs && obs.hidden);
+  }
+  function isLocked(pt){
+    if(pt.kind==='anchor') return !!pt.locked;
+    const obs=setObsOf(pt);
+    return !!(obs && obs.locked);
+  }
+  function setsOf(){
+    return elevPoints.filter(p=>p.kind==='observation').map(obs=>({
+      obs: obs,
+      targets: elevPoints.filter(t=>t.kind==='target' && t.setObservationId===obs.id),
+      shots: elevShots.filter(sh=>sh.observationId===obs.id).length
+    }));
+  }
+  function patchPoint(pt, body){
+    if(pt.remoteId) apiPatch('/elevation-points/'+pt.remoteId, body);
+  }
+
+  function setHidden(obs, hidden){
+    obs.hidden=hidden; patchPoint(obs, {hidden:hidden});
+    elevRenderAll(); renderStrip(); renderSets(); elevStatusUpdate();
+  }
+  function setLocked(obs, locked){
+    obs.locked=locked; patchPoint(obs, {locked:locked});
+    elevRenderAll(); renderSets(); elevStatusUpdate();
+  }
+  function setDelete(obs){
+    const set=setsOf().find(x=>x.obs.id===obs.id);
+    const n=set?set.targets.length:0;
+    if(!confirm('Delete '+obs.label+' and its '+n+' target'+(n===1?'':'s')+'? This cannot be undone.')) return;
+    const doomed=new Set([obs.id].concat(set?set.targets.map(t=>t.id):[]));
+    if(obs.remoteId) apiDelete('/elevation-points/'+obs.remoteId);   // cascades server-side
+    elevPoints.filter(p=>doomed.has(p.id)).forEach(p=>{
+      if(p.marker && map){ try{ map.removeLayer(p.marker); }catch(e){} }
+    });
+    elevPoints=elevPoints.filter(p=>!doomed.has(p.id));
+    elevShots=elevShots.filter(sh=>!doomed.has(sh.pointId) && sh.observationId!==obs.id);
+    if(elevActiveObs===obs.id) elevActiveObs=null;
+    if(doomed.has(elevSelected)) elevSelected=null;
+    elevRenderAll(); renderStrip(); renderSets(); elevStatusUpdate();
+  }
+  function targetDelete(pt){
+    if(!confirm('Remove '+pt.label+'?')) return;
+    if(pt.remoteId) apiDelete('/elevation-points/'+pt.remoteId);
+    if(pt.marker && map){ try{ map.removeLayer(pt.marker); }catch(e){} }
+    elevPoints=elevPoints.filter(p=>p.id!==pt.id);
+    elevShots=elevShots.filter(sh=>sh.pointId!==pt.id);
+    if(elevSelected===pt.id) elevSelected=null;
+    elevRenderAll(); renderStrip(); renderSets(); elevStatusUpdate();
+  }
+
+  // Resume a set, or re-shoot one of its targets. Both need the anchor
+  // re-established first: every target in a set is measured against that
+  // set's anchor angle, which is only valid for the stance it was taken from.
+  function setResume(obs, reshootPt){
+    const anchor=elevAnchorPoint();
+    const prior=elevShots.filter(x=>x.observationId===obs.id && anchor && x.pointId===anchor.id);
+    gradeAnchorBaseline = prior.length ? mean(prior.map(x=>x.angleDeg)) : null;
+    gradeResuming=true;
+    gradeReshootId = reshootPt ? reshootPt.id : null;
+    closeSets();
+    gradeSetMode(true, obs.id);
+  }
+
+  function renderSets(){
+    const sets=setsOf();
+    const anchor=elevAnchorPoint();
+    setsList.innerHTML='';
+    if(!sets.length && !anchor){
+      setsStatus.textContent='No grade sets yet — hold the iPad up and use SHOOT GRADE.';
+      return;
+    }
+    setsStatus.innerHTML=sets.length+' set'+(sets.length===1?'':'s')
+      + ' · a set is one standing position and everything shot from it';
+
+    const row=(cls)=>{ const d=document.createElement('div'); d.className='hist-row'+(cls?' '+cls:''); return d; };
+    const btn=(label, cls, fn)=>{ const b=document.createElement('button');
+      b.className='hist-btn'+(cls?' '+cls:''); b.textContent=label;
+      b.addEventListener('click', fn); return b; };
+
+    if(anchor){
+      const r=row(); const main=document.createElement('div'); main.className='hist-main';
+      const t=document.createElement('div'); t.className='hist-title';
+      t.innerHTML='Anchor <span class="set-flag">0.00\u2032 datum</span>'
+                + (anchor.locked?'<span class="set-flag">locked</span>':'');
+      main.appendChild(t);
+      const sub=document.createElement('div'); sub.className='hist-sum';
+      sub.textContent='Shared by every set — moving it re-computes the whole survey';
+      main.appendChild(sub);
+      r.appendChild(main);
+      const acts=document.createElement('div'); acts.className='hist-actions';
+      acts.appendChild(btn(anchor.locked?'Unlock':'Lock','',()=>{
+        anchor.locked=!anchor.locked; patchPoint(anchor,{locked:anchor.locked});
+        elevRenderAll(); renderSets();
+      }));
+      r.appendChild(acts); setsList.appendChild(r);
+    }
+
+    sets.forEach(set=>{
+      const o=set.obs;
+      const r=row(o.hidden?'dim':'');
+      const main=document.createElement('div'); main.className='hist-main';
+      const t=document.createElement('div'); t.className='hist-title';
+      t.innerHTML=(o.label||'Observation')
+        + (o.hidden?'<span class="set-flag">hidden</span>':'')
+        + (o.locked?'<span class="set-flag">locked</span>':'');
+      main.appendChild(t);
+      const sub=document.createElement('div'); sub.className='hist-sum';
+      const unplaced=set.targets.filter(x=>!x.placed).length;
+      sub.textContent=set.targets.length+' target'+(set.targets.length===1?'':'s')
+        + ' · '+set.shots+' shot'+(set.shots===1?'':'s')
+        + (unplaced?' · '+unplaced+' still to place':'');
+      main.appendChild(sub);
+      r.appendChild(main);
+      const acts=document.createElement('div'); acts.className='hist-actions';
+      acts.appendChild(btn(o.hidden?'Show':'Hide','',()=>setHidden(o,!o.hidden)));
+      acts.appendChild(btn(o.locked?'Unlock':'Lock','',()=>setLocked(o,!o.locked)));
+      acts.appendChild(btn('Add shots','go',()=>setResume(o,null)));
+      acts.appendChild(btn('Delete','danger',()=>setDelete(o)));
+      r.appendChild(acts);
+      setsList.appendChild(r);
+
+      set.targets.forEach(pt=>{
+        const tr=row('set-target'+(o.hidden?' dim':''));
+        const m=document.createElement('div'); m.className='hist-main';
+        const tt=document.createElement('div'); tt.className='hist-title';
+        tt.textContent=pt.label||'Target';
+        m.appendChild(tt);
+        const e=elevationOf(pt.id);
+        const ts=document.createElement('div'); ts.className='hist-sum';
+        ts.textContent=fmtElev(e)+(elevConfidence(e)?' · '+elevConfidence(e):'');
+        m.appendChild(ts);
+        tr.appendChild(m);
+        const ta=document.createElement('div'); ta.className='hist-actions';
+        ta.appendChild(btn('Reshoot','',()=>setResume(o,pt)));
+        ta.appendChild(btn('Remove','danger',()=>targetDelete(pt)));
+        tr.appendChild(ta);
+        setsList.appendChild(tr);
+      });
+    });
+  }
+
+  function openSets(){ setsPanel.classList.add('show'); renderSets(); }
+  function closeSets(){ setsPanel.classList.remove('show'); }
+  elevSets.addEventListener('click', openSets);
+  setsClose.addEventListener('click', closeSets);
+
   // ---------- review / adjust on the map ----------
   function elevReset(){
     elevClearLayers();
@@ -3062,7 +3330,9 @@
     elevActiveObs=null; elevSelected=null;
     gradeOn=false; gradeObsId=null; dwellStart=0;
     gradeBtn.classList.remove('on'); gradeBtn.innerHTML='SHOOT<br>GRADE';
+    gradeResuming=false; gradeReshootId=null; gradeAnchorBaseline=null; gradeBlocked=false;
     sightOverlay.classList.remove('show');
+    closeSets();
   }
   function elevSetSurvey(on){
     elevSurveyOn=on;
