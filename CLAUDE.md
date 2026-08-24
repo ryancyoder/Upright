@@ -350,7 +350,10 @@ control only appears once nothing is measured against it any more —
 deleting a live anchor would quietly invalidate every elevation in the
 survey.
 
-The bar underneath is status plus **Done**.
+Status plus **Done** float over the map as a small pill at the top centre
+(`.elev-bar`), not as a bar at the bottom. As a bottom bar it was absolutely
+positioned over the filmstrip and the map toolbar and cut into both. Keep it
+sized to its content — the map has to show through.
 
 **Resuming or reshooting re-establishes the anchor first, and checks it.**
 Every target in a set is measured against that set's anchor angle, which is

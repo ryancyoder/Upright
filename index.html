@@ -258,15 +258,25 @@
   .sight-top, .sight-actions, .sight-shoot{pointer-events:auto;}
 
   /* Relative elevation survey */
+  /* Floats over the map instead of taking a bar at the bottom, which cut into
+     the filmstrip and the toolbar below it. Minimal on purpose: one line of
+     status and a Done, sized to its content so the map shows through. */
   .elev-bar{
-    position:absolute; left:0; right:0; bottom:0; z-index:1200;
-    display:none; flex-direction:column; gap:8px;
-    padding:10px 12px calc(env(safe-area-inset-bottom,0px) + 10px);
-    background:rgba(20,20,15,0.94); border-top:1px solid var(--line);
+    position:absolute; z-index:1200;
+    top:calc(env(safe-area-inset-top,0px) + 10px);
+    left:50%; transform:translateX(-50%);
+    max-width:min(600px, calc(100% - 110px));
+    display:none; align-items:center; gap:10px;
+    padding:6px 6px 6px 14px; border-radius:999px;
+    background:rgba(18,18,14,0.78);
+    -webkit-backdrop-filter:blur(12px); backdrop-filter:blur(12px);
+    border:1px solid rgba(255,255,255,0.14);
+    box-shadow:0 2px 12px rgba(0,0,0,0.45);
   }
   .elev-bar.show{display:flex;}
-  .elev-status{font-size:13px; line-height:1.4; color:var(--ink); min-height:18px;}
-  .elev-actions{display:flex; gap:8px; flex-wrap:wrap; align-items:center;}
+  .elev-status{font-size:12.5px; line-height:1.35; color:var(--ink); min-width:0;}
+  .elev-actions{display:flex; gap:6px; align-items:center; flex:0 0 auto;}
+  .elev-bar .mt-btn{padding:5px 13px; border-radius:999px; font-size:12px;}
   .mt-btn.go{border-color:var(--flat);}
   .mt-btn:disabled{opacity:0.35;}
   /* Minimal: the glyph plus one line of text. No chrome around it -- a yard
