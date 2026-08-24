@@ -11,6 +11,7 @@
     --bg:#14140f; --bg2:#1c1c15; --line:#33322a;
     --live:#c4432b; --live-glow:rgba(196,67,43,0.35);
     --flat:#5a7a63;
+    --anchor-sight:#e8c33a;   /* the sight is YELLOW while the next shot is the anchor */
   }
   *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
   html,body{height:100%;}
@@ -197,18 +198,32 @@
     background:rgba(0,0,0,0.15);
   }
   .sight-overlay.show{display:flex;}
+  /* One local var drives every stroke, so the whole sight recolours at once:
+     YELLOW while the next shot is the anchor, red once the datum is set and
+     you are shooting targets against it. */
   .sight-cross{
+    --cross:var(--live);
     position:absolute; left:50%; top:50%; width:120px; height:120px;
     transform:translate(-50%,-50%); pointer-events:none;
     background:
-      linear-gradient(var(--live),var(--live)) center/2px 100% no-repeat,
-      linear-gradient(var(--live),var(--live)) center/100% 2px no-repeat;
+      linear-gradient(var(--cross),var(--cross)) center/2px 100% no-repeat,
+      linear-gradient(var(--cross),var(--cross)) center/100% 2px no-repeat;
     opacity:0.9;
   }
   .sight-cross::after{
     content:''; position:absolute; left:50%; top:50%; width:34px; height:34px;
-    transform:translate(-50%,-50%); border:2px solid var(--live); border-radius:50%;
+    transform:translate(-50%,-50%); border:2px solid var(--cross); border-radius:50%;
   }
+  .sight-cross.is-anchor{ --cross:var(--anchor-sight); }
+  /* Benchmark glyph, clear of the crosshair arms, shown only while the sight
+     is armed for the anchor. */
+  .sight-cross-glyph{
+    position:absolute; left:50%; top:calc(50% + 68px);
+    transform:translateX(-50%); display:none; line-height:0;
+    filter:drop-shadow(0 1px 3px rgba(0,0,0,0.9));
+  }
+  .sight-cross.is-anchor .sight-cross-glyph{display:block;}
+  .sight-cross-glyph svg{width:38px; height:38px; display:block;}
   .sight-top{
     margin-top:calc(env(safe-area-inset-top,0px) + 64px);
     display:flex; flex-direction:column; align-items:center; gap:6px;
@@ -624,7 +639,7 @@
     <div class="anno-overlay" id="annoOverlay"></div>
 
     <div class="sight-overlay" id="sightOverlay">
-      <div class="sight-cross"></div>
+      <div class="sight-cross" id="sightCross"><i class="sight-cross-glyph" id="sightCrossGlyph"></i></div>
       <div class="sight-top">
         <div class="sight-msg" id="sightMsg"></div>
         <div class="sight-angle" id="sightAngle">—</div>
@@ -791,7 +806,7 @@
         basemapBtn=$('basemapBtn'), elevBtn=$('elevBtn'),
         sightOverlay=$('sightOverlay'), sightMsg=$('sightMsg'), sightAngle=$('sightAngle'),
         sightSteady=$('sightSteady'), gradeBtn=$('gradeBtn'),
-        sightDwell=$('sightDwellFill'),
+        sightDwell=$('sightDwellFill'), sightCross=$('sightCross'), sightCrossGlyph=$('sightCrossGlyph'),
         elevBar=$('elevBar'), elevStatus=$('elevStatus'),
         elevExit=$('elevExit'),
         annoDraw=$('annoDraw'), drawWrap=$('drawWrap'), drawCanvas=$('drawCanvas'),
@@ -2894,6 +2909,7 @@
   // measured against that set's anchor angle, so a changed stance silently
   // shifts all of them.
   const ANCHOR_DRIFT_DEG=0.5;
+  const ANCHOR_SIGHT='#e8c33a', TARGET_SIGHT='#c4432b';   // must match --anchor-sight / --live
   const tiltSamples=[];
   const TILT_WINDOW_MS=800;   // averaged into one shot
   // 0.4 was unusably tight for a handheld iPad. The shot is the MEAN of the
@@ -3095,7 +3111,7 @@
         const obs=elevAddPoint('observation', ll, true,
           lastFix?{lat:lastFix.coords.latitude,lng:lastFix.coords.longitude}:null);
         gradeObsId=obs.id;
-        gradeResuming=false; gradeReshootId=null; gradeAnchorBaseline=null; gradeNote=''; gradeNote='';
+        gradeResuming=false; gradeReshootId=null; gradeAnchorBaseline=null; gradeNote='';
       }
       elevActiveObs=gradeObsId;
       gradeArmed=true; dwellStart=0;
@@ -3112,7 +3128,7 @@
       gradeStatus();
     } else {
       gradeObsId=null; dwellStart=0;
-      gradeResuming=false; gradeReshootId=null; gradeAnchorBaseline=null; gradeNote=''; gradeNote='';
+      gradeResuming=false; gradeReshootId=null; gradeAnchorBaseline=null; gradeNote='';
       sightDwell.style.width='0%';
       if(map){
         elevRenderAll();
@@ -3128,7 +3144,25 @@
     }
   }
 
+  // The next shot is the anchor when there is no datum yet, when this standing
+  // position has never sighted the one that exists, or when the anchor is being
+  // re-sighted on purpose.
+  function nextShotIsAnchor(){
+    const anchor=elevAnchorPoint();
+    if(!anchor) return true;
+    if(gradeReshootId===anchor.id) return true;
+    return !elevShots.some(x=>x.observationId===gradeObsId && x.pointId===anchor.id);
+  }
+  // Yellow sight + benchmark glyph while the anchor is what you are aiming at;
+  // red once the datum is set and every later shot is a target measured
+  // against it.
+  function paintSight(){
+    const on=nextShotIsAnchor();
+    sightCross.classList.toggle('is-anchor', on);
+    sightCrossGlyph.innerHTML = on ? elevGlyph('anchor', ANCHOR_SIGHT) : '';
+  }
   function gradeStatus(msg){
+    paintSight();
     if(msg){ sightMsg.innerHTML=msg; return; }
     const anchor=elevAnchorPoint();
     const shotHere=elevShots.filter(x=>x.observationId===gradeObsId).length;
@@ -3190,14 +3224,14 @@
 
   // Camera frame with the crosshair burned in, so the pin can be identified
   // later. Without this, a yard full of "Target 3" pins is unplaceable.
-  function gradeSnapshot(){
+  function gradeSnapshot(colour){
     try{
       const c=document.createElement('canvas');
       c.width=liveVideo.videoWidth||1280; c.height=liveVideo.videoHeight||720;
       const x=c.getContext('2d');
       x.drawImage(liveVideo,0,0,c.width,c.height);
       const cx=c.width/2, cy=c.height/2, r=Math.round(Math.min(c.width,c.height)*0.09);
-      x.strokeStyle='#c4432b'; x.lineWidth=Math.max(3, Math.round(c.width/320)); x.beginPath();
+      x.strokeStyle=colour; x.lineWidth=Math.max(3, Math.round(c.width/320)); x.beginPath();
       x.moveTo(cx-r*1.9,cy); x.lineTo(cx-r*0.35,cy); x.moveTo(cx+r*0.35,cy); x.lineTo(cx+r*1.9,cy);
       x.moveTo(cx,cy-r*1.9); x.lineTo(cx,cy-r*0.35); x.moveTo(cx,cy+r*0.35); x.lineTo(cx,cy+r*1.9);
       x.stroke();
@@ -3294,7 +3328,9 @@
                  angleDeg:angle, angleSpreadDeg:spread, distanceM:null };
     elevShots.push(shot);
 
-    const snap=gradeSnapshot();
+    // The burned-in crosshair matches the sight the shot was taken through,
+    // so an anchor frame is recognisable as one in the filmstrip.
+    const snap=gradeSnapshot(pt.kind==='anchor' ? ANCHOR_SIGHT : TARGET_SIGHT);
     if(snap){ pt.pendingPhoto=snap; pt.photoLocal=snap; pt.photoUrl=snap; }
     elevFlushPending();
 

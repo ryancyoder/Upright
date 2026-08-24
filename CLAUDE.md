@@ -445,6 +445,16 @@ popup falls back to it if the Storage URL fails to load.
 Given the fire-and-forget write model and field connectivity, a pin with a
 broken image and no fallback is a real prospect.
 
+**The sight is yellow while the anchor is what you are aiming at**, carrying
+the benchmark glyph under the crosshair, and red for every target after that
+(`ANCHOR_SIGHT` / `TARGET_SIGHT`, mirroring `--anchor-sight` / `--live`).
+`nextShotIsAnchor()` is the single source of that state — no datum yet, this
+standing position has never sighted the one that exists, or the anchor is
+being deliberately re-sighted — and `paintSight()` runs from `gradeStatus()`,
+so every path that updates the message recolours the sight with it. The
+crosshair burned into the captured frame uses the same colour, which makes an
+anchor frame recognisable at a glance in the filmstrip.
+
 Sighting is gated on steadiness (`STEADY_DEG`, sample spread over the same
 800ms window that gets averaged into the shot): HOLD STEADY → HOLDING → fire.
 The gate runs when the overlay opens, not just on the next orientation event.
