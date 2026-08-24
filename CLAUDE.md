@@ -671,8 +671,32 @@ slopes here.
   (`vertical ×3`) or says `true proportion`. **An overlaid photo only aligns at
   ×1** — the tab shows the factor at all times so an exaggerated profile can
   never be mistaken for a measured one.
-- Points **in front of** the cut plane draw solid, points behind draw faded.
-  That split is what sliding a cut actually decides.
+**The four cuts are placed at the four walls; the rectangle they leave is the
+house footprint** — drawn on the map (`cutFootprint()`), so you can see the box
+you are squaring. The default box is deliberately **small**, not sized to
+bracket the survey: a box that swallowed every point would open every elevation
+view empty.
+
+**Each view looks toward the house and has three visibility modes**, cycled on
+one button:
+
+- **Beyond cut** (default) — strictly what lies beyond this view's own plane.
+  The north view shows what is north of the north cut. A point inside the
+  footprint is behind all four planes and appears in no view at all.
+- **Line of sight** — hidden only by what the *house* actually blocks: a point
+  is dropped only if it is behind this cut **and** inside the lateral band
+  between the two perpendicular cuts. Standing south looking north you still
+  see past the house on both sides, and down the side yards — which is what you
+  would really see.
+- **X-ray** — everything, wherever it sits.
+
+A point in the NE corner is north of the north cut *and* east of the east cut,
+so it appears in both those views. That follows from the rule and is intended.
+
+Anything drawn that is **not** strictly beyond its own cut is **faded**, in
+every mode, so a looser mode can never quietly pass itself off as a clean
+section. The note reports `N of M points` and names the mode when it is not
+the strict one.
 
 **Images are placed by four corners, in view coordinates (feet along, feet
 up).** Four corners is a full homography, which is exactly what a facade

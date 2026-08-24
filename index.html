@@ -879,6 +879,7 @@
         <button class="mt-btn" id="evExag">1&times;</button>
         <button class="mt-btn" id="evPlanBtn">Elevation plan</button>
         <button class="mt-btn" id="evPhotoBtn">Photo</button>
+        <button class="mt-btn" id="evXray">X-ray</button>
         <button class="mt-btn" id="evSkewBtn">Adjust image</button>
         <button class="mt-btn" id="evClearImg">Remove image</button>
         <input type="file" id="evFile" accept="image/*" style="display:none">
@@ -1004,7 +1005,7 @@
         elevPanel=$('elevPanel'), evStage=$('evStage'), evSvg=$('evSvg'), viewSwitch=$('viewSwitch'),
         evPlanImg=$('evPlanImg'), evPhotoImg=$('evPhotoImg'), evNote=$('evNote'), evEmpty=$('evEmpty'),
         evTabTop=$('evTabTop'), evExag=$('evExag'), evPlanBtn=$('evPlanBtn'), evPhotoBtn=$('evPhotoBtn'),
-        evSkewBtn=$('evSkewBtn'), evClearImg=$('evClearImg'), evFile=$('evFile'),
+        evSkewBtn=$('evSkewBtn'), evClearImg=$('evClearImg'), evFile=$('evFile'), evXray=$('evXray'),
         sightOverlay=$('sightOverlay'), sightMsg=$('sightMsg'), sightAngle=$('sightAngle'),
         sightSteady=$('sightSteady'), gradeBtn=$('gradeBtn'),
         sightDwell=$('sightDwellFill'), sightCross=$('sightCross'), sightCrossGlyph=$('sightCrossGlyph'),
@@ -4036,6 +4037,16 @@
   let evViews={};                                          // side -> {vertExag, plan*, photo*}
   let cutLayers=[], cutObjs=null, evActive=null, evSkew=false, evSlot='plan';
   let evPan=0, evScale=null, evDragging=null, evSaveTimer=null;
+  // What a view is allowed to show:
+  //   cut   -- strictly what lies beyond this view's own cut plane
+  //   sight -- everything except what the HOUSE hides: a point is blocked only
+  //            if it is beyond this cut AND inside the lateral band between the
+  //            two perpendicular cuts. Standing south looking north you still
+  //            see past the house on both sides, and that is what this models.
+  //   xray  -- everything, wherever it sits
+  const EV_MODES=['cut','sight','xray'];
+  const EV_MODE_LABEL={cut:'Beyond cut', sight:'Line of sight', xray:'X-ray'};
+  let evMode='cut';
 
   function evView(side){
     if(!evViews[side]) evViews[side]={vertExag:null, planUrl:null, planCorners:null, planOpacity:0.6,
@@ -4083,18 +4094,17 @@
     if(!cutPivot){ cutPivot=evDefaultPivot(); cutDefaultOffsets(); }
     return !!cutPivot;
   }
-  // Four cuts through one point is not a useful starting position -- and every
-  // handle lands on top of the pivot. Open them out to a box that brackets the
-  // survey instead.
+  // Four cuts through one point is not a useful starting position -- every
+  // handle lands on the pivot. Open them into a modest box the user then drags
+  // out to the four walls.
+  //
+  // Deliberately SMALL: the box is the house footprint, and each view shows
+  // only what lies outside its own cut. A box sized to bracket the survey would
+  // put every point inside it and every elevation view would open empty.
   function cutDefaultOffsets(){
     if(!cutPivot) return;
-    const pts=elevPoints.filter(p=>p.placed).map(p=>localEN(L.latLng(p.lat,p.lng)));
-    const reach=(v)=>{
-      if(!pts.length) return 15;
-      const d=pts.map(p=>dot(p,v));
-      return Math.max(10, Math.max.apply(null,d.concat([0]))*1.15 + 6);
-    };
-    EV_SIDES.forEach(side=>{ cutOffsets[side]=reach(sideAxes(side).normal); });
+    const d=Math.max(8, Math.min(25, cutSpanM()*0.10));
+    EV_SIDES.forEach(side=>{ cutOffsets[side]=d; });
   }
 
   function evSaveCross(){
@@ -4135,6 +4145,17 @@
   // Held at a fixed SCREEN distance from the pivot, not a fraction of the
   // viewport in metres -- that put it off the edge of the map at most zooms,
   // where it cannot be grabbed at all.
+  // The rectangle enclosed by the four planes. Only meaningful while all four
+  // stand outward from the pivot -- drag one past the middle and there is no
+  // enclosed region to draw.
+  function cutFootprint(){
+    if(!cutPivot) return null;
+    const n=cutOffsets.north, so=cutOffsets.south, e=cutOffsets.east, w=cutOffsets.west;
+    if(!(n+so > 1) || !(e+w > 1)) return null;
+    const nh=nHat(), eh=eHat();
+    const at=(alongN, alongE)=>fromEN(nh.e*alongN + eh.e*alongE, nh.n*alongN + eh.n*alongE);
+    return [at(n, -w), at(n, e), at(-so, e), at(-so, -w)];
+  }
   function cutRotHandleLL(){
     if(!map || !cutPivot) return cutPivot;
     const c=map.latLngToContainerPoint(cutPivot), th=rad(cutRot), d=110;
@@ -4204,6 +4225,12 @@
     rot.on('dragend', ()=>{ cutsRefresh(); evSaveCross(); });
     cutObjs.rot=rot; cutLayers.push(rot);
 
+    // What the four cuts leave in the middle IS the footprint. Drawing it makes
+    // the tool legible: you can see the box you are squaring to the walls.
+    const foot=L.polygon(cutFootprint()||[], {className:'cut-foot', color:'#c9a227',
+      weight:1, opacity:0.55, fillOpacity:0.10, interactive:false}).addTo(map);
+    cutObjs.foot=foot; cutLayers.push(foot);
+
     const pv=L.marker(cutPivot,{draggable:!cutLocked, icon:cutHandleIcon(' pivot')}).addTo(map);
     pv.on('drag', ()=>{ cutPivot=pv.getLatLng(); cutsRefresh('pivot'); });
     pv.on('dragend', ()=>{ cutsRefresh(); evSaveCross(); });
@@ -4222,6 +4249,7 @@
     });
     if(dragging!=='rot') cutObjs.rot.setLatLng(cutRotHandleLL());
     if(dragging!=='pivot') cutObjs.pivot.setLatLng(cutPivot);
+    if(cutObjs.foot) cutObjs.foot.setLatLngs(cutFootprint()||[]);
   }
   function cutsRender(){ cutsBuild(); }
 
@@ -4255,12 +4283,29 @@
       const ft = e.isAnchor ? 0 : e.ft;
       if(typeof ft!=='number' || !isFinite(ft)) return;
       const p=localEN(L.latLng(pt.lat, pt.lng));
-      out.push({ pt:pt, ft:ft,
-                 x: dot(p, ax.along)/M_PER_FT,
-                 // Positive = on the viewer's side of the cut plane. The slider
-                 // is what decides that split, which is the whole reason to
-                 // slide it.
-                 depth: (dot(p, ax.normal) - off)/M_PER_FT });
+      // A view looks TOWARD the house and shows only what lies beyond its own
+      // cut: the north view shows what is north of the north cut. A point
+      // inside the footprint is behind all four planes, so it appears in no
+      // view at all -- unless X-ray is on.
+      const beyond = (dot(p, ax.normal) - off) / M_PER_FT;
+      // Inside the lateral band = between the two cuts perpendicular to this
+      // one, i.e. within the footprint's width as seen from here.
+      const perp = (side==='north'||side==='south') ? ['east','west'] : ['north','south'];
+      const inBand = perp.every(q=>{
+        const qa=sideAxes(q);
+        return dot(p, qa.normal) <= sideOffset(q);
+      });
+      const blocked = (beyond <= 0) && inBand;      // the house is in the way
+      out.push({ pt:pt, ft:ft, x: dot(p, ax.along)/M_PER_FT,
+                 beyond: beyond, inBand: inBand, blocked: blocked,
+                 // strict = genuinely in front of this view's own cut. Drawn
+                 // solid. Anything included only because the mode is looser
+                 // than that is faded, so a looser mode never quietly passes
+                 // itself off as a clean section.
+                 strict: beyond > 0,
+                 shown: evMode==='xray' ? true
+                      : evMode==='sight' ? !blocked
+                      : beyond > 0 });
     });
     return out.sort((a,b)=>a.x-b.x);
   }
@@ -4277,7 +4322,8 @@
     return best;
   }
   function evGeom(side){
-    const v=evView(side), pts=evProject(side);
+    const v=evView(side), all=evProject(side);
+    const pts = evMode==='xray' ? all : all.filter(p=>p.shown);
     const W=Math.max(1, evStage.clientWidth), H=Math.max(1, evStage.clientHeight);
     const datumY=H*2/3;                       // the anchor sits 1/3 up from the bottom
     let x0=-30, x1=30;
@@ -4289,7 +4335,7 @@
     }
     evScale = W/(x1-x0);
     const exag = v.vertExag || evAutoExag(pts, H);
-    return {pts:pts, W:W, H:H, datumY:datumY, x0:x0, x1:x1, sx:evScale, exag:exag,
+    return {pts:pts, all:all, W:W, H:H, datumY:datumY, x0:x0, x1:x1, sx:evScale, exag:exag,
             toX: x => (x-x0)*evScale + evPan,
             toY: ft => datumY - ft*evScale*exag,
             fromX: px => (px-evPan)/evScale + x0,
@@ -4389,10 +4435,11 @@
     // the points
     G.pts.forEach(p=>{
       const x=G.toX(p.x), y=G.toY(p.ft);
-      const behind = p.depth < 0;
+      // Faded = behind this view's own cut. You are only seeing it because the
+      // mode is looser than a strict section.
       const col = p.pt.kind==='anchor' ? ANCHOR_SIGHT : TARGET_SIGHT;
       const g=ns('g');
-      g.setAttribute('opacity', behind ? 0.42 : 1);
+      g.setAttribute('opacity', p.strict ? 1 : 0.34);
       const stem=ns('line');
       stem.setAttribute('x1',x); stem.setAttribute('y1',y);
       stem.setAttribute('x2',x); stem.setAttribute('y2',G.datumY);
@@ -4415,14 +4462,18 @@
 
     evCornerHandles(G);
 
-    const n=G.pts.length;
+    const n=G.pts.length, visible=G.all.filter(q=>q.strict).length, total=G.all.length;
     evEmpty.style.display = n ? 'none' : 'flex';
-    evEmpty.innerHTML = n ? '' :
-      'Nothing to draw on this section yet.<br><br>Shoot grade and place the pins on the map, '
-      + 'and every point appears here at its elevation.';
+    evEmpty.innerHTML = n ? '' : (total
+      ? 'Nothing lies '+side+' of the '+side+' cut.<br><br>Slide that cut back toward the house, '
+        + 'or switch <b>Beyond cut</b> to <b>Line of sight</b> — which hides only what the '
+        + 'house itself blocks — or to <b>X-ray</b>, which plots everything.'
+      : 'Nothing to draw on this section yet.<br><br>Shoot grade and place the pins on the map, '
+        + 'and every point appears here at its elevation.');
     evNote.innerHTML = '<b>'+side.toUpperCase()+'</b> — looking '
       + ({north:'south',south:'north',east:'west',west:'east'}[side])
-      + ' · ' + n + ' point'+(n===1?'':'s')
+      + ' · ' + visible + ' of ' + total + ' point'+(total===1?'':'s')
+      + (evMode!=='cut' ? ' <span class="ev-warn">('+EV_MODE_LABEL[evMode].toLowerCase()+')</span>' : '')
       + ' · ' + (G.x1-G.x0).toFixed(0) + "' wide"
       + (G.exag!==1 ? ' · <span class="ev-warn">vertical ×'+G.exag+'</span>' : ' · true proportion');
     evExag.innerHTML = G.exag+'&times;';
@@ -4518,6 +4569,8 @@
     [...elevPanel.querySelectorAll('.ev-tab[data-side]')].forEach(b=>
       b.classList.toggle('on', b.dataset.side===evActive));
     evSkewBtn.classList.toggle('active', evSkew);
+    evXray.textContent = EV_MODE_LABEL[evMode];
+    evXray.classList.toggle('active', evMode!=='cut');
     const v=evActive?evView(evActive):null;
     const has=!!(v && (evSlot==='plan'?v.planUrl:v.photoUrl));
     evSkewBtn.style.display=has?'':'none';
@@ -4539,6 +4592,10 @@
   });
   evPlanBtn.addEventListener('click', ()=>{ evSlot='plan';  evSyncTabs(); evFile.click(); });
   evPhotoBtn.addEventListener('click', ()=>{ evSlot='photo'; evSyncTabs(); evFile.click(); });
+  evXray.addEventListener('click', ()=>{
+    evMode = EV_MODES[(EV_MODES.indexOf(evMode)+1) % EV_MODES.length];
+    evSyncTabs(); evRender();
+  });
   evSkewBtn.addEventListener('click', ()=>{ evSkew=!evSkew; evSyncTabs(); evRender(); });
   evClearImg.addEventListener('click', ()=>{
     if(!evActive) return;
