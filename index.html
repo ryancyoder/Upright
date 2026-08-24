@@ -301,7 +301,7 @@
      76px across) so the two sit under the same thumb. This one TOGGLES grade
      mode; shots inside that mode fire automatically on dwell. */
   .grade-btn{
-    position:absolute; right:18px; bottom:172px;
+    position:absolute; left:18px; bottom:80px;
     width:76px; height:76px; border-radius:50%;
     border:4px solid rgba(255,255,255,0.9);
     background:rgba(90,122,99,0.92); color:#fff;
@@ -780,6 +780,7 @@
           <span class="mt-label">Opacity</span><input type="range" id="opSlider" min="10" max="100" value="60">
           <span class="mt-label">Size</span><input type="range" id="scaleSlider" min="5" max="600" value="60">
           <span class="mt-label">Rotate</span><input type="range" id="rotSlider" min="-180" max="180" value="0">
+          <button class="mt-btn" id="scalePlanBtn">Set scale</button>
           <button class="mt-btn" id="lockPlanBtn">Lock</button>
         </div>
         <button class="mt-btn" id="exportPinsBtn">Export pins</button>
@@ -899,7 +900,7 @@
         dlVideo=$('dlVideo'), dlPins=$('dlPins'), newSession=$('newSession'),
         importPlanBtn=$('importPlanBtn'), planFile=$('planFile'), overlayControls=$('overlayControls'),
         opSlider=$('opSlider'), scaleSlider=$('scaleSlider'), rotSlider=$('rotSlider'),
-        lockPlanBtn=$('lockPlanBtn'), exportPinsBtn=$('exportPinsBtn'), centerBtn=$('centerBtn'), lockExtentBtn=$('lockExtentBtn'),
+        lockPlanBtn=$('lockPlanBtn'), scalePlanBtn=$('scalePlanBtn'), exportPinsBtn=$('exportPinsBtn'), centerBtn=$('centerBtn'), lockExtentBtn=$('lockExtentBtn'),
         basemapBtn=$('basemapBtn'), elevBtn=$('elevBtn'),
         sightOverlay=$('sightOverlay'), sightMsg=$('sightMsg'), sightAngle=$('sightAngle'),
         sightSteady=$('sightSteady'), gradeBtn=$('gradeBtn'),
@@ -1987,7 +1988,7 @@
     archivePlanData = (s.planUrl && s.plan_center_lat!=null && s.plan_center_lng!=null) ? {
       url:s.planUrl, lat:s.plan_center_lat, lng:s.plan_center_lng,
       widthM:s.plan_width_m, aspect:s.plan_aspect, rotDeg:s.plan_rot_deg,
-      opacity:s.plan_opacity, basemap:s.basemap
+      opacity:s.plan_opacity, basemap:s.basemap, scaleLocked:!!s.plan_scale_locked
     } : null;
 
     clips=(data.clips||[]).map(c=>({
@@ -2056,6 +2057,7 @@
     // surprise when you have just reopened a session to look at it.
     planLocked=true;
     lockPlanBtn.textContent='Unlock';
+    planScaleLocked=!!d.scaleLocked; refreshScaleUI();
     if(planCenterMarker){ planCenterMarker.dragging.disable(); planCenterMarker.setOpacity(0); }
     setPlanGestureMode(false);
     basemapMode=d.basemap || 'both';
@@ -2942,6 +2944,12 @@
     measureBtn.classList.toggle('active', mode==='measure');
     modeBar.classList.toggle('show', !!mode);
     if(mode!=='elevation') sightOverlay.classList.remove('show');
+    if(mode!=='planscale'){
+      clearScaleDraft();
+      // Give the plan its gestures back only if it is meant to have them.
+      if(planOverlay && !planLocked) setPlanGestureMode(true);
+    }
+    refreshScaleUI();
     if(!map) return;
     if(mode==='sketch'){
       map.dragging.disable();
@@ -2949,6 +2957,12 @@
     } else if(mode==='measure'){
       map.dragging.enable();
       modeMsg.innerHTML='<b>Measure</b> \u2014 tap to add corners';
+    } else if(mode==='planscale'){
+      map.dragging.enable();
+      // Plan gestures swallow single-finger taps, so they come off while the
+      // two ends are being marked; the lock state decides whether they go back.
+      setPlanGestureMode(false);
+      modeMsg.innerHTML='<b>Set scale</b> \u2014 tap the two ends of a dimension you know';
     } else {
       map.dragging.enable();
     }
@@ -3046,6 +3060,10 @@
   });
 
   modeUndo.addEventListener('click', ()=>{
+    if(mapMode==='planscale'){
+      if(planScalePts && planScalePts.length){ planScalePts.pop(); drawScaleDraft(); }
+      return;
+    }
     if(mapMode==='measure'){
       if(measurePts.length>1){ measurePts.pop(); drawMeasureDraft(); }
     } else if(mapMode==='sketch'){
@@ -3054,11 +3072,13 @@
     }
   });
   modeDone.addEventListener('click', ()=>{
-    if(mapMode==='measure') commitMeasure();
+    if(mapMode==='planscale') planScaleFinish();
+    else if(mapMode==='measure') commitMeasure();
     else setMapMode(null);
   });
   modeCancel.addEventListener('click', ()=>{
     if(mapMode==='measure') clearMeasureDraft();
+    if(mapMode==='planscale') clearScaleDraft();
     setMapMode(null);
   });
 
@@ -3087,6 +3107,17 @@
       c.addEventListener(ev, ()=>{ if(sketching){ sketching=false; commitSketch(); } }));
 
     map.on('click', e=>{
+      if(mapMode==='planscale'){
+        if(!planScalePts) planScalePts=[];
+        if(planScalePts.length>=2) planScalePts=[];   // a third tap starts over
+        planScalePts.push(e.latlng);
+        drawScaleDraft();
+        modeMsg.innerHTML = planScalePts.length===1
+          ? '<b>Set scale</b> \u2014 now tap the other end'
+          : '<b>Both ends marked</b> \u2014 tap Finish and type what it really is';
+        if(planScalePts.length===2) planScaleFinish();
+        return;
+      }
       if(mapMode!=='measure' || !measurePts.length) return;
       measurePts.push(e.latlng);
       drawMeasureDraft();
@@ -3947,6 +3978,11 @@
 
   // ---------- plan overlay ----------
   let planOverlay=null, planImg=null, planCenter=null, planWidthM=60, planRotDeg=0, planAspect=1, planLocked=false;
+  // Once the plan has been scaled off a known dimension on the drawing, its
+  // size is a MEASUREMENT. Nothing may change it by eye after that -- not the
+  // slider, not a pinch -- because the whole point is to stop fuzzy satellite
+  // imagery setting the scale.
+  let planScaleLocked=false, planScalePts=null, planScaleLayer=null;
   let planCenterMarker=null;
   let satLayer=null, basemapMode='both', archivePlanData=null, planSaveTimer=null;
 
@@ -4004,6 +4040,7 @@
       planRotDeg: planRotDeg,
       planOpacity: parseFloat(opSlider.value)/100,
       planLocked: planLocked,
+      planScaleLocked: planScaleLocked,
       basemap: basemapMode
     };
   }
@@ -4028,6 +4065,7 @@
       buildPlanOverlay();
       overlayControls.classList.add('show');
       planLocked=false; lockPlanBtn.textContent='Lock';
+      planScaleLocked=false; refreshScaleUI();
       setPlanGestureMode(true);
       applyBasemap();
       // Upload the image once; every later nudge only PATCHes the geometry.
@@ -4074,8 +4112,108 @@
     if(planOverlay) planOverlay.setOpacity(parseFloat(opSlider.value)/100);
     savePlanGeometry();
   });
-  scaleSlider.addEventListener('input', ()=>{ planWidthM=parseFloat(scaleSlider.value); refreshPlan(); });
+  scaleSlider.addEventListener('input', ()=>{
+    if(planScaleLocked){ syncPlanSliders(); return; }
+    planWidthM=parseFloat(scaleSlider.value); refreshPlan();
+  });
   rotSlider.addEventListener('input', ()=>{ planRotDeg=parseFloat(rotSlider.value); refreshPlan(); });
+  // ---------- scale the plan off a known dimension ----------
+  // The plan is the accurate reference; satellite imagery is feet-misaligned
+  // and one to two years stale. So the size is taken from a dimension the
+  // drawing already states -- tap its two ends, type what it really is -- and
+  // then held, leaving only rotation and position to nudge by eye.
+  function parseFeet(txt){
+    if(txt==null) return null;
+    const t=String(txt).trim().toLowerCase()
+      .replace(/[\u2018\u2019\u2032]/g,"'").replace(/[\u201c\u201d\u2033]/g,'"');
+    if(!t) return null;
+    let m=/^(\d+(?:\.\d+)?)\s*'\s*(\d+(?:\.\d+)?)\s*"?$/.exec(t);        // 12'6"
+    if(m) return parseFloat(m[1])+parseFloat(m[2])/12;
+    m=/^(\d+(?:\.\d+)?)\s*-\s*(\d+(?:\.\d+)?)$/.exec(t);                 // 12-6
+    if(m) return parseFloat(m[1])+parseFloat(m[2])/12;
+    m=/^(\d+(?:\.\d+)?)\s*(?:"|in|ins|inch|inches)$/.exec(t);              // 30"
+    if(m) return parseFloat(m[1])/12;
+    m=/^(\d+(?:\.\d+)?)\s*(?:m|metre|metres|meter|meters)$/.exec(t);       // 30m
+    if(m) return parseFloat(m[1])/M_PER_FT;
+    m=/^(\d+(?:\.\d+)?)\s*(?:'|ft|feet|foot)?$/.exec(t);                   // 100 / 100'
+    if(m) return parseFloat(m[1]);
+    return null;
+  }
+  function refreshScaleUI(){
+    const has=!!planOverlay;
+    scalePlanBtn.style.display = has ? '' : 'none';
+    scalePlanBtn.textContent = mapMode==='planscale' ? 'Cancel'
+                             : planScaleLocked ? 'Rescale' : 'Set scale';
+    scalePlanBtn.classList.toggle('active', mapMode==='planscale');
+    scaleSlider.disabled = planScaleLocked;
+    scaleSlider.style.opacity = planScaleLocked ? '0.35' : '';
+    scaleSlider.title = planScaleLocked
+      ? 'Scale is set from a known dimension on the plan — tap Rescale to change it'
+      : '';
+  }
+  function clearScaleDraft(){
+    if(planScaleLayer && map){ try{ map.removeLayer(planScaleLayer); }catch(e){} }
+    planScaleLayer=null; planScalePts=null;
+  }
+  function drawScaleDraft(){
+    if(planScaleLayer && map) map.removeLayer(planScaleLayer);
+    planScaleLayer=null;
+    if(!planScalePts || !planScalePts.length || !map) return;
+    planScaleLayer=L.layerGroup().addTo(map);
+    planScalePts.forEach(ll=>L.circleMarker(ll,{radius:6, color:'#fff', weight:2,
+      fillColor:'#63b3e8', fillOpacity:1}).addTo(planScaleLayer));
+    if(planScalePts.length===2)
+      L.polyline(planScalePts,{color:'#63b3e8', weight:3, dashArray:'6 5'}).addTo(planScaleLayer);
+  }
+  function applyKnownDimension(ft){
+    if(!planScalePts || planScalePts.length!==2 || !planCenter) return false;
+    const [p1,p2]=planScalePts;
+    const now=metresBetween(p1,p2);
+    if(!(now>0.01)) return false;
+    const k=(ft*M_PER_FT)/now;
+    if(!isFinite(k) || k<=0) return false;
+    planWidthM = planWidthM*k;
+    // Scale about the FIRST tap, so the end you measured from stays put and
+    // there is less to drag back afterwards.
+    planCenter = L.latLng(p1.lat + (planCenter.lat-p1.lat)*k,
+                          p1.lng + (planCenter.lng-p1.lng)*k);
+    if(planCenterMarker) planCenterMarker.setLatLng(planCenter);
+    planScaleLocked=true;
+    refreshPlan(); syncPlanSliders(); refreshScaleUI();
+    return true;
+  }
+  function planScaleFinish(){
+    if(!planScalePts || planScalePts.length!==2){
+      modeMsg.innerHTML='<b>Two taps needed</b> \u2014 mark both ends of the dimension';
+      return;
+    }
+    const [p1,p2]=planScalePts;
+    const shownFt=(metresBetween(p1,p2)/M_PER_FT).toFixed(1);
+    const ans=prompt('How long is that dimension on the plan?\n\n'
+      + "Feet, or feet and inches: 100  \u00b7  100'  \u00b7  12'6\"  \u00b7  30m\n"
+      + '(it currently measures '+shownFt+"' on the map)", '');
+    if(ans===null) return;                       // cancelled: keep the taps
+    const ft=parseFeet(ans);
+    if(ft===null || !(ft>0)){
+      modeMsg.innerHTML="<b>Didn't understand that length</b> \u2014 try 100, 100\u2032 or 12\u2032\u20326\u2033";
+      return;
+    }
+    if(!applyKnownDimension(ft)){
+      modeMsg.innerHTML='<b>Those taps are too close together</b> \u2014 use the longest dimension you can';
+      return;
+    }
+    clearScaleDraft();
+    setMapMode(null);
+    savePlanGeometry();
+  }
+  scalePlanBtn.addEventListener('click', ()=>{
+    if(mapMode==='planscale'){ clearScaleDraft(); setMapMode(null); return; }
+    if(!planOverlay) return;
+    clearMeasureDraft();
+    planScalePts=[];
+    setMapMode('planscale');
+  });
+
   lockPlanBtn.addEventListener('click', ()=>{
     planLocked=!planLocked;
     lockPlanBtn.textContent = planLocked ? 'Unlock' : 'Lock';
@@ -4156,8 +4294,10 @@
       if(!gest || e.touches.length!==2) return;
       e.preventDefault();
       const m=touchMetrics(e.touches[0], e.touches[1], el);
-      // pinch -> size
-      planWidthM = Math.max(1, Math.min(5000, gest.w0 * (m.dist/gest.dist0)));
+      // pinch -> size, unless the scale came from a known dimension. Rotate
+      // and pan stay live, which is exactly the workflow: set the size once
+      // off the drawing, then swing it into place without fear of losing it.
+      if(!planScaleLocked) planWidthM = Math.max(1, Math.min(5000, gest.w0 * (m.dist/gest.dist0)));
       // twist -> rotation (screen angle grows clockwise, plan angle grows anticlockwise)
       let rot = gest.rot0 - (m.ang - gest.ang0);
       while(rot>180) rot-=360;
@@ -4179,6 +4319,9 @@
   }
 
   function syncPlanSliders(){
+    // The slider only spans 5-600 m; a plan scaled off a known dimension can
+    // land outside that, and clamping the SLIDER must never write back to
+    // planWidthM -- which is why the input handler ignores a locked scale.
     scaleSlider.value = Math.max(5, Math.min(600, Math.round(planWidthM)));
     rotSlider.value = Math.round(planRotDeg);
   }

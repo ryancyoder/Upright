@@ -59,7 +59,9 @@ Requires secret `ASSEMBLYAI_API_KEY` (set in Supabase → Edge Functions →
 Secrets — NOT Vault, and NOT Vercel env vars; neither reaches the function).
 
 If editing the function, pull current source with `Supabase:get_edge_function`
-rather than reconstructing it. Currently **v16**.
+rather than reconstructing it. The source is now vendored at
+`supabase/functions/upright-api/index.ts` so edits are diffable; keep it in
+step with what is deployed. Currently **v17**.
 
 **Replacing an image writes a NEW storage path, never an upsert in place.**
 Storage public URLs are cached by the browser and by the CDN in front of the
@@ -280,6 +282,29 @@ photographed at an angle will never align perfectly however much you nudge it.
 **Extent lock prefers the plan's footprint** (`planBounds()`) over the
 current viewport when a plan is loaded, and sets `minZoom` from
 `getBoundsZoom` so you can't zoom out past the plan.
+
+### Scaling a plan off a known dimension
+
+**Set scale** (plan toolbar) is how a plan stops being decorative and becomes
+the measurement. Rough the plan in with pinch/twist/drag, then tap the two ends
+of a dimension the drawing already states, type what it really is, and the plan
+is resized so those two features land that far apart on the ground.
+
+`applyKnownDimension()` scales `planWidthM` by `known ÷ what-it-currently-
+measures` and moves `planCenter` **about the first tap**, so the end you
+measured from stays put and there is less to drag back. `parseFeet()` takes
+`100`, `100'`, `12'6"`, `12-6`, `30"` and `30m`.
+
+After that the scale is **locked** (`plan_scale_locked`, persisted): the Size
+slider is disabled and the two-finger pinch no longer resizes — it still
+rotates and pans, which is exactly the workflow. **Rescale** re-runs the
+measurement; nothing else can change the size by eye. That is the point: the
+plan is the accurate reference and satellite is feet-misaligned and 1–2 years
+stale, so a stray pinch must not be able to re-size a plan against it.
+
+Marking the two ends needs single-finger taps, which plan gestures swallow, so
+`setMapMode('planscale')` turns them off for the duration and restores them
+only if the plan is meant to have them.
 
 Geometry changes are PATCHed on a 700ms debounce — sliders and drags fire
 continuously and only the resting position matters. The image itself uploads
@@ -563,9 +588,10 @@ is the *mean* of the window, so ~13 samples put the averaged error well under
 the raw spread. The gate exists to reject a real wobble, not to demand tripod
 stillness; the spread is recorded on every shot either way.
 
-**The grade button is round and thumb-sized, directly above the camera
-shutter** (`right:18px`, shutter at `bottom:80px`, grade at `bottom:172px`),
-so the two sit under the same thumb. The sighting HUD is
+**The grade button is round and thumb-sized, in the lower LEFT corner**
+(`left:18px, bottom:80px`), level with the camera shutter on the right and a
+screen-width away from it — one thumb each, and no chance of hitting the
+shutter when you meant to shoot grade. The sighting HUD is
 `pointer-events:none` apart from its own controls, so it never swallows a tap
 meant for the shutter underneath.
 
@@ -619,8 +645,9 @@ not just abandoned starts.
   cut/fill. All cheap now that elevations and slopes are both derived live.
 - Renaming survey points. They auto-label (Observation A/B, Target 1/2) so
   nobody types in a yard; renaming at the desk is not built yet.
-- Aligning a plan to known GPS points rather than by eye. This is the piece
-  that would make plan-only mode trustworthy rather than merely tidy.
+- Aligning a plan's *position and rotation* to known GPS points. Its **size**
+  now comes from a dimension on the drawing (Set scale); where it sits and
+  which way it faces are still placed by eye.
 - Perspective/skew correction for plans photographed at an angle.
 - ZIP **import** to view old sessions offline. The ZIP already contains everything needed (audio, clips + offsets, photos + offsets, GeoJSON) — except the transcript, which lives only in Supabase. Consider adding `transcript.json` to the export.
 - Retry logic / sync-later indicator for failed uploads.
