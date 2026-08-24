@@ -665,7 +665,15 @@ slopes here.
 
 - **The anchor datum sits one third up from the bottom** — two thirds above for
   positive elevations, one third below for negative, as specified.
-- **The scale locks and unlocks.** Locked by default, so a stray drag cannot
+- **Gestures are re-anchored whenever the finger count changes.** Lifting one
+  of two fingers used to leave a two-finger start being measured against
+  one-finger data — scale collapsing to 1 and rotation to 0 in a single frame,
+  which is the jump you feel. Renders are also coalesced to one per animation
+  frame; `evRender()` rebuilds the whole SVG and a touchmove can outrun the
+  screen.
+- **Level lines** draw a horizontal red read-across at each point's elevation,
+  so a measured height can be carried straight onto an imported facade photo.
+- **The scale locks and unlocks** behind a padlock. Locked by default, so a stray drag cannot
   move the datum. Unlocked, the stage pinches to zoom and drags to pan — the
   vertical component of a pan is what moves the anchor line up and down. **Fit**
   returns to the automatic framing. Zoom runs 0.05×–60×, which is what makes it
@@ -678,8 +686,15 @@ slopes here.
   changing visibility mode does not jump the framing under you.
 - **Vertical exaggeration is unavoidable and is always announced.** A yard with
   a 6 ft fall over 200 ft is a flat line at true proportion, so the view
-  auto-picks an exaggeration from 0.5/1/2/3/5/10/20/50 and says which
-  (`vertical ×3`) or says `true proportion`. **An overlaid photo only aligns at
+  auto-picks a starting exaggeration and says which (`vertical ×3`) or says
+  `true proportion`. It is then a **continuous, log-spaced slider** (0.2×–60×),
+  not a stepped cycle: stepping re-snapped the whole drawing mid-pinch, which
+  is what made the view feel jumpy.
+- **Auto-exaggeration is resolved once and then held**, and is measured from
+  **all** points rather than the visible subset. Left to recompute it steps as
+  the zoom changes and the vertical scale snaps under your fingers; measured
+  from the visible subset, a view whose own cut currently hides everything
+  freezes a value computed from nothing. **An overlaid photo only aligns at
   ×1** — the tab shows the factor at all times so an exaggerated profile can
   never be mistaken for a measured one.
 **The four cuts are placed at the four walls; the rectangle they leave is the

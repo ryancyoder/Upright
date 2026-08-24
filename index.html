@@ -443,6 +443,9 @@
   }
   .ev-tab.on{background:var(--ink); color:var(--bg); border-color:var(--ink);}
   .ev-sep{width:1px; height:26px; background:var(--line); flex:0 0 auto;}
+  .ev-exag{width:120px; flex:0 0 auto;}
+  .ev-lock{display:flex; align-items:center; gap:6px; padding:8px 12px;}
+  .ev-lock svg{display:block;}
   .ev-stage{flex:1 1 auto; position:relative; overflow:hidden; background:#0a0a08; touch-action:none;}
   .ev-img{
     position:absolute; left:0; top:0; transform-origin:0 0;
@@ -875,12 +878,14 @@
         <button class="ev-tab" data-side="east">East</button>
         <button class="ev-tab" data-side="west">West</button>
         <div class="ev-sep"></div>
-        <button class="mt-btn" id="evLockBtn">Scale locked</button>
+        <button class="mt-btn ev-lock" id="evLockBtn"></button>
         <button class="mt-btn" id="evFitBtn">Fit</button>
         <span class="mt-label">V.E.</span>
-        <button class="mt-btn" id="evExag">1&times;</button>
+        <input type="range" id="evExagSlider" min="0" max="1000" value="0" class="ev-exag">
+        <span class="mt-label" id="evExagVal">1&times;</span>
         <button class="mt-btn" id="evPlanBtn">Elevation plan</button>
         <button class="mt-btn" id="evPhotoBtn">Photo</button>
+        <button class="mt-btn" id="evLevels">Level lines</button>
         <button class="mt-btn" id="evXray">X-ray</button>
         <button class="mt-btn" id="evPlaceBtn">Move / scale</button>
         <button class="mt-btn" id="evSkewBtn">Skew corners</button>
@@ -1007,10 +1012,11 @@
         basemapBtn=$('basemapBtn'), elevBtn=$('elevBtn'), cutsBtn=$('cutsBtn'),
         elevPanel=$('elevPanel'), evStage=$('evStage'), evSvg=$('evSvg'), viewSwitch=$('viewSwitch'),
         evPlanImg=$('evPlanImg'), evPhotoImg=$('evPhotoImg'), evNote=$('evNote'), evEmpty=$('evEmpty'),
-        evTabTop=$('evTabTop'), evExag=$('evExag'), evPlanBtn=$('evPlanBtn'), evPhotoBtn=$('evPhotoBtn'),
+        evTabTop=$('evTabTop'), evExagSlider=$('evExagSlider'), evExagVal=$('evExagVal'),
+        evPlanBtn=$('evPlanBtn'), evPhotoBtn=$('evPhotoBtn'),
         evLockBtn=$('evLockBtn'), evFitBtn=$('evFitBtn'),
         evSkewBtn=$('evSkewBtn'), evPlaceBtn=$('evPlaceBtn'), evClearImg=$('evClearImg'),
-        evFile=$('evFile'), evXray=$('evXray'),
+        evFile=$('evFile'), evXray=$('evXray'), evLevels=$('evLevels'),
         sightOverlay=$('sightOverlay'), sightMsg=$('sightMsg'), sightAngle=$('sightAngle'),
         sightSteady=$('sightSteady'), gradeBtn=$('gradeBtn'),
         sightDwell=$('sightDwellFill'), sightCross=$('sightCross'), sightCrossGlyph=$('sightCrossGlyph'),
@@ -4046,7 +4052,7 @@
   // so a stray drag cannot move the datum; unlock and the stage pinches to
   // zoom and drags to pan, which is the only way to get far enough out to see
   // the edges of an imported photo.
-  let evViewLocked=true;
+  let evViewLocked=true, evLevelsOn=false;
   // What a view is allowed to show:
   //   cut   -- strictly what lies beyond this view's own cut plane
   //   sight -- everything except what the HOUSE hides: a point is blocked only
@@ -4134,6 +4140,16 @@
   function evSaveSide(side, patch){
     if(!sessionId) return;
     apiPatch('/sessions/'+sessionId+'/elevation-views/'+side, patch);
+  }
+  // A wheel or a gesture fires continuously; only where it comes to rest
+  // matters, so corner geometry is PATCHed on a settle rather than per event.
+  let evSideSaveTimer=null;
+  function evSaveLater(side, slot){
+    clearTimeout(evSideSaveTimer);
+    evSideSaveTimer=setTimeout(()=>{
+      const arr=evCornersOf(side, slot);
+      if(arr) evSaveSide(side, slot==='plan' ? {planCorners:arr} : {photoCorners:arr});
+    }, 500);
   }
 
   // ---------- the cuts, drawn on the map ----------
@@ -4322,7 +4338,22 @@
     });
     return out.sort((a,b)=>a.x-b.x);
   }
+  // Vertical exaggeration is CONTINUOUS. The stepped cycle jumped the whole
+  // drawing every tap; a log-spaced slider moves it smoothly and still spans
+  // the useful range. The snap list survives only as a starting guess.
   const EXAG_STEPS=[0.5,1,2,3,5,10,20,50];
+  const EXAG_MIN=0.2, EXAG_MAX=60;
+  function exagFromSlider(t){
+    const a=Math.log(EXAG_MIN), b=Math.log(EXAG_MAX);
+    return Math.exp(a + (b-a)*(t/1000));
+  }
+  function sliderFromExag(x){
+    const a=Math.log(EXAG_MIN), b=Math.log(EXAG_MAX);
+    return Math.round(1000*(Math.log(Math.max(EXAG_MIN, Math.min(EXAG_MAX, x)))-a)/(b-a));
+  }
+  function fmtExag(x){
+    return (x<10 ? x.toFixed(2).replace(/\.?0+$/,'') : x.toFixed(0));
+  }
   function evAutoExag(pts, H, sx){
     const up=Math.max(0.01, ...pts.map(p=>Math.max(0,p.ft)));
     const dn=Math.max(0.01, ...pts.map(p=>Math.max(0,-p.ft)));
@@ -4352,7 +4383,16 @@
     evScale = sx;
     const datumY = H*2/3 + (v.panY||0);       // the anchor sits 1/3 up, then pans
     const px = (v.panX||0);
-    const exag = v.vertExag || evAutoExag(pts, H, sx);
+    // Auto-exaggeration is resolved ONCE and then held. Left to recompute, it
+    // steps between 1/2/3/5/10 as the zoom changes and the vertical scale
+    // snaps mid-pinch -- which reads as the view jumping under your fingers.
+    // Fit clears it and lets the automatic choice run again.
+    //
+    // Measured from ALL points, like the horizontal fit: a view whose own cut
+    // currently hides everything would otherwise freeze a value computed from
+    // nothing at all.
+    const exag = (v.vertExag!=null) ? v.vertExag : evAutoExag(all, H, sx);
+    if(v.vertExag==null && all.length) v.vertExag = exag;
     return {pts:pts, all:all, W:W, H:H, datumY:datumY, x0:x0, x1:x1, fit:fit, sx:sx, exag:exag,
             zoom:(v.zoom||1),
             toX: x => (x-x0)*sx + px,
@@ -4399,6 +4439,14 @@
   }
 
   function ns(t){ return document.createElementNS('http://www.w3.org/2000/svg', t); }
+  // A touchmove can fire faster than the screen refreshes, and evRender()
+  // rebuilds the whole SVG. Painting once per frame instead of once per event
+  // is the difference between smooth and jumpy.
+  let evRafId=null;
+  function evRenderSoon(){
+    if(evRafId) return;
+    evRafId=requestAnimationFrame(()=>{ evRafId=null; evRender(); });
+  }
   function evRender(){
     if(!evActive) return;
     const side=evActive, v=evView(side), G=evGeom(side);
@@ -4442,6 +4490,23 @@
     // the datum: the anchor, 0.00', one third up from the bottom
     line(0,G.datumY,G.W,G.datumY,'#e8c33a',2,null,0.95);
     text(6,G.datumY-5,"0.00' anchor",'#e8c33a',11,'start');
+
+    // Level lines: a horizontal read-across at each point's elevation, so you
+    // can carry a measured height straight onto an imported facade photo and
+    // see where it lands. Drawn under the points, over the images.
+    if(evLevelsOn){
+      const seen=[];
+      G.pts.forEach(p=>{
+        if(p.pt.kind==='anchor') return;             // the datum already has its own line
+        const y=G.toY(p.ft);
+        if(seen.some(q=>Math.abs(q-y)<2)) return;    // don't stack duplicates
+        seen.push(y);
+        if(y<-40 || y>G.H+40) return;
+        line(0,y,G.W,y,'#c4432b',1,'5 4', p.strict?0.75:0.3);
+        const t=text(G.W-6, y-4, (p.ft>=0?'+':'')+p.ft.toFixed(2)+"'", '#c4432b', 10, 'end');
+        t.setAttribute('opacity', p.strict?0.9:0.4);
+      });
+    }
 
     // slope runs become real slopes here
     const byId={}; G.pts.forEach(p=>byId[p.pt.id]=p);
@@ -4495,10 +4560,10 @@
       + (evMode!=='cut' ? ' <span class="ev-warn">('+EV_MODE_LABEL[evMode].toLowerCase()+')</span>' : '')
       + ' · ' + ((G.W/G.sx)).toFixed(0) + "' across"
       + (Math.abs(G.zoom-1)>0.01 ? ' · zoom '+(G.zoom<1?G.zoom.toFixed(2):G.zoom.toFixed(1))+'×' : '')
-      + (G.exag!==1 ? ' · <span class="ev-warn">vertical ×'+(G.exag<1?G.exag.toFixed(1):G.exag)+'</span>'
-                    : ' · true proportion');
-    evExag.innerHTML = (G.exag<1 ? G.exag.toFixed(1) : G.exag)+'&times;';
-    evExag.classList.toggle('active', G.exag!==1);
+      + (Math.abs(G.exag-1)>0.01 ? ' · <span class="ev-warn">vertical ×'+fmtExag(G.exag)+'</span>'
+                                  : ' · true proportion');
+    evExagVal.innerHTML = fmtExag(G.exag)+'&times;';
+    if(document.activeElement!==evExagSlider) evExagSlider.value = sliderFromExag(G.exag);
   }
 
   // ---------- coarse placement: pinch / zoom / pan, before any skewing ----------
@@ -4565,7 +4630,7 @@
       v.panX = s.cx + (q.panX - s.cx)*actual + tx;
       v.panY = (s.cy + (q.datumY - s.cy)*actual + ty) - q.H*2/3;
     }
-    evRender();
+    evRenderSoon();
   }
   function evGestEnd(){
     if(!evGest) return;
@@ -4585,7 +4650,14 @@
     evGestMove(evTouchInfo(e));
   }, {passive:false});
   ['touchend','touchcancel'].forEach(ev=>evStage.addEventListener(ev, e=>{
-    if(e.touches && e.touches.length) return;      // still a finger down
+    if(e.touches && e.touches.length){
+      // Lifting one of two fingers used to leave a two-finger start being
+      // measured against one-finger data: scale collapsed to 1 and rotation to
+      // 0 in a single frame, which is the jump. Re-anchor on what is still
+      // down and carry on from where the shape is NOW.
+      if(evGest) evGestStart(evTouchInfo(e));
+      return;
+    }
     evGestEnd();
   }));
   // Mouse: drag to pan, wheel to scale about the pointer. The iPad never sees
@@ -4614,8 +4686,8 @@
       const arr=evCornersOf(evActive, evSlot); if(!arr) return;
       const out=evXformCorners(arr.map(c=>({x:c.x,y:c.y})), evGeom(evActive), {cx:cx, cy:cy, scale:k});
       for(let i=0;i<4;i++) arr[i]=out[i];
-      evRender();
-      evSaveSide(evActive, evSlot==='plan' ? {planCorners:arr} : {photoCorners:arr});
+      evRenderSoon();
+      evSaveLater(evActive, evSlot);
     } else {
       const v=evView(evActive), H=Math.max(1, evStage.clientHeight);
       const z0=v.zoom||1, d0=H*2/3+(v.panY||0);
@@ -4623,7 +4695,7 @@
       const a=v.zoom/z0;
       v.panX = cx + ((v.panX||0) - cx)*a;
       v.panY = (cy + (d0 - cy)*a) - H*2/3;
-      evRender();
+      evRenderSoon();
     }
   }, {passive:false});
 
@@ -4647,7 +4719,7 @@
       if(!arr) return;
       const r=evStage.getBoundingClientRect(), G=evGeom(evDragging.side);
       arr[i]={x:G.fromX(e.clientX-r.left), y:G.fromY(e.clientY-r.top)};
-      evRender();
+      evRenderSoon();
     });
     ['pointerup','pointercancel'].forEach(ev=>d.addEventListener(ev, ()=>{
       if(!evDragging || evDragging.i!==i) return;
@@ -4717,11 +4789,13 @@
       b.classList.toggle('on', b.dataset.side===evActive));
     evSkewBtn.classList.toggle('active', evSkew);
     evPlaceBtn.classList.toggle('active', evPlace);
-    evLockBtn.textContent = evViewLocked ? 'Scale locked' : 'Scale unlocked';
+    evLockBtn.innerHTML = svgIcon(evViewLocked?'lock':'unlock')
+      + '<span>' + (evViewLocked ? 'Scale' : 'Pinch / pan') + '</span>';
     evLockBtn.classList.toggle('active', !evViewLocked);
     evLockBtn.title = evViewLocked
       ? 'Unlock to pinch the scale and drag the anchor line'
       : 'Pinch to zoom, drag to pan — the vertical drag moves the anchor line';
+    evLevels.classList.toggle('active', evLevelsOn);
     evXray.textContent = EV_MODE_LABEL[evMode];
     evXray.classList.toggle('active', evMode!=='cut');
     const v=evActive?evView(evActive):null;
@@ -4736,16 +4810,18 @@
   [...elevPanel.querySelectorAll('.ev-tab[data-side]')].forEach(b=>
     b.addEventListener('click', ()=>evOpen(b.dataset.side)));
 
-  evExag.addEventListener('click', ()=>{
+  evExagSlider.addEventListener('input', ()=>{
     if(!evActive) return;
-    const v=evView(evActive), G=evGeom(evActive);
-    const i=EXAG_STEPS.indexOf(G.exag);
-    v.vertExag = EXAG_STEPS[(i+1) % EXAG_STEPS.length];
-    evSaveSide(evActive, {vertExag:v.vertExag});
-    evRender();
+    evView(evActive).vertExag = exagFromSlider(+evExagSlider.value);
+    evRenderSoon();
+  });
+  evExagSlider.addEventListener('change', ()=>{
+    if(!evActive) return;
+    evSaveSide(evActive, {vertExag:evView(evActive).vertExag});
   });
   evPlanBtn.addEventListener('click', ()=>{ evSlot='plan';  evSyncTabs(); evFile.click(); });
   evPhotoBtn.addEventListener('click', ()=>{ evSlot='photo'; evSyncTabs(); evFile.click(); });
+  evLevels.addEventListener('click', ()=>{ evLevelsOn=!evLevelsOn; evSyncTabs(); evRender(); });
   evXray.addEventListener('click', ()=>{
     evMode = EV_MODES[(EV_MODES.indexOf(evMode)+1) % EV_MODES.length];
     evSyncTabs(); evRender();
