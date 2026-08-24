@@ -259,8 +259,14 @@ every point from there; drag the pins onto the map afterwards. Shooting and
 pin-placing are separate jobs and mixing them means constantly raising and
 lowering the iPad.
 
-**OBSERVATION → ANCHOR → unlimited TARGETS.** Nominate one point as `0.00'`,
-then measure everything else against it. Nothing here is
+**STANCE PHOTO → ANCHOR → unlimited TARGETS.** A set opens by photographing
+**where you are standing** — point the iPad at your own feet and hold steady.
+That shot records **no angle and no sighting**; it measures nothing. It exists
+because the observation pin has to be dragged onto the map afterwards, and
+because anyone resuming the set has to stand in the same spot — which is the
+one thing the maths cannot recover. `nextShotIsObservation()` gates it, and it
+is skipped when the stance already has a picture. Then nominate one point as
+`0.00'` and measure everything else against it. Nothing here is
 absolute; it is a fast relative site survey for grading and drainage, not a
 replacement for an instrument.
 
@@ -445,15 +451,31 @@ popup falls back to it if the Storage URL fails to load.
 Given the fire-and-forget write model and field connectivity, a pin with a
 broken image and no fallback is a real prospect.
 
-**The sight is yellow while the anchor is what you are aiming at**, carrying
-the benchmark glyph under the crosshair, and red for every target after that
-(`ANCHOR_SIGHT` / `TARGET_SIGHT`, mirroring `--anchor-sight` / `--live`).
-`nextShotIsAnchor()` is the single source of that state — no datum yet, this
+**The sight is colour-coded by stage** — green with the tripod glyph while
+documenting your stance, yellow with the benchmark glyph while the anchor is
+what you are aiming at, red for every target after that (`OBS_SIGHT` /
+`ANCHOR_SIGHT` / `TARGET_SIGHT`, mirroring `--obs-sight` / `--anchor-sight` /
+`--live`). One local `--cross` var drives the arms, the ring and the glyph, and
+a drop-shadow rather than a heavier stroke keeps the green one readable over
+turf. `nextShotIsObservation()` / `nextShotIsAnchor()` are the single source of
+that state — no datum yet, this
 standing position has never sighted the one that exists, or the anchor is
 being deliberately re-sighted — and `paintSight()` runs from `gradeStatus()`,
 so every path that updates the message recolours the sight with it. The
-crosshair burned into the captured frame uses the same colour, which makes an
-anchor frame recognisable at a glance in the filmstrip.
+crosshair burned into the captured frame uses the same colour, which makes a
+stance frame and an anchor frame recognisable at a glance in the filmstrip.
+
+The stance photo is the **first tile inside its set group**, badged `O`, and
+carries a *Re-photograph where you stood* control — which warns you to stand
+there first, since that picture is what tells the next person where to stand.
+The group still **sorts by its earliest target, not by the stance photo**: the
+anchor tile sits outside every group as the shared datum, and a group sorting
+ahead of the anchor it is measured against reads backwards.
+
+Because the stance photo pushes no shot, the dwell re-arm compares against
+`lastShotAngle` — the last thing *fired* — rather than the tail of `elevShots`,
+which would otherwise leave the sight disarmed against a stale angle belonging
+to a different point.
 
 Sighting is gated on steadiness (`STEADY_DEG`, sample spread over the same
 800ms window that gets averaged into the shot): HOLD STEADY → HOLDING → fire.

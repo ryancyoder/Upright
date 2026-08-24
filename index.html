@@ -12,6 +12,7 @@
     --live:#c4432b; --live-glow:rgba(196,67,43,0.35);
     --flat:#5a7a63;
     --anchor-sight:#e8c33a;   /* the sight is YELLOW while the next shot is the anchor */
+    --obs-sight:#4fd07a;      /* and GREEN while it is documenting where you stand */
   }
   *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
   html,body{height:100%;}
@@ -209,12 +210,17 @@
       linear-gradient(var(--cross),var(--cross)) center/2px 100% no-repeat,
       linear-gradient(var(--cross),var(--cross)) center/100% 2px no-repeat;
     opacity:0.9;
+    /* The sight has to read over whatever it is pointed at -- bright turf for
+       the green one especially. Legibility comes from the shadow, not from a
+       heavier stroke. */
+    filter:drop-shadow(0 0 2px rgba(0,0,0,0.9)) drop-shadow(0 1px 2px rgba(0,0,0,0.7));
   }
   .sight-cross::after{
     content:''; position:absolute; left:50%; top:50%; width:34px; height:34px;
     transform:translate(-50%,-50%); border:2px solid var(--cross); border-radius:50%;
   }
   .sight-cross.is-anchor{ --cross:var(--anchor-sight); }
+  .sight-cross.is-obs{ --cross:var(--obs-sight); }
   /* Benchmark glyph, clear of the crosshair arms, shown only while the sight
      is armed for the anchor. */
   .sight-cross-glyph{
@@ -222,7 +228,8 @@
     transform:translateX(-50%); display:none; line-height:0;
     filter:drop-shadow(0 1px 3px rgba(0,0,0,0.9));
   }
-  .sight-cross.is-anchor .sight-cross-glyph{display:block;}
+  .sight-cross.is-anchor .sight-cross-glyph,
+  .sight-cross.is-obs .sight-cross-glyph{display:block;}
   .sight-cross-glyph svg{width:38px; height:38px; display:block;}
   .sight-top{
     margin-top:calc(env(safe-area-inset-top,0px) + 64px);
@@ -2589,8 +2596,15 @@
     // Each set becomes one outlined group, ordered by its earliest shot.
     setsOf().forEach(set=>{
       const shots=set.targets.filter(t=>t.photoUrl||t.photoLocal);
-      if(!shots.length && !set.targets.length) return;
-      const sort=Math.min.apply(null, set.targets.map(t=>t.offset==null?Infinity:t.offset).concat([Infinity]));
+      const obsShot=(set.obs.photoUrl||set.obs.photoLocal) ? set.obs : null;
+      if(!shots.length && !set.targets.length && !obsShot) return;
+      // Sorted by its earliest TARGET, not by the stance photo. The stance is
+      // chronologically first but the anchor tile sits outside every group as
+      // the shared datum, and sorting a group ahead of the anchor it is
+      // measured against reads backwards. A set with no targets yet falls back
+      // to its stance photo so it still lands somewhere sensible.
+      let sort=Math.min.apply(null, set.targets.map(t=>t.offset==null?Infinity:t.offset).concat([Infinity]));
+      if(!isFinite(sort) && obsShot && obsShot.offset!=null) sort=obsShot.offset;
       entries.push({ sort:sort, build:()=>{
         const o=set.obs;
         const wrap=document.createElement('div');
@@ -2614,6 +2628,17 @@
         head.appendChild(icoBtn('trash','Delete this set','danger',()=>setDelete(o)));
         wrap.appendChild(head);
         const row=document.createElement('div'); row.className='film-set-row';
+        // Where you stood, first in the row -- it is what the rest of the set
+        // is measured from, and the picture is how the pin gets placed.
+        if(obsShot){
+          row.appendChild(makeThumb({
+            kind:'elev', id:o.id, elev:true, photo:o.photoUrl||o.photoLocal,
+            local:o.photoLocal, badge:'O', colour:'#4fd07a',
+            dim:!o.placed, sel:o.id===elevSelected,
+            onClick:()=>elevSelectFromStrip(o),
+            controls:[ thumbCtl('redo','Re-photograph where you stood','tl','',()=>setResume(o,o)) ]
+          }));
+        }
         shots.forEach(pt=>{
           row.appendChild(makeThumb({
             kind:'elev', id:pt.id, elev:true, photo:pt.photoUrl||pt.photoLocal,
@@ -2903,13 +2928,13 @@
   let elevPoints=[], elevShots=[];
   let elevSurveyOn=false, elevActiveObs=null, elevSelected=null;
   let gradeOn=false, gradeObsId=null, gradeArmed=true, dwellStart=0, lastHeading=null;
-  let gradeResuming=false, gradeReshootId=null, gradeAnchorBaseline=null, gradeNote='';
+  let gradeResuming=false, gradeReshootId=null, gradeAnchorBaseline=null, gradeNote='', lastShotAngle=null;
   // How far a resumed set's fresh anchor shot may differ from the one already
   // on file before we call the stance into question. Every target in a set is
   // measured against that set's anchor angle, so a changed stance silently
   // shifts all of them.
   const ANCHOR_DRIFT_DEG=0.5;
-  const ANCHOR_SIGHT='#e8c33a', TARGET_SIGHT='#c4432b';   // must match --anchor-sight / --live
+  const OBS_SIGHT='#4fd07a', ANCHOR_SIGHT='#e8c33a', TARGET_SIGHT='#c4432b';   // must match --obs-sight / --anchor-sight / --live
   const tiltSamples=[];
   const TILT_WINDOW_MS=800;   // averaged into one shot
   // 0.4 was unusably tight for a handheld iPad. The shot is the MEAN of the
@@ -3111,7 +3136,7 @@
         const obs=elevAddPoint('observation', ll, true,
           lastFix?{lat:lastFix.coords.latitude,lng:lastFix.coords.longitude}:null);
         gradeObsId=obs.id;
-        gradeResuming=false; gradeReshootId=null; gradeAnchorBaseline=null; gradeNote='';
+        gradeResuming=false; gradeReshootId=null; gradeAnchorBaseline=null; gradeNote=''; lastShotAngle=null;
       }
       elevActiveObs=gradeObsId;
       gradeArmed=true; dwellStart=0;
@@ -3128,7 +3153,7 @@
       gradeStatus();
     } else {
       gradeObsId=null; dwellStart=0;
-      gradeResuming=false; gradeReshootId=null; gradeAnchorBaseline=null; gradeNote='';
+      gradeResuming=false; gradeReshootId=null; gradeAnchorBaseline=null; gradeNote=''; lastShotAngle=null;
       sightDwell.style.width='0%';
       if(map){
         elevRenderAll();
@@ -3144,22 +3169,36 @@
     }
   }
 
+  // A set opens by DOCUMENTING WHERE YOU STAND: point the iPad at your own
+  // feet and take a picture of the spot. No angle is recorded -- this shot
+  // measures nothing. It exists so the observation pin can be placed on the
+  // map accurately, and so anyone resuming the set can see exactly where to
+  // stand again, which is the one thing the maths cannot recover.
+  function nextShotIsObservation(){
+    const obs=elevPoint(gradeObsId);
+    if(!obs) return false;
+    if(gradeReshootId===obs.id) return true;
+    return !(obs.photoUrl || obs.photoLocal);
+  }
   // The next shot is the anchor when there is no datum yet, when this standing
   // position has never sighted the one that exists, or when the anchor is being
   // re-sighted on purpose.
   function nextShotIsAnchor(){
+    if(nextShotIsObservation()) return false;   // the stance comes first
     const anchor=elevAnchorPoint();
     if(!anchor) return true;
     if(gradeReshootId===anchor.id) return true;
     return !elevShots.some(x=>x.observationId===gradeObsId && x.pointId===anchor.id);
   }
-  // Yellow sight + benchmark glyph while the anchor is what you are aiming at;
-  // red once the datum is set and every later shot is a target measured
-  // against it.
+  // Green sight + tripod glyph while documenting the stance, yellow sight +
+  // benchmark glyph while the anchor is what you are aiming at, red once the
+  // datum is set and every later shot is a target measured against it.
   function paintSight(){
-    const on=nextShotIsAnchor();
-    sightCross.classList.toggle('is-anchor', on);
-    sightCrossGlyph.innerHTML = on ? elevGlyph('anchor', ANCHOR_SIGHT) : '';
+    const obs=nextShotIsObservation(), anc=nextShotIsAnchor();
+    sightCross.classList.toggle('is-obs', obs);
+    sightCross.classList.toggle('is-anchor', anc);
+    sightCrossGlyph.innerHTML = obs ? elevGlyph('observation', OBS_SIGHT)
+                              : anc ? elevGlyph('anchor', ANCHOR_SIGHT) : '';
   }
   function gradeStatus(msg){
     paintSight();
@@ -3167,6 +3206,19 @@
     const anchor=elevAnchorPoint();
     const shotHere=elevShots.filter(x=>x.observationId===gradeObsId).length;
     const anchorShotHere=anchor && elevShots.some(x=>x.observationId===gradeObsId && x.pointId===anchor.id);
+    if(nextShotIsObservation()){
+      const obsPt=elevPoint(gradeObsId);
+      const nm=(obsPt&&obsPt.label)||'the observation';
+      // Re-photographing an existing stance: the picture is what tells the next
+      // person where to stand, so taking it somewhere else quietly misleads.
+      sightMsg.classList.toggle('warn', !!gradeResuming);
+      sightMsg.innerHTML = gradeResuming
+        ? '<b>Stand where '+nm+' is on the map</b> before re-photographing it — this picture is '
+          + 'what tells you where to stand next time.'
+        : 'Aim at <b>where you are standing</b> and hold steady — this photographs '+nm
+          + '. No angle is taken.';
+      return;
+    }
     if(!anchorShotHere){
       sightMsg.classList.remove('warn');
       sightMsg.innerHTML='Aim at your <b>ANCHOR</b> — the point that becomes 0.00\u2032 — and hold steady';
@@ -3286,6 +3338,23 @@
     if(!obs) return;
     const angle=sightAngleNow(); if(angle===null) return;
     const spread=sightSpreadNow();
+
+    // The stance photo: a picture of where you are standing, and nothing else.
+    // It records NO shot, so no angle and no elevation come from it -- pushing
+    // one would put a meaningless sighting into the set's maths.
+    if(nextShotIsObservation()){
+      if(gradeReshootId===obs.id) gradeReshootId=null;
+      const snap=gradeSnapshot(OBS_SIGHT);
+      if(snap){ obs.pendingPhoto=snap; obs.photoLocal=snap; obs.photoUrl=snap; }
+      if(obs.offset==null && sessionT0) obs.offset=Date.now()-sessionT0;
+      elevFlushPending();
+      snapFlash.classList.remove('go'); void snapFlash.offsetWidth; snapFlash.classList.add('go');
+      lastShotAngle=angle; gradeArmed=false; dwellStart=0; sightDwell.style.width='0%';
+      renderStrip();
+      gradeStatus('<b>'+obs.label+'</b> photographed — now sight your <b>anchor</b>');
+      return;
+    }
+
     const anchor=elevAnchorPoint();
     const anchorShotHere = anchor && elevShots.some(x=>x.observationId===obs.id && x.pointId===anchor.id);
 
@@ -3339,7 +3408,7 @@
     // A drift note has to outlive the re-arm handler, which calls gradeStatus()
     // again the moment the user moves off -- so it is sticky until the next shot.
     gradeNote=driftNote; sightMsg.classList.toggle('warn', !!driftNote);
-    gradeArmed=false; dwellStart=0;
+    lastShotAngle=angle; gradeArmed=false; dwellStart=0;
     sightDwell.style.width='0%';
     renderStrip();          // the new frame joins the filmstrip straight away
     gradeStatus('<b>'+pt.label+'</b> captured at '+(angle>=0?'+':'')+angle.toFixed(1)+'\u00b0'
@@ -3359,8 +3428,10 @@
     // Re-arm only once the user has genuinely moved off the last point,
     // otherwise one long hold would machine-gun shots at the same spot.
     if(!gradeArmed){
-      const last=elevShots[elevShots.length-1];
-      if(a!==null && last && Math.abs(a-last.angleDeg)>=REARM_DEG){ gradeArmed=true; gradeStatus(); }
+      // Compared against the last thing FIRED, not the last shot recorded --
+      // the stance photo records no shot, and reading the shot list would leave
+      // the sight disarmed against a stale angle from a different point.
+      if(a!==null && lastShotAngle!==null && Math.abs(a-lastShotAngle)>=REARM_DEG){ gradeArmed=true; gradeStatus(); }
       return;
     }
     if(!steady){ dwellStart=0; sightDwell.style.width='0%'; return; }
@@ -3457,7 +3528,7 @@
     elevActiveObs=null; elevSelected=null;
     gradeOn=false; gradeObsId=null; dwellStart=0;
     gradeBtn.classList.remove('on'); gradeBtn.innerHTML='SHOOT<br>GRADE';
-    gradeResuming=false; gradeReshootId=null; gradeAnchorBaseline=null; gradeNote='';
+    gradeResuming=false; gradeReshootId=null; gradeAnchorBaseline=null; gradeNote=''; lastShotAngle=null;
     sightOverlay.classList.remove('show');
   }
   function elevSetSurvey(on){
