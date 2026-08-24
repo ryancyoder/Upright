@@ -443,7 +443,7 @@
   }
   .ev-tab.on{background:var(--ink); color:var(--bg); border-color:var(--ink);}
   .ev-sep{width:1px; height:26px; background:var(--line); flex:0 0 auto;}
-  .ev-stage{flex:1 1 auto; position:relative; overflow:hidden; background:#0a0a08;}
+  .ev-stage{flex:1 1 auto; position:relative; overflow:hidden; background:#0a0a08; touch-action:none;}
   .ev-img{
     position:absolute; left:0; top:0; transform-origin:0 0;
     pointer-events:none; will-change:transform;
@@ -880,7 +880,8 @@
         <button class="mt-btn" id="evPlanBtn">Elevation plan</button>
         <button class="mt-btn" id="evPhotoBtn">Photo</button>
         <button class="mt-btn" id="evXray">X-ray</button>
-        <button class="mt-btn" id="evSkewBtn">Adjust image</button>
+        <button class="mt-btn" id="evPlaceBtn">Move / scale</button>
+        <button class="mt-btn" id="evSkewBtn">Skew corners</button>
         <button class="mt-btn" id="evClearImg">Remove image</button>
         <input type="file" id="evFile" accept="image/*" style="display:none">
       </div>
@@ -1005,7 +1006,8 @@
         elevPanel=$('elevPanel'), evStage=$('evStage'), evSvg=$('evSvg'), viewSwitch=$('viewSwitch'),
         evPlanImg=$('evPlanImg'), evPhotoImg=$('evPhotoImg'), evNote=$('evNote'), evEmpty=$('evEmpty'),
         evTabTop=$('evTabTop'), evExag=$('evExag'), evPlanBtn=$('evPlanBtn'), evPhotoBtn=$('evPhotoBtn'),
-        evSkewBtn=$('evSkewBtn'), evClearImg=$('evClearImg'), evFile=$('evFile'), evXray=$('evXray'),
+        evSkewBtn=$('evSkewBtn'), evPlaceBtn=$('evPlaceBtn'), evClearImg=$('evClearImg'),
+        evFile=$('evFile'), evXray=$('evXray'),
         sightOverlay=$('sightOverlay'), sightMsg=$('sightMsg'), sightAngle=$('sightAngle'),
         sightSteady=$('sightSteady'), gradeBtn=$('gradeBtn'),
         sightDwell=$('sightDwellFill'), sightCross=$('sightCross'), sightCrossGlyph=$('sightCrossGlyph'),
@@ -4480,6 +4482,104 @@
     evExag.classList.toggle('active', G.exag!==1);
   }
 
+  // ---------- coarse placement: pinch / zoom / pan, before any skewing ----------
+  // The same first move as importing a plan on the map: get the image roughly
+  // where it belongs as a rigid shape, THEN pull the corners to correct the
+  // perspective. Skewing straight from a default rectangle means fighting the
+  // position and the distortion at the same time.
+  //
+  // Worked in SCREEN space and mapped back to view feet: with a vertical
+  // exaggeration in play, feet-per-pixel differs by axis, and a pinch has to
+  // feel uniform under the finger.
+  let evPlace=false, evGest=null;
+
+  function evXformCorners(snap, G, o){
+    const k=o.scale, th=rad(o.rotDeg||0), cos=Math.cos(th), sin=Math.sin(th);
+    return snap.map(c=>{
+      const sx=G.toX(c.x), sy=G.toY(c.y);
+      const dx=sx-o.cx, dy=sy-o.cy;
+      const rx=dx*cos - dy*sin, ry=dx*sin + dy*cos;
+      const nx=o.cx + rx*k + (o.dx||0), ny=o.cy + ry*k + (o.dy||0);
+      return {x:G.fromX(nx), y:G.fromY(ny)};
+    });
+  }
+  function evTouchInfo(e){
+    const r=evStage.getBoundingClientRect();
+    const t=[...e.touches].slice(0,2).map(t=>({x:t.clientX-r.left, y:t.clientY-r.top}));
+    if(t.length===1) return {n:1, cx:t[0].x, cy:t[0].y, dist:1, ang:0};
+    const dx=t[1].x-t[0].x, dy=t[1].y-t[0].y;
+    return {n:2, cx:(t[0].x+t[1].x)/2, cy:(t[0].y+t[1].y)/2,
+            dist:Math.hypot(dx,dy)||1, ang:Math.atan2(dy,dx)*180/Math.PI};
+  }
+  function evGestStart(info){
+    if(!evPlace || !evActive) return;
+    const arr=evCornersOf(evActive, evSlot);
+    if(!arr) return;
+    evGest={start:info, snap:arr.map(c=>({x:c.x, y:c.y}))};
+  }
+  function evGestMove(info){
+    if(!evGest || !evActive) return;
+    const G=evGeom(evActive), s=evGest.start;
+    const two = (s.n===2 && info.n===2);
+    const o={ cx:s.cx, cy:s.cy,
+              scale: two ? info.dist/s.dist : 1,
+              rotDeg: two ? (info.ang - s.ang) : 0,
+              dx: info.cx - s.cx, dy: info.cy - s.cy };
+    const out=evXformCorners(evGest.snap, G, o);
+    const arr=evCornersOf(evActive, evSlot);
+    for(let i=0;i<4;i++) arr[i]=out[i];
+    evRender();
+  }
+  function evGestEnd(){
+    if(!evGest) return;
+    evGest=null;
+    const arr=evCornersOf(evActive, evSlot);
+    evSaveSide(evActive, evSlot==='plan' ? {planCorners:arr} : {photoCorners:arr});
+  }
+  evStage.addEventListener('touchstart', e=>{
+    if(!evPlace || !evActive) return;
+    e.preventDefault();
+    evGestStart(evTouchInfo(e));
+  }, {passive:false});
+  evStage.addEventListener('touchmove', e=>{
+    if(!evGest) return;
+    e.preventDefault();
+    evGestMove(evTouchInfo(e));
+  }, {passive:false});
+  ['touchend','touchcancel'].forEach(ev=>evStage.addEventListener(ev, e=>{
+    if(e.touches && e.touches.length) return;      // still a finger down
+    evGestEnd();
+  }));
+  // Mouse: drag to pan, wheel to scale about the pointer. The iPad never sees
+  // this, but it keeps the tool usable at a desk.
+  evStage.addEventListener('pointerdown', e=>{
+    if(!evPlace || !evActive || e.pointerType==='touch') return;
+    e.preventDefault(); evStage.setPointerCapture(e.pointerId);
+    const r=evStage.getBoundingClientRect();
+    evGestStart({n:1, cx:e.clientX-r.left, cy:e.clientY-r.top, dist:1, ang:0});
+  });
+  evStage.addEventListener('pointermove', e=>{
+    if(!evGest || e.pointerType==='touch') return;
+    const r=evStage.getBoundingClientRect();
+    evGestMove({n:1, cx:e.clientX-r.left, cy:e.clientY-r.top, dist:1, ang:0});
+  });
+  ['pointerup','pointercancel'].forEach(ev=>evStage.addEventListener(ev, e=>{
+    if(e.pointerType==='touch') return;
+    evGestEnd();
+  }));
+  evStage.addEventListener('wheel', e=>{
+    if(!evPlace || !evActive) return;
+    e.preventDefault();
+    const arr=evCornersOf(evActive, evSlot); if(!arr) return;
+    const r=evStage.getBoundingClientRect(), G=evGeom(evActive);
+    const out=evXformCorners(arr.map(c=>({x:c.x,y:c.y})), G,
+      {cx:e.clientX-r.left, cy:e.clientY-r.top, scale: e.deltaY<0 ? 1.08 : 1/1.08});
+    for(let i=0;i<4;i++) arr[i]=out[i];
+    evRender();
+    clearTimeout(evGest && evGest.t);
+    evSaveSide(evActive, evSlot==='plan' ? {planCorners:arr} : {photoCorners:arr});
+  }, {passive:false});
+
   // ---------- dragging the image corners ----------
   function evCornersOf(side, slot){
     const v=evView(side);
@@ -4534,7 +4634,7 @@
   function evOpen(side){
     if(!EV_SIDES.includes(side)) return;
     evEnsurePivot();
-    evActive=side; evPan=0; evSkew=false;
+    evActive=side; evPan=0; evSkew=false; evPlace=false; evGest=null;
     const v=evView(side);
     evPlanImg.src = v.planUrl || '';
     evPhotoImg.src = v.photoUrl || '';
@@ -4543,7 +4643,7 @@
     requestAnimationFrame(evRender);
   }
   function evClose(){
-    evActive=null; evSkew=false;
+    evActive=null; evSkew=false; evPlace=false; evGest=null;
     elevPanel.classList.remove('show');
     evSyncTabs();
   }
@@ -4569,11 +4669,13 @@
     [...elevPanel.querySelectorAll('.ev-tab[data-side]')].forEach(b=>
       b.classList.toggle('on', b.dataset.side===evActive));
     evSkewBtn.classList.toggle('active', evSkew);
+    evPlaceBtn.classList.toggle('active', evPlace);
     evXray.textContent = EV_MODE_LABEL[evMode];
     evXray.classList.toggle('active', evMode!=='cut');
     const v=evActive?evView(evActive):null;
     const has=!!(v && (evSlot==='plan'?v.planUrl:v.photoUrl));
     evSkewBtn.style.display=has?'':'none';
+    evPlaceBtn.style.display=has?'':'none';
     evClearImg.style.display=has?'':'none';
     evPlanBtn.classList.toggle('active', evSlot==='plan' && !!(v&&v.planUrl));
     evPhotoBtn.classList.toggle('active', evSlot==='photo' && !!(v&&v.photoUrl));
@@ -4596,7 +4698,14 @@
     evMode = EV_MODES[(EV_MODES.indexOf(evMode)+1) % EV_MODES.length];
     evSyncTabs(); evRender();
   });
-  evSkewBtn.addEventListener('click', ()=>{ evSkew=!evSkew; evSyncTabs(); evRender(); });
+  evPlaceBtn.addEventListener('click', ()=>{
+    evPlace=!evPlace; if(evPlace) evSkew=false;
+    evSyncTabs(); evRender();
+  });
+  evSkewBtn.addEventListener('click', ()=>{
+    evSkew=!evSkew; if(evSkew) evPlace=false;
+    evSyncTabs(); evRender();
+  });
   evClearImg.addEventListener('click', ()=>{
     if(!evActive) return;
     const v=evView(evActive);
@@ -4604,7 +4713,7 @@
     if(evSlot==='plan'){ v.planUrl=null; v.planCorners=null; evPlanImg.src=''; }
     else { v.photoUrl=null; v.photoCorners=null; evPhotoImg.src=''; }
     if(sessionId) apiDelete('/sessions/'+sessionId+'/elevation-views/'+evActive+'/'+evSlot);
-    evSkew=false; evSyncTabs(); evRender();
+    evSkew=false; evPlace=false; evSyncTabs(); evRender();
   });
   evFile.addEventListener('change', e=>{
     const f=e.target.files[0]; e.target.value='';
@@ -4617,7 +4726,7 @@
       const corners=evDefaultCorners(G, el);
       if(slot==='plan'){ v.planUrl=url; v.planCorners=corners; }
       else { v.photoUrl=url; v.photoCorners=corners; }
-      evSkew=true; evSyncTabs(); evRender();
+      evPlace=true; evSkew=false; evSyncTabs(); evRender();
       if(sessionId) apiUpload('/sessions/'+sessionId+'/elevation-views/'+side+'/'+slot, f,
         {corners:corners, opacity: slot==='plan'? v.planOpacity : v.photoOpacity})
         .then(row=>{ if(row && row.url){ if(slot==='plan') v.planUrl=row.url; else v.photoUrl=row.url; } });

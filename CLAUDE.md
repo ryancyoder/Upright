@@ -704,6 +704,20 @@ photographed from the ground needs; a drawing just uses a rectangle.
 `quadMatrix()` is the classic unit-square-to-quad solve, pre-scaled by the
 image's own pixel size and emitted as a CSS `matrix3d`.
 
+**Placing an image is two steps, in this order: Move / scale, then Skew
+corners.** An import lands in **Move / scale** — one finger pans, two fingers
+pinch and twist, exactly as importing a plan on the map does. Only then do you
+pull the four corners to correct the perspective. Skewing straight from a
+default rectangle means fighting the position and the distortion at once.
+
+The two modes are exclusive, and **Move / scale applies a similarity transform
+to whatever the four corners currently are** — so it moves an already-skewed
+image without un-skewing it, and the order can be revisited freely.
+
+The gesture maths is done in **screen space and mapped back to view feet**:
+with a vertical exaggeration in play, feet-per-pixel differs by axis, and a
+pinch has to feel uniform under the finger.
+
 `evCornerHandles()` **repositions the handles, never rebuilds them.** A drag
 holds pointer capture on the handle; replacing the element mid-drag drops that
 capture and with it every later move and the pointerup that saves the result —
