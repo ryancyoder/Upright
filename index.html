@@ -135,12 +135,19 @@
   .pin-popup .dlp{font-size:12px; margin-top:4px; display:inline-block;}
 
   /* Start overlay + done panel */
+  /* Both full-screen panels centre their content when it fits and scroll from
+     the top when it does not. `justify-content:center` alone clips the top of
+     an over-tall column with no way to reach it -- which hid the recording
+     mode picker on the done panel once a session had a review button, a ZIP
+     button and an audio download to list. */
   .stage-overlay{
     position:absolute; inset:0; z-index:20;
-    display:flex; align-items:center; justify-content:center;
+    display:flex; align-items:center; justify-content:flex-start;
     flex-direction:column; gap:14px; padding:32px; text-align:center;
-    background:var(--bg);
+    background:var(--bg); overflow-y:auto;
   }
+  .stage-overlay > :first-child{margin-top:auto;}
+  .stage-overlay > :last-child{margin-bottom:auto;}
   .stage-overlay.hidden{display:none;}
   .overlay-icon{width:52px; height:74px; border:3px solid var(--dim); border-radius:8px; position:relative;}
   .overlay-icon::after{content:''; position:absolute; top:9px; left:50%; transform:translateX(-50%); width:16px; height:16px; border-radius:50%; border:2px solid var(--dim);}
@@ -154,11 +161,50 @@
   }
   .err{color:#c4432b; display:none;}
 
+  /* Recording mode picker, on the start screen and again in the map toolbar.
+     Two independent switches: audio and video are separate recordings and the
+     reasons to want one without the other are different. */
+  .rec-modes{display:flex; gap:10px; margin-top:2px; justify-content:center;}
+  #startModeSlot, #doneModeSlot{display:flex; flex-direction:column; align-items:center; gap:10px;}
+  #doneModeSlot:not(:empty){margin:4px 0 2px;}
+  .rec-toggle{
+    display:flex; align-items:center; gap:9px;
+    padding:11px 16px; border-radius:12px;
+    border:1px solid var(--line); background:var(--bg2); color:var(--dim);
+    font-size:13px; font-weight:700; letter-spacing:0.02em;
+  }
+  .rec-toggle .dot{
+    width:11px; height:11px; border-radius:50%;
+    border:2px solid var(--dim); background:transparent;
+  }
+  .rec-toggle.on{color:var(--ink); border-color:var(--live);}
+  .rec-toggle.on .dot{background:var(--live); border-color:var(--live);}
+  .rec-note{font-size:12px; color:var(--dim); max-width:290px; line-height:1.45; min-height:34px;}
+
+  /* The same two switches, live, in the HEADER -- not the map toolbar. The
+     toolbar is invisible while the iPad is upright, which is exactly when you
+     are shooting grade and most likely to want the video off. */
+  .rec-live{display:none; gap:6px;}
+  .rec-live.show{display:flex;}
+  .rec-chip{
+    display:flex; align-items:center; gap:6px;
+    padding:6px 11px; border-radius:100px;
+    border:1px solid var(--line); background:transparent; color:var(--dim);
+    font-size:11px; font-weight:700; letter-spacing:0.04em; text-transform:uppercase;
+    white-space:nowrap;
+  }
+  .rec-chip .dot{width:8px; height:8px; border-radius:50%; border:1.5px solid var(--dim);}
+  .rec-chip.on{color:var(--live); border-color:var(--live);}
+  .rec-chip.on .dot{background:var(--live); border-color:var(--live);}
+  .rec-chip:disabled{opacity:0.4;}
+
   .done-panel{
     position:absolute; inset:0; background:var(--bg); z-index:30;
-    display:none; flex-direction:column; align-items:center; justify-content:center;
-    gap:14px; padding:32px; text-align:center;
+    display:none; flex-direction:column; align-items:center; justify-content:flex-start;
+    gap:14px; padding:32px; text-align:center; overflow-y:auto;
   }
+  .done-panel > :first-child{margin-top:auto;}
+  .done-panel > :last-child{margin-bottom:auto;}
   .done-panel.show{display:flex;}
   .done-title{font-size:18px; font-weight:700;}
   .done-sub{font-size:13px; color:var(--dim); max-width:300px; line-height:1.5;}
@@ -625,6 +671,10 @@
   <header>
     <div class="brand">Upright<span>site session</span></div>
     <div class="head-right">
+      <div class="rec-live" id="recLive">
+        <button class="rec-chip on" id="liveAudioBtn" type="button"><i class="dot"></i>Audio</button>
+        <button class="rec-chip on" id="liveVideoBtn" type="button"><i class="dot"></i>Video</button>
+      </div>
       <div class="state-pill" id="statePill"><span class="dot"></span><span id="stateText">Ready</span></div>
       <button class="end-btn" id="endBtn">End session</button>
     </div>
@@ -716,7 +766,14 @@
     <div class="stage-overlay" id="startOverlay">
       <div class="overlay-icon"></div>
       <div class="overlay-title">Record upright, map flat</div>
-      <div class="overlay-sub">Starting a session begins continuous audio recording for the whole visit. Stand the iPad up to also record silent video — the round button snaps a photo pin at your GPS position. Lay it flat and video pauses while the site map appears; audio keeps recording throughout.</div>
+      <div class="overlay-sub">Stand the iPad up to shoot — the round button snaps a photo pin at your GPS position, the one above it shoots grade. Lay it flat for the site map, where pins are placed, measured and sketched.</div>
+      <div id="startModeSlot">
+        <div class="rec-modes" id="recModes">
+          <button class="rec-toggle on" id="modeAudioBtn"><i class="dot"></i>Audio</button>
+          <button class="rec-toggle on" id="modeVideoBtn"><i class="dot"></i>Video</button>
+        </div>
+        <div class="rec-note" id="modeNote"></div>
+      </div>
       <button class="go-btn" id="enableBtn">Start session</button>
       <button class="link-btn" id="historyBtn">Past sessions</button>
       <div class="overlay-sub err" id="errorMsg"></div>
@@ -725,6 +782,7 @@
     <div class="done-panel" id="donePanel">
       <div class="done-title">Session complete</div>
       <div class="done-sub" id="doneSub"></div>
+      <div id="doneModeSlot"></div>
       <div class="done-actions">
         <button class="dl-btn" id="reviewBtn">Review session</button>
         <button class="dl-btn secondary" id="dlVideo">Download audio recording</button>
@@ -801,6 +859,9 @@
 <script>
 (function(){
   const $ = id => document.getElementById(id);
+  const modeAudioBtn=$('modeAudioBtn'), modeVideoBtn=$('modeVideoBtn'), modeNote=$('modeNote'),
+        recModes=$('recModes'), startModeSlot=$('startModeSlot'), doneModeSlot=$('doneModeSlot'),
+        recLive=$('recLive'), liveAudioBtn=$('liveAudioBtn'), liveVideoBtn=$('liveVideoBtn');
   const liveVideo=$('live'), startOverlay=$('startOverlay'), enableBtn=$('enableBtn'),
         errorMsg=$('errorMsg'), statePill=$('statePill'), stateText=$('stateText'),
         tiltReadout=$('tiltReadout'), gpsReadout=$('gpsReadout'), clockEl=$('clock'),
@@ -913,6 +974,10 @@
   let audioChunks=[];
   let clips=[]; // {startOffset, endOffset, blob} — offsets in ms from sessionT0
   let currentClipChunks=[], currentClipStart=null;
+  // What this session RECORDS. Chosen on the start screen; video can be turned
+  // on and off freely mid-session because clips are independent segments.
+  // Audio can only be stopped, never restarted -- see stopAudio().
+  let recAudio=true, recVideo=true;
   let sessionActive=false, isPausedFlat=true;
   let candidateState=null, candidateSince=0, currentlyUpright=false;
   let recordedMs=0, segStart=0, clockTimer=null;
@@ -933,13 +998,26 @@
   }
 
   // ---------- state UI ----------
+  // The pill has to say what is actually being captured, not just that a
+  // session is open: a silent session looks identical otherwise, and thinking
+  // you were recording when you were not is the expensive mistake here.
+  function recWhat(){
+    if(recAudio && recVideo) return '';
+    if(recAudio) return ' — audio only';
+    if(recVideo) return ' — video only';
+    return '';
+  }
   function setState(mode){
     statePill.classList.remove('recording','paused');
     if(mode==='recording'){
-      statePill.classList.add('recording'); stateText.textContent='Recording';
-      clockEl.classList.remove('paused-style');
+      const live = recAudio || recVideo;
+      statePill.classList.toggle('recording', live);
+      statePill.classList.toggle('paused', !live);
+      stateText.textContent = live ? ('Recording'+recWhat()) : 'Not recording — camera';
+      clockEl.classList.toggle('paused-style', !live);
     } else if(mode==='paused'){
-      statePill.classList.add('paused'); stateText.textContent='Paused — map';
+      statePill.classList.add('paused');
+      stateText.textContent = recAudio ? 'Paused — map' : 'Map';
       clockEl.classList.add('paused-style');
     } else stateText.textContent = mode || 'Ready';
   }
@@ -1049,6 +1127,38 @@
       try{ rec.stop(); }catch(e){ if(cb) cb(); }
     } else if(cb) cb();
   }
+  // Master audio: one continuous recording for the whole visit, started once.
+  // It is never paused -- MediaRecorder.pause() closes the gap in the output,
+  // which would slide every clip, pin and transcript offset out of alignment
+  // with a timeline they are all measured against.
+  function startAudioRecorder(){
+    const amime=pickAudioMimeType();
+    try{ audioRecorder = amime ? new MediaRecorder(audioStream,{mimeType:amime}) : new MediaRecorder(audioStream); }
+    catch(e){ audioRecorder = new MediaRecorder(audioStream); }
+    audioRecorder.ondataavailable = e => { if(e.data && e.data.size) audioChunks.push(e.data); };
+    // Stopping mid-session must NOT finalise the session -- endSession clears
+    // sessionActive before it stops the recorder, and that is the only stop
+    // that means the visit is over.
+    audioRecorder.onstop = ()=>{ if(!sessionActive) finalizeSession(); };
+    audioRecorder.start(1000);
+  }
+  function stopMicStream(){
+    if(!audioStream) return;
+    try{ audioStream.getTracks().forEach(t=>t.stop()); }catch(e){}
+    audioStream=null;
+  }
+  // One-way. Audio can be stopped part-way through a visit -- what was captured
+  // stays, and covers 0 to now -- but not restarted: the master timeline every
+  // offset is measured against starts at sessionT0, so a second segment would
+  // be silently time-shifted by however long the gap was.
+  function stopAudio(){
+    if(!recAudio) return;
+    recAudio=false;
+    if(audioRecorder && audioRecorder.state!=='inactive'){ try{ audioRecorder.stop(); }catch(e){} }
+    stopMicStream();
+    setState(isPausedFlat?'paused':'recording');
+    refreshRecUI();
+  }
   function startSession(){
     if(archiveMode) exitArchive();
     audioChunks=[]; clips=[]; currentClipChunks=[]; currentClipStart=null;
@@ -1056,18 +1166,25 @@
     sessionT0=Date.now();
     apiPost('/sessions', { id: sessionId, startedAt: sessionStartedAt });
 
-    const amime=pickAudioMimeType();
-    try{ audioRecorder = amime ? new MediaRecorder(audioStream,{mimeType:amime}) : new MediaRecorder(audioStream); }
-    catch(e){ audioRecorder = new MediaRecorder(audioStream); }
-    audioRecorder.ondataavailable = e => { if(e.data && e.data.size) audioChunks.push(e.data); };
-    audioRecorder.onstop = finalizeSession;
-    audioRecorder.start(1000); // master audio — continuous for the whole session, never paused
+    audioRecorder=null;
+    if(!recAudio) stopMicStream();      // otherwise iOS shows a mic indicator all visit
+    else if(audioStream && audioStream.getAudioTracks().some(t=>t.readyState==='live')) startAudioRecorder();
+    else {
+      // A previous session in this page load turned audio off and released the
+      // mic. Take it back rather than starting a session that silently records
+      // nothing.
+      startAudioStream().then(startAudioRecorder).catch(e=>{
+        console.warn('[upright] microphone unavailable', e);
+        recAudio=false; setState(isPausedFlat?'paused':'recording'); refreshRecUI();
+      });
+    }
 
     sessionActive=true; isPausedFlat=true;
     recordedMs=0; segStart=0;
     clockEl.classList.add('show'); endBtn.classList.add('show');
     clockTimer=setInterval(updateClock,250);
     setState('paused'); showMap(true);
+    refreshRecUI();
   }
   function resumeRec(){
     if(!sessionActive || !isPausedFlat) return;
@@ -1076,7 +1193,7 @@
     // Recording waits on the wake: a MediaRecorder built on a dead stream
     // produces an empty clip. Re-check the state afterwards in case the iPad
     // went back down inside that window.
-    wakeCamera().then(()=>{ if(sessionActive && !isPausedFlat) startVideoClip(); });
+    wakeCamera().then(()=>{ if(recVideo && sessionActive && !isPausedFlat) startVideoClip(); });
     snapBtn.classList.add('show'); gradeBtn.classList.add('show'); annoBar.classList.add('show'); refreshAnnoUI(); updatePinCount();
   }
   function pauseRec(){
@@ -1095,7 +1212,17 @@
     if(!isPausedFlat && segStart){ recordedMs += Date.now()-segStart; segStart=0; }
     sessionWallMs = totalMs();   // freeze before the clock runs away from us
     sessionActive=false; clearInterval(clockTimer);
-    const finishAudio = () => { try{ audioRecorder.stop(); }catch(e){ finalizeSession(); } };
+    // Explicit, not "stop() and hope it throws": with audio switched off
+    // mid-visit the recorder is already inactive, and stopping an inactive
+    // recorder is a silent no-op in Safari and Chromium alike -- onstop never
+    // fires again, so the session would never finalise and the done panel
+    // would never appear.
+    const finishAudio = () => {
+      if(audioRecorder && audioRecorder.state!=='inactive'){
+        try{ audioRecorder.stop(); return; }catch(e){}
+      }
+      finalizeSession();
+    };
     if(!isPausedFlat){ stopVideoClip(finishAudio); }
     else { finishAudio(); }
   }
@@ -1126,6 +1253,7 @@
     snapBtn.classList.remove('show'); gradeBtn.classList.remove('show'); annoBar.classList.remove('show'); annoOverlay.classList.remove('show'); pinCount.classList.remove('show');
     scaleTracks.forEach(t=>t.classList.remove('show'));
     donePanel.classList.add('show');
+    mountModePicker('done');     // choose the next session's mode from here
     endBtn.classList.remove('show'); clockEl.classList.remove('show');
     setState('Ready');
     if(wakeLock){ wakeLock.release().catch(()=>{}); wakeLock=null; }
@@ -1143,6 +1271,7 @@
   });
   newSession.addEventListener('click', ()=>{
     donePanel.classList.remove('show');
+    mountModePicker('start');    // put it back where the start screen expects it
     closeReview();
     finalAudioBlob=null; clips=[];
     pins.forEach(p=>{ if(p.marker && map) map.removeLayer(p.marker); });
@@ -3900,7 +4029,11 @@
       try{ motionGranted = (await DeviceOrientationEvent.requestPermission())==='granted'; }
       catch(e){ motionGranted=false; }
     }
-    try{ await startAudioStream(); }
+    // Only ask for the microphone when this session is going to use it. A
+    // silent survey should not have to hand over the mic, and on iOS an open
+    // mic track lights the recording indicator whether or not anything is
+    // being written.
+    try{ if(recAudio) await startAudioStream(); }
     catch(e){
       let msg;
       if(e && (e.name==='NotAllowedError' || e.name==='SecurityError')){
@@ -3939,6 +4072,58 @@
     startOverlay.classList.add('hidden');
     startSession(); requestWake();
   }
+  // ---------- recording mode ----------
+  function modeNoteText(){
+    if(recAudio && recVideo) return 'Continuous audio for the whole visit, plus silent video whenever the iPad is upright.';
+    if(recAudio) return 'Continuous audio for the whole visit. No video clips — photos, grade shots, sketches and measurements all still work.';
+    if(recVideo) return 'Silent video whenever the iPad is upright, and nothing on the microphone. Without audio there is no session to replay in Review and nothing to transcribe.';
+    return 'Nothing is recorded. The camera still runs for photo pins and grade shots, and the map still works — good for a quick survey. There will be no session to replay in Review.';
+  }
+  // ONE picker, re-parented to whichever screen is asking for the next
+  // session's mode -- the start screen first time, the done panel after. Two
+  // copies would drift out of step, and this is the only place either screen
+  // shows it.
+  function mountModePicker(where){
+    const slot = where==='done' ? doneModeSlot : startModeSlot;
+    if(recModes.parentElement!==slot){ slot.appendChild(recModes); slot.appendChild(modeNote); }
+    refreshRecUI();
+  }
+  function refreshRecUI(){
+    modeAudioBtn.classList.toggle('on', recAudio);
+    modeVideoBtn.classList.toggle('on', recVideo);
+    modeNote.textContent = modeNoteText();
+    recLive.classList.toggle('show', sessionActive);
+    liveAudioBtn.classList.toggle('on', recAudio);
+    liveVideoBtn.classList.toggle('on', recVideo);
+    // Audio is one-way within a session, so once it is off the switch is spent.
+    liveAudioBtn.disabled = sessionActive && !recAudio;
+    liveAudioBtn.title = liveAudioBtn.disabled
+      ? 'Audio cannot be restarted mid-visit — it is the timeline every photo and clip is measured against. Start a new session for audio.'
+      : 'Stop recording audio for the rest of this visit';
+    liveVideoBtn.title = recVideo ? 'Stop recording video clips' : 'Record video clips again while upright';
+  }
+  modeAudioBtn.addEventListener('click', ()=>{ recAudio=!recAudio; refreshRecUI(); });
+  modeVideoBtn.addEventListener('click', ()=>{ recVideo=!recVideo; refreshRecUI(); });
+
+  // Video toggles freely mid-session: each clip is an independent segment with
+  // its own offsets, so stopping and starting again loses nothing but the
+  // footage you chose not to take.
+  liveVideoBtn.addEventListener('click', ()=>{
+    recVideo=!recVideo;
+    if(!recVideo) stopVideoClip();
+    else if(sessionActive && !isPausedFlat) wakeCamera().then(()=>{
+      if(recVideo && sessionActive && !isPausedFlat) startVideoClip();
+    });
+    setState(isPausedFlat?'paused':'recording');
+    refreshRecUI();
+  });
+  liveAudioBtn.addEventListener('click', ()=>{
+    if(!recAudio) return;
+    if(!confirm('Stop recording audio for the rest of this visit?\n\nWhat has been recorded so far is kept. Audio cannot be restarted — it is the timeline every photo and clip is measured against.')) return;
+    stopAudio();
+  });
+  mountModePicker('start');
+
   enableBtn.addEventListener('click', enable);
 })();
 </script>

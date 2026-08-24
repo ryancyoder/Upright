@@ -74,6 +74,45 @@ Audio does not need it — it is written once, at the end of a session.
 Old rows still carry unversioned paths and still resolve; nothing needed
 migrating.
 
+## Recording mode
+
+Audio and video are **two independent switches**, chosen on the start screen
+(both on by default) and shown live in the **header** for the rest of the
+session. Not the map toolbar — that is invisible while the iPad is upright,
+which is exactly when you are shooting grade and most likely to want the video
+off. The state pill says what is actually being captured (`Recording — audio
+only`, `Not recording — camera`); a silent session looks identical otherwise,
+and believing you were recording when you were not is the expensive mistake.
+
+The camera **always runs** regardless — photo pins, grade sighting and the
+crosshair snapshots all need the preview. "Video off" means no clips.
+
+**Video toggles freely.** Clips are independent segments with their own
+offsets, so stopping and restarting loses only the footage you chose not to
+take.
+
+**Audio is one-way within a session.** It can be stopped part-way — what was
+captured is kept and covers 0 to the stop — but never restarted, because
+`MediaRecorder.pause()`/a second `start()` closes the gap in the output, which
+would slide every clip, pin and transcript offset out of alignment with the
+`sessionT0` timeline they are all measured against. The switch disables itself
+once spent and says why. A new session can turn it back on; the mic is
+re-acquired then, since a session that does not record audio **releases the mic
+stream** rather than holding it open (iOS lights its recording indicator for an
+open track whether or not anything is being written).
+
+Two things this exposed:
+
+- `endSession()` used to call `audioRecorder.stop()` inside a try/catch and
+  rely on the *throw* to reach `finalizeSession()`. Stopping an already-inactive
+  recorder is a silent no-op, so once audio had been switched off mid-visit the
+  session never finalised and the done panel never appeared. The check is
+  explicit now.
+- The start and done panels were `justify-content:center` with no scroll, which
+  clips the top of an over-tall column with no way to reach it. Both are
+  `overflow-y:auto` with `margin-top/bottom:auto` on the end children, so they
+  centre when they fit and scroll when they do not.
+
 ## Data durability — important
 
 All Supabase writes are **fire-and-forget**. Failures are `console.warn`'d,
