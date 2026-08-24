@@ -953,6 +953,12 @@
     clockEl.textContent=Math.floor(s/60)+':'+String(s%60).padStart(2,'0');
   }
 
+  // One colour per survey-point kind, used by the sighting crosshair, the
+  // crosshair burned into each captured frame, the filmstrip badges and the map
+  // glyphs alike -- so a thing is the same colour wherever you meet it.
+  // These must match --obs-sight / --anchor-sight / --live.
+  const OBS_SIGHT='#4fd07a', ANCHOR_SIGHT='#e8c33a', TARGET_SIGHT='#c4432b';
+
   // ---------- recording ----------
   function pickVideoMimeType(){
     const c=['video/mp4','video/webm;codecs=vp9','video/webm;codecs=vp8','video/webm'];
@@ -2564,7 +2570,7 @@
     if(anchor && (anchor.photoUrl||anchor.photoLocal)){
       entries.push({ sort:anchor.offset==null?Infinity:anchor.offset, build:()=>makeThumb({
         kind:'elev', id:anchor.id, elev:true, photo:anchor.photoUrl||anchor.photoLocal,
-        local:anchor.photoLocal, badge:'A', colour:'#5a7a63',
+        local:anchor.photoLocal, badge:'A', colour:ANCHOR_SIGHT,
         dim:!anchor.placed, sel:anchor.id===elevSelected,
         onClick:()=>elevSelectFromStrip(anchor),
         controls:(function(){
@@ -2633,7 +2639,7 @@
         if(obsShot){
           row.appendChild(makeThumb({
             kind:'elev', id:o.id, elev:true, photo:o.photoUrl||o.photoLocal,
-            local:o.photoLocal, badge:'O', colour:'#4fd07a',
+            local:o.photoLocal, badge:'O', colour:OBS_SIGHT,
             dim:!o.placed, sel:o.id===elevSelected,
             onClick:()=>elevSelectFromStrip(o),
             controls:[ thumbCtl('redo','Re-photograph where you stood','tl','',()=>setResume(o,o)) ]
@@ -2643,7 +2649,7 @@
           row.appendChild(makeThumb({
             kind:'elev', id:pt.id, elev:true, photo:pt.photoUrl||pt.photoLocal,
             local:pt.photoLocal, badge:'T'+(pt.label||'').replace(/[^0-9]/g,''),
-            colour:'#c4432b', dim:!pt.placed, sel:pt.id===elevSelected,
+            colour:TARGET_SIGHT, dim:!pt.placed, sel:pt.id===elevSelected,
             onClick:()=>elevSelectFromStrip(pt),
             controls:[
               thumbCtl('redo','Reshoot this target','tl','',()=>setResume(o,pt)),
@@ -2934,7 +2940,6 @@
   // measured against that set's anchor angle, so a changed stance silently
   // shifts all of them.
   const ANCHOR_DRIFT_DEG=0.5;
-  const OBS_SIGHT='#4fd07a', ANCHOR_SIGHT='#e8c33a', TARGET_SIGHT='#c4432b';   // must match --obs-sight / --anchor-sight / --live
   const tiltSamples=[];
   const TILT_WINDOW_MS=800;   // averaged into one shot
   // 0.4 was unusably tight for a handheld iPad. The shot is the MEAN of the
@@ -3042,7 +3047,9 @@
     elevPoints.forEach(pt=>{
       if(isHidden(pt)) return;
       const isObs=pt.kind==='observation', isAnchor=pt.kind==='anchor';
-      const colour=isObs?'#8b887f':isAnchor?'#5a7a63':'#c4432b';
+      // One colour per kind, shared with the sight you shot it through:
+      // green stance, yellow anchor, red target.
+      const colour=isObs?OBS_SIGHT:isAnchor?ANCHOR_SIGHT:TARGET_SIGHT;
       const e=elevationOf(pt.id);
       const value=isObs ? '' : fmtElev(e);
       const cls='elev-pin'+(pt.id===elevSelected?' sel':'')+(pt.placed?'':' unplaced');

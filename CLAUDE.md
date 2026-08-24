@@ -421,7 +421,12 @@ the maths, so iOS compass calibration cannot corrupt a measurement.
 
 Observation, anchor and target each render as their **own SVG glyph** (tripod,
 benchmark triangle, crosshair) — deliberately not the standard photo-pin
-graphic, since they are different things. **Keep the pins minimal**: glyph
+graphic, since they are different things — in their **own colour**, and it is
+the same colour everywhere that thing appears: the sighting crosshair, the
+crosshair burned into the captured frame, the filmstrip badge and the map
+glyph all read from `OBS_SIGHT` / `ANCHOR_SIGHT` / `TARGET_SIGHT`. Change a
+colour in one place and it changes everywhere; the CSS tokens `--obs-sight` /
+`--anchor-sight` / `--live` have to be kept in step by hand. **Keep the pins minimal**: glyph
 plus at most one line, no fill, border or corner radius. Legibility over
 bright satellite comes from drop-shadows, not from a box; a yard full of
 boxed labels is unreadable. The point's name shows only while it is
