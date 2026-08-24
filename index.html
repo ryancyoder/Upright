@@ -354,8 +354,39 @@
   }
   .film-thumb.sel{border-color:var(--live); transform:scale(1.04);}
   .film-thumb.nogps{opacity:0.55;}
-  /* Grade shots sit in the same strip as photo pins but are a different kind
-     of picture: a survey reference, not a site photo. */
+  /* A set is drawn as one outlined group inside the strip, so its shots read
+     as belonging together rather than as loose pictures. */
+  .film-set{
+    flex:0 0 auto; display:flex; flex-direction:column; gap:6px;
+    padding:6px 7px; border-radius:12px;
+    border:2px solid rgba(90,122,99,0.75); background:rgba(90,122,99,0.10);
+  }
+  .film-set.is-hidden{opacity:0.42; border-style:dashed;}
+  .film-set.is-locked{border-color:rgba(139,136,127,0.85);}
+  .film-set-head{display:flex; align-items:center; gap:5px;}
+  .film-set-name{
+    font-size:10px; font-weight:700; letter-spacing:0.08em; text-transform:uppercase;
+    color:var(--ink); margin-right:auto; white-space:nowrap; padding-left:2px;
+  }
+  .film-set-row{display:flex; gap:8px;}
+  /* Round icon buttons: on the group header, and overlaid on each tile. */
+  .ico-btn{
+    flex:0 0 auto; width:28px; height:28px; border-radius:50%; padding:0;
+    border:1px solid var(--line); background:rgba(0,0,0,0.6); color:var(--ink);
+    display:flex; align-items:center; justify-content:center;
+  }
+  .ico-btn:active{transform:scale(0.9);}
+  .ico-btn.on{border-color:var(--flat); color:var(--flat); background:rgba(90,122,99,0.28);}
+  .ico-btn.danger{border-color:var(--live); color:var(--live);}
+  .ico-btn svg{display:block;}
+  .thumb-ctl{
+    position:absolute; z-index:3; width:28px; height:28px; border-radius:50%;
+    border:1px solid rgba(255,255,255,0.5); background:rgba(0,0,0,0.62); color:#fff;
+    display:flex; align-items:center; justify-content:center; padding:0;
+  }
+  .thumb-ctl.tl{left:4px; top:4px;}
+  .thumb-ctl.tr{right:4px; top:4px;}
+  .thumb-ctl.danger{border-color:var(--live); color:var(--live);}
   .film-thumb.elev{border-color:rgba(90,122,99,0.55);}
   .film-thumb.elev.sel{border-color:var(--live);}
   .film-thumb.elev .fnum{letter-spacing:0.04em;}
@@ -627,7 +658,6 @@
       <div class="elev-bar" id="elevBar">
         <span class="elev-status" id="elevStatus"></span>
         <div class="elev-actions">
-          <button class="mt-btn" id="elevSets">Sets</button>
           <button class="mt-btn" id="elevExit">Done</button>
         </div>
       </div>
@@ -696,17 +726,6 @@
       <div class="hist-list" id="propList"></div>
     </div>
 
-    <div class="history-panel" id="setsPanel">
-      <div class="review-head">
-        <span class="title">Grade sets</span>
-        <div class="review-head-actions">
-          <button class="review-close" id="setsClose">Close</button>
-        </div>
-      </div>
-      <div class="hist-status" id="setsStatus"></div>
-      <div class="hist-list" id="setsList"></div>
-    </div>
-
     <div class="review-panel" id="reviewPanel">
       <div class="review-head">
         <span class="title">Session review</span>
@@ -762,9 +781,7 @@
         sightOverlay=$('sightOverlay'), sightMsg=$('sightMsg'), sightAngle=$('sightAngle'),
         sightSteady=$('sightSteady'), gradeBtn=$('gradeBtn'),
         sightDwell=$('sightDwellFill'),
-        elevBar=$('elevBar'), elevStatus=$('elevStatus'), elevSets=$('elevSets'),
-        setsPanel=$('setsPanel'), setsList=$('setsList'), setsStatus=$('setsStatus'),
-        setsClose=$('setsClose'),
+        elevBar=$('elevBar'), elevStatus=$('elevStatus'),
         elevExit=$('elevExit'),
         annoDraw=$('annoDraw'), drawWrap=$('drawWrap'), drawCanvas=$('drawCanvas'),
         drawSwatches=$('drawSwatches'), drawUndo=$('drawUndo'), drawClear=$('drawClear'), drawDone=$('drawDone'),
@@ -2408,59 +2425,146 @@
   // ---------- photo filmstrip <-> pin selection ----------
   // Photo pins and grade-shot reference frames are all pictures of the same
   // site taken minutes apart, so they share one strip in capture order.
-  // Tapping either highlights whatever it belongs to -- a photo pin or an
-  // elevation marker.
-  function stripItems(){
-    const items=[];
-    pins.forEach(pin=>items.push({
-      kind:'pin', ref:pin, offset:pin.offset, photo:pin.photo,
-      badge:String(pin.id), dim:pin.lat===null, sel:pin.id===selectedPinId
-    }));
-    elevPoints.forEach(pt=>{
-      const src=pt.photoUrl||pt.photoLocal;
-      if(!src || isHidden(pt)) return;
-      const badge = pt.kind==='anchor' ? 'A'
-                  : 'T'+(pt.label||'').replace(/[^0-9]/g,'');
-      items.push({
-        kind:'elev', ref:pt, offset:pt.offset, photo:src,
-        badge:badge, dim:!pt.placed, sel:pt.id===elevSelected,
-        colour: pt.kind==='anchor' ? '#5a7a63' : '#c4432b'
-      });
+  // Grade shots are drawn grouped inside their set's outline, and the set's
+  // controls live on the tiles rather than in a separate panel.
+  const ICON = {
+    eye:   '<path d="M1 8s2.6-4.6 7-4.6S15 8 15 8s-2.6 4.6-7 4.6S1 8 1 8z"/><circle cx="8" cy="8" r="2.1"/>',
+    eyeOff:'<path d="M2.4 4.6C1.3 5.9 1 8 1 8s2.6 4.6 7 4.6c1.4 0 2.6-.5 3.6-1.1"/><path d="M6.2 3.6A6 6 0 0 1 8 3.4c4.4 0 7 4.6 7 4.6s-.6 1-1.7 2.1"/><path d="M2 2l12 12"/>',
+    lock:  '<rect x="3.2" y="7" width="9.6" height="6.4" rx="1.4"/><path d="M5.4 7V5.2a2.6 2.6 0 0 1 5.2 0V7"/>',
+    unlock:'<rect x="3.2" y="7" width="9.6" height="6.4" rx="1.4"/><path d="M5.4 7V5.2a2.6 2.6 0 0 1 4.9-1.2"/>',
+    plus:  '<path d="M8 3.2v9.6M3.2 8h9.6"/>',
+    trash: '<path d="M2.8 4.4h10.4M6.4 4.4V3a.8.8 0 0 1 .8-.8h1.6a.8.8 0 0 1 .8.8v1.4"/><path d="M4.2 4.4l.6 8.2a1 1 0 0 0 1 .9h4.4a1 1 0 0 0 1-.9l.6-8.2"/>',
+    redo:  '<path d="M13 8a5 5 0 1 1-1.6-3.7"/><path d="M13.2 2.4v3.2H10"/>',
+    close: '<path d="M4 4l8 8M12 4l-8 8"/>'
+  };
+  function svgIcon(name){
+    return '<svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" '
+         + 'stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">'+ICON[name]+'</svg>';
+  }
+  function icoBtn(name, title, cls, fn){
+    const b=document.createElement('button');
+    b.className='ico-btn'+(cls?' '+cls:'');
+    b.title=title; b.setAttribute('aria-label', title);
+    b.innerHTML=svgIcon(name);
+    b.addEventListener('click', ev=>{ ev.stopPropagation(); fn(); });
+    return b;
+  }
+
+  function makeThumb(opts){
+    const b=document.createElement('button');
+    b.className='film-thumb'+(opts.dim?' nogps':'')+(opts.sel?' sel':'')+(opts.elev?' elev':'');
+    b.dataset.kind=opts.kind; b.dataset.id=opts.id;
+    const img=document.createElement('img');
+    img.alt=opts.badge;
+    // A stored URL can fail in the field; the locally captured frame is the
+    // same picture, so fall back rather than showing an empty box.
+    if(opts.local) img.onerror=()=>{ if(img.src!==opts.local) img.src=opts.local; };
+    img.src=opts.photo;
+    b.appendChild(img);
+    const n=document.createElement('span');
+    n.className='fnum'; n.textContent=opts.badge;
+    if(opts.colour) n.style.background=opts.colour;
+    b.appendChild(n);
+    b.addEventListener('click', opts.onClick);
+    (opts.controls||[]).forEach(c=>{
+      c.classList.remove('ico-btn');
+      c.classList.add('thumb-ctl', c.dataset.pos||'tr');
+      b.appendChild(c);
     });
-    // Anything without an offset (older rows) sorts to the end rather than
-    // jumping to the front.
-    items.sort((a,b)=>(a.offset==null?Infinity:a.offset)-(b.offset==null?Infinity:b.offset));
-    return items;
+    return b;
+  }
+  function thumbCtl(name, title, pos, cls, fn){
+    const c=icoBtn(name, title, cls, fn);
+    c.dataset.pos=pos;
+    return c;
   }
 
   function renderStrip(){
-    const items=stripItems();
-    if(!items.length){ filmStrip.classList.remove('show'); filmStrip.innerHTML=''; return; }
-    filmStrip.innerHTML='';
-    items.forEach(it=>{
-      const b=document.createElement('button');
-      b.className='film-thumb'+(it.dim?' nogps':'')+(it.sel?' sel':'')+(it.kind==='elev'?' elev':'');
-      b.dataset.kind=it.kind;
-      b.dataset.id=(it.kind==='pin') ? it.ref.id : it.ref.id;
-      const img=document.createElement('img');
-      img.alt=it.badge;
-      // A stored URL can fail in the field; the locally captured frame is the
-      // same picture, so fall back rather than showing an empty box.
-      if(it.kind==='elev' && it.ref.photoLocal){
-        img.onerror=()=>{ if(img.src!==it.ref.photoLocal) img.src=it.ref.photoLocal; };
-      }
-      img.src=it.photo;
-      b.appendChild(img);
-      const n=document.createElement('span');
-      n.className='fnum'; n.textContent=it.badge;
-      if(it.colour) n.style.background=it.colour;
-      b.appendChild(n);
-      b.addEventListener('click', ()=>{
-        if(it.kind==='pin') selectPin(it.ref, 'strip');
-        else elevSelectFromStrip(it.ref);
-      });
-      filmStrip.appendChild(b);
+    const anchor=elevAnchorPoint();
+    const entries=[];
+
+    pins.forEach(pin=>entries.push({ sort:pin.offset==null?Infinity:pin.offset, build:()=>makeThumb({
+      kind:'pin', id:pin.id, photo:pin.photo, badge:String(pin.id),
+      dim:pin.lat===null, sel:pin.id===selectedPinId,
+      onClick:()=>selectPin(pin,'strip')
+    })}));
+
+    if(anchor && (anchor.photoUrl||anchor.photoLocal)){
+      entries.push({ sort:anchor.offset==null?Infinity:anchor.offset, build:()=>makeThumb({
+        kind:'elev', id:anchor.id, elev:true, photo:anchor.photoUrl||anchor.photoLocal,
+        local:anchor.photoLocal, badge:'A', colour:'#5a7a63',
+        dim:!anchor.placed, sel:anchor.id===elevSelected,
+        onClick:()=>elevSelectFromStrip(anchor),
+        controls:(function(){
+          const ctl=[ thumbCtl(anchor.locked?'lock':'unlock',
+            anchor.locked?'Unlock the anchor':'Lock the anchor', 'tl',
+            anchor.locked?'danger':'', ()=>{
+              anchor.locked=!anchor.locked; patchPoint(anchor,{locked:anchor.locked});
+              elevRenderAll(); renderStrip();
+            }) ];
+          // Removing the anchor is only offered once nothing is measured
+          // against it any more. While shots reference it, deleting it would
+          // quietly invalidate every elevation in the survey.
+          const orphaned = !elevShots.some(x=>x.pointId===anchor.id);
+          if(orphaned){
+            ctl.push(thumbCtl('close','Remove the anchor','tr','danger',()=>{
+              if(!confirm('Remove the anchor? Nothing is measured against it any more.')) return;
+              if(anchor.remoteId) apiDelete('/elevation-points/'+anchor.remoteId);
+              if(anchor.marker && map){ try{ map.removeLayer(anchor.marker); }catch(e){} }
+              elevPoints=elevPoints.filter(x=>x.id!==anchor.id);
+              if(elevSelected===anchor.id) elevSelected=null;
+              elevRenderAll(); renderStrip(); elevStatusUpdate();
+            }));
+          }
+          return ctl;
+        })()
+      })});
+    }
+
+    // Each set becomes one outlined group, ordered by its earliest shot.
+    setsOf().forEach(set=>{
+      const shots=set.targets.filter(t=>t.photoUrl||t.photoLocal);
+      if(!shots.length && !set.targets.length) return;
+      const sort=Math.min.apply(null, set.targets.map(t=>t.offset==null?Infinity:t.offset).concat([Infinity]));
+      entries.push({ sort:sort, build:()=>{
+        const o=set.obs;
+        const wrap=document.createElement('div');
+        wrap.className='film-set'+(o.hidden?' is-hidden':'')+(o.locked?' is-locked':'');
+        const head=document.createElement('div'); head.className='film-set-head';
+        const nm=document.createElement('span'); nm.className='film-set-name';
+        nm.textContent=o.label||'Set';
+        head.appendChild(nm);
+        // Hidden sets STAY in the strip -- dimmed -- or there would be no way
+        // to bring them back.
+        head.appendChild(icoBtn(o.hidden?'eyeOff':'eye', o.hidden?'Show this set':'Hide this set',
+          o.hidden?'':'on', ()=>setHidden(o,!o.hidden)));
+        head.appendChild(icoBtn(o.locked?'lock':'unlock', o.locked?'Unlock this set':'Lock this set',
+          o.locked?'on':'', ()=>setLocked(o,!o.locked)));
+        head.appendChild(icoBtn('plus','Add more shots to this set','',()=>setResume(o,null)));
+        head.appendChild(icoBtn('trash','Delete this set','danger',()=>setDelete(o)));
+        wrap.appendChild(head);
+        const row=document.createElement('div'); row.className='film-set-row';
+        shots.forEach(pt=>{
+          row.appendChild(makeThumb({
+            kind:'elev', id:pt.id, elev:true, photo:pt.photoUrl||pt.photoLocal,
+            local:pt.photoLocal, badge:'T'+(pt.label||'').replace(/[^0-9]/g,''),
+            colour:'#c4432b', dim:!pt.placed, sel:pt.id===elevSelected,
+            onClick:()=>elevSelectFromStrip(pt),
+            controls:[
+              thumbCtl('redo','Reshoot this target','tl','',()=>setResume(o,pt)),
+              thumbCtl('close','Remove this target','tr','danger',()=>targetDelete(pt))
+            ]
+          }));
+        });
+        wrap.appendChild(row);
+        return wrap;
+      }});
     });
+
+    entries.sort((a,b)=>a.sort-b.sort);
+    filmStrip.innerHTML='';
+    if(!entries.length){ filmStrip.classList.remove('show'); return; }
+    entries.forEach(e=>filmStrip.appendChild(e.build()));
     filmStrip.classList.add('show');
   }
 
@@ -2967,7 +3071,6 @@
       }
       elevSetSurvey(true);
       renderStrip();
-      if(setsPanel.classList.contains('show')) renderSets();
     }
   }
 
@@ -3130,7 +3233,6 @@
     const snap=gradeSnapshot();
     if(snap){ pt.pendingPhoto=snap; pt.photoLocal=snap; pt.photoUrl=snap; }
     elevFlushPending();
-    if(setsPanel.classList.contains('show')) renderSets();
 
     snapFlash.classList.remove('go'); void snapFlash.offsetWidth; snapFlash.classList.add('go');
     gradeArmed=false; dwellStart=0;
@@ -3196,11 +3298,11 @@
 
   function setHidden(obs, hidden){
     obs.hidden=hidden; patchPoint(obs, {hidden:hidden});
-    elevRenderAll(); renderStrip(); renderSets(); elevStatusUpdate();
+    elevRenderAll(); renderStrip(); elevStatusUpdate();
   }
   function setLocked(obs, locked){
     obs.locked=locked; patchPoint(obs, {locked:locked});
-    elevRenderAll(); renderSets(); elevStatusUpdate();
+    elevRenderAll(); renderStrip(); elevStatusUpdate();
   }
   function setDelete(obs){
     const set=setsOf().find(x=>x.obs.id===obs.id);
@@ -3215,7 +3317,7 @@
     elevShots=elevShots.filter(sh=>!doomed.has(sh.pointId) && sh.observationId!==obs.id);
     if(elevActiveObs===obs.id) elevActiveObs=null;
     if(doomed.has(elevSelected)) elevSelected=null;
-    elevRenderAll(); renderStrip(); renderSets(); elevStatusUpdate();
+    elevRenderAll(); renderStrip(); elevStatusUpdate();
   }
   function targetDelete(pt){
     if(!confirm('Remove '+pt.label+'?')) return;
@@ -3224,7 +3326,7 @@
     elevPoints=elevPoints.filter(p=>p.id!==pt.id);
     elevShots=elevShots.filter(sh=>sh.pointId!==pt.id);
     if(elevSelected===pt.id) elevSelected=null;
-    elevRenderAll(); renderStrip(); renderSets(); elevStatusUpdate();
+    elevRenderAll(); renderStrip(); elevStatusUpdate();
   }
 
   // Resume a set, or re-shoot one of its targets. Both need the anchor
@@ -3236,92 +3338,9 @@
     gradeAnchorBaseline = prior.length ? mean(prior.map(x=>x.angleDeg)) : null;
     gradeResuming=true;
     gradeReshootId = reshootPt ? reshootPt.id : null;
-    closeSets();
     gradeSetMode(true, obs.id);
   }
 
-  function renderSets(){
-    const sets=setsOf();
-    const anchor=elevAnchorPoint();
-    setsList.innerHTML='';
-    if(!sets.length && !anchor){
-      setsStatus.textContent='No grade sets yet — hold the iPad up and use SHOOT GRADE.';
-      return;
-    }
-    setsStatus.innerHTML=sets.length+' set'+(sets.length===1?'':'s')
-      + ' · a set is one standing position and everything shot from it';
-
-    const row=(cls)=>{ const d=document.createElement('div'); d.className='hist-row'+(cls?' '+cls:''); return d; };
-    const btn=(label, cls, fn)=>{ const b=document.createElement('button');
-      b.className='hist-btn'+(cls?' '+cls:''); b.textContent=label;
-      b.addEventListener('click', fn); return b; };
-
-    if(anchor){
-      const r=row(); const main=document.createElement('div'); main.className='hist-main';
-      const t=document.createElement('div'); t.className='hist-title';
-      t.innerHTML='Anchor <span class="set-flag">0.00\u2032 datum</span>'
-                + (anchor.locked?'<span class="set-flag">locked</span>':'');
-      main.appendChild(t);
-      const sub=document.createElement('div'); sub.className='hist-sum';
-      sub.textContent='Shared by every set — moving it re-computes the whole survey';
-      main.appendChild(sub);
-      r.appendChild(main);
-      const acts=document.createElement('div'); acts.className='hist-actions';
-      acts.appendChild(btn(anchor.locked?'Unlock':'Lock','',()=>{
-        anchor.locked=!anchor.locked; patchPoint(anchor,{locked:anchor.locked});
-        elevRenderAll(); renderSets();
-      }));
-      r.appendChild(acts); setsList.appendChild(r);
-    }
-
-    sets.forEach(set=>{
-      const o=set.obs;
-      const r=row(o.hidden?'dim':'');
-      const main=document.createElement('div'); main.className='hist-main';
-      const t=document.createElement('div'); t.className='hist-title';
-      t.innerHTML=(o.label||'Observation')
-        + (o.hidden?'<span class="set-flag">hidden</span>':'')
-        + (o.locked?'<span class="set-flag">locked</span>':'');
-      main.appendChild(t);
-      const sub=document.createElement('div'); sub.className='hist-sum';
-      const unplaced=set.targets.filter(x=>!x.placed).length;
-      sub.textContent=set.targets.length+' target'+(set.targets.length===1?'':'s')
-        + ' · '+set.shots+' shot'+(set.shots===1?'':'s')
-        + (unplaced?' · '+unplaced+' still to place':'');
-      main.appendChild(sub);
-      r.appendChild(main);
-      const acts=document.createElement('div'); acts.className='hist-actions';
-      acts.appendChild(btn(o.hidden?'Show':'Hide','',()=>setHidden(o,!o.hidden)));
-      acts.appendChild(btn(o.locked?'Unlock':'Lock','',()=>setLocked(o,!o.locked)));
-      acts.appendChild(btn('Add shots','go',()=>setResume(o,null)));
-      acts.appendChild(btn('Delete','danger',()=>setDelete(o)));
-      r.appendChild(acts);
-      setsList.appendChild(r);
-
-      set.targets.forEach(pt=>{
-        const tr=row('set-target'+(o.hidden?' dim':''));
-        const m=document.createElement('div'); m.className='hist-main';
-        const tt=document.createElement('div'); tt.className='hist-title';
-        tt.textContent=pt.label||'Target';
-        m.appendChild(tt);
-        const e=elevationOf(pt.id);
-        const ts=document.createElement('div'); ts.className='hist-sum';
-        ts.textContent=fmtElev(e)+(elevConfidence(e)?' · '+elevConfidence(e):'');
-        m.appendChild(ts);
-        tr.appendChild(m);
-        const ta=document.createElement('div'); ta.className='hist-actions';
-        ta.appendChild(btn('Reshoot','',()=>setResume(o,pt)));
-        ta.appendChild(btn('Remove','danger',()=>targetDelete(pt)));
-        tr.appendChild(ta);
-        setsList.appendChild(tr);
-      });
-    });
-  }
-
-  function openSets(){ setsPanel.classList.add('show'); renderSets(); }
-  function closeSets(){ setsPanel.classList.remove('show'); }
-  elevSets.addEventListener('click', openSets);
-  setsClose.addEventListener('click', closeSets);
 
   // ---------- review / adjust on the map ----------
   function elevReset(){
@@ -3332,7 +3351,6 @@
     gradeBtn.classList.remove('on'); gradeBtn.innerHTML='SHOOT<br>GRADE';
     gradeResuming=false; gradeReshootId=null; gradeAnchorBaseline=null; gradeBlocked=false;
     sightOverlay.classList.remove('show');
-    closeSets();
   }
   function elevSetSurvey(on){
     elevSurveyOn=on;

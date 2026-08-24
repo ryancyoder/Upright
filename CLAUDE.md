@@ -296,8 +296,7 @@ to the point. Without that photo a yard full of "Target 3" pins is
 impossible to place afterwards.
 
 Pressing the button again ends the mode, restores tilt-to-map, opens the
-survey bar and fits the map to the survey. The bar is status, **Sets** and
-**Done** — there are no manual add-point buttons, because every point comes
+survey bar and fits the map to the survey. There are no manual add-point buttons, because every point comes
 from a shot; a point with no shot has no elevation and is just clutter.
 
 ### Sets
@@ -308,11 +307,14 @@ reshoot) and can be hidden, locked or removed as a unit. The anchor belongs
 to *every* set, so it is never hidden by a set operation and carries its own
 lock.
 
-The **Sets** panel lists each set with its targets nested underneath:
+**Set management lives on the filmstrip tiles**, not in a separate panel — a
+set is drawn as one outlined, named group containing its target frames, with
+round icon buttons on the group header and overlaid on each tile:
 
 - **Hide / Show** — purely visual, and it changes no number, since each
-  target is computed from its own observation. Hidden sets drop out of the
-  map *and* the filmstrip.
+  target is computed from its own observation. A hidden set drops off the map
+  but **stays in the strip, dimmed** — hiding it there too would leave no way
+  to bring it back.
 - **Lock / Unlock** — stops the set's pins being dragged once positioned.
   This is what guards a finished survey against a stray thumb.
 - **Delete** — the observation, its shots and its targets. One server-side
@@ -320,7 +322,15 @@ The **Sets** panel lists each set with its targets nested underneath:
   (`observation_id`) both cascade, and the reference photos are purged from
   Storage first so nothing is orphaned.
 - **Add shots** — resume the set, adding more targets to it.
-- Per target: **Reshoot** (replace its sightings) and **Remove**.
+- Per target tile: **Reshoot** (replace its sightings) and **Remove**.
+
+The **anchor tile sits outside every group**, since it is the shared datum
+rather than part of any one set, and carries its own lock. Its **Remove**
+control only appears once nothing is measured against it any more —
+deleting a live anchor would quietly invalidate every elevation in the
+survey.
+
+The bar underneath is status plus **Done**.
 
 **Resuming or reshooting re-establishes the anchor first, and checks it.**
 Every target in a set is measured against that set's anchor angle, which is
