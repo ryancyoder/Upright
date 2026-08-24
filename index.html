@@ -434,7 +434,7 @@
 
   /* Photo filmstrip under the map */
   .film-strip{
-    flex:0 0 auto; display:none; gap:8px;
+    flex:0 0 auto; display:none; gap:8px; align-items:center;
     padding:8px 10px; overflow-x:auto; overflow-y:hidden;
     background:var(--bg2); border-top:1px solid var(--line);
     -webkit-overflow-scrolling:touch;
@@ -461,6 +461,13 @@
     padding:6px 7px; border-radius:12px;
     border:2px solid rgba(90,122,99,0.75); background:rgba(90,122,99,0.10);
   }
+  /* The anchor gets the SAME box as a set so the strip has one bottom edge,
+     but it is not a set: no fill, a dotted border and its own colour say that
+     it is the shared datum every set is measured against. */
+  .film-set.is-datum{
+    border-style:dotted; border-color:rgba(232,195,58,0.8); background:transparent;
+  }
+  .film-set.is-datum .film-set-name{color:var(--anchor-sight);}
   .film-set.is-hidden{opacity:0.42; border-style:dashed;}
   .film-set.is-locked{border-color:rgba(139,136,127,0.85);}
   .film-set-head{display:flex; align-items:center; gap:5px;}
@@ -2722,36 +2729,48 @@
     })}));
 
     if(anchor && (anchor.photoUrl||anchor.photoLocal)){
-      entries.push({ sort:anchor.offset==null?Infinity:anchor.offset, build:()=>makeThumb({
-        kind:'elev', id:anchor.id, elev:true, photo:anchor.photoUrl||anchor.photoLocal,
-        local:anchor.photoLocal, badge:'A', colour:ANCHOR_SIGHT,
-        dim:!anchor.placed, sel:anchor.id===elevSelected,
-        onClick:()=>elevSelectFromStrip(anchor),
-        controls:(function(){
-          const ctl=[ thumbCtl(anchor.locked?'lock':'unlock',
-            anchor.locked?'Unlock the anchor':'Lock the anchor', 'tl',
-            anchor.locked?'danger':'', ()=>{
-              anchor.locked=!anchor.locked; patchPoint(anchor,{locked:anchor.locked});
-              elevRenderAll(); renderStrip();
-            }) ];
-          // Removing the anchor is only offered once nothing is measured
-          // against it any more. While shots reference it, deleting it would
-          // quietly invalidate every elevation in the survey.
-          const orphaned = !elevShots.some(x=>x.pointId===anchor.id);
-          if(orphaned){
-            ctl.push(thumbCtl('close','Remove the anchor','tr','danger',()=>{
-              if(!confirm('Remove the anchor? Nothing is measured against it any more.')) return;
-              if(anchor.remoteId) apiDelete('/elevation-points/'+anchor.remoteId);
-              if(anchor.marker && map){ try{ map.removeLayer(anchor.marker); }catch(e){} }
-              slopesDropFor([anchor.id]);
-              elevPoints=elevPoints.filter(x=>x.id!==anchor.id);
-              if(elevSelected===anchor.id) elevSelected=null;
-              elevRenderAll(); renderStrip(); elevStatusUpdate();
-            }));
-          }
-          return ctl;
-        })()
-      })});
+      // Boxed like a set, so it stands the same height in the strip -- but
+      // headed ANCHOR and styled as the datum, because it belongs to every set
+      // rather than to one. Its controls sit in the header for the same reason
+      // a set's do.
+      entries.push({ sort:anchor.offset==null?Infinity:anchor.offset, build:()=>{
+        const wrap=document.createElement('div');
+        wrap.className='film-set is-datum'+(anchor.locked?' is-locked':'');
+        const head=document.createElement('div'); head.className='film-set-head';
+        const nm=document.createElement('span'); nm.className='film-set-name';
+        nm.textContent='Anchor';
+        head.appendChild(nm);
+        head.appendChild(icoBtn(anchor.locked?'lock':'unlock',
+          anchor.locked?'Unlock the anchor':'Lock the anchor',
+          anchor.locked?'on':'', ()=>{
+            anchor.locked=!anchor.locked; patchPoint(anchor,{locked:anchor.locked});
+            elevRenderAll(); renderStrip();
+          }));
+        // Removing the anchor is only offered once nothing is measured against
+        // it any more. While shots reference it, deleting it would quietly
+        // invalidate every elevation in the survey.
+        if(!elevShots.some(x=>x.pointId===anchor.id)){
+          head.appendChild(icoBtn('trash','Remove the anchor','danger',()=>{
+            if(!confirm('Remove the anchor? Nothing is measured against it any more.')) return;
+            if(anchor.remoteId) apiDelete('/elevation-points/'+anchor.remoteId);
+            if(anchor.marker && map){ try{ map.removeLayer(anchor.marker); }catch(e){} }
+            slopesDropFor([anchor.id]);
+            elevPoints=elevPoints.filter(x=>x.id!==anchor.id);
+            if(elevSelected===anchor.id) elevSelected=null;
+            elevRenderAll(); renderStrip(); elevStatusUpdate();
+          }));
+        }
+        wrap.appendChild(head);
+        const row=document.createElement('div'); row.className='film-set-row';
+        row.appendChild(makeThumb({
+          kind:'elev', id:anchor.id, elev:true, photo:anchor.photoUrl||anchor.photoLocal,
+          local:anchor.photoLocal, badge:'A', colour:ANCHOR_SIGHT,
+          dim:!anchor.placed, sel:anchor.id===elevSelected,
+          onClick:()=>elevSelectFromStrip(anchor)
+        }));
+        wrap.appendChild(row);
+        return wrap;
+      }});
     }
 
     // Each set becomes one outlined group, ordered by its earliest shot.

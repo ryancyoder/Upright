@@ -452,11 +452,16 @@ round icon buttons on the group header and overlaid on each tile:
 - **Add shots** — resume the set, adding more targets to it.
 - Per target tile: **Reshoot** (replace its sightings) and **Remove**.
 
-The **anchor tile sits outside every group**, since it is the shared datum
-rather than part of any one set, and carries its own lock. Its **Remove**
-control only appears once nothing is measured against it any more —
-deleting a live anchor would quietly invalidate every elevation in the
-survey.
+The **anchor sits outside every set** — it is the shared datum, not part of
+any one of them — but it gets a box of the **same construction** (`.film-set
+.is-datum`, headed *Anchor*, lock and Remove in the header like a set's), so
+the strip has one bottom edge instead of a short loose tile beside taller
+groups. A dotted border in the anchor's own yellow, and no fill, say it is the
+datum rather than another set. Its **Remove** control only appears once nothing
+is measured against it any more — deleting a live anchor would quietly
+invalidate every elevation in the survey. Ordinary photo pins stay loose tiles
+at their own height, centred against the boxes; they are site photos, not
+survey frames.
 
 Status plus **Done** float over the map as a small pill at the top centre
 (`.elev-bar`), not as a bar at the bottom. As a bottom bar it was absolutely
