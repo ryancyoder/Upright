@@ -58,7 +58,21 @@ Requires secret `ASSEMBLYAI_API_KEY` (set in Supabase → Edge Functions →
 Secrets — NOT Vault, and NOT Vercel env vars; neither reaches the function).
 
 If editing the function, pull current source with `Supabase:get_edge_function`
-rather than reconstructing it.
+rather than reconstructing it. Currently **v15**.
+
+**Replacing an image writes a NEW storage path, never an upsert in place.**
+Storage public URLs are cached by the browser and by the CDN in front of the
+bucket, so overwriting `.../elevation/<pointId>.jpg` handed back a URL that
+still resolved to the *old* picture — which is how a re-shot target kept
+showing the shot it was meant to replace. Elevation reference photos, pin
+photos re-saved with a drawing, and re-imported plans all go to
+`<base>-<timestamp>.<ext>`; `dropOldObject()` then removes the previous file,
+but only *after* the row points at the new one. An orphaned object is
+harmless; a row pointing at a deleted object is not. Clips already did this.
+Audio does not need it — it is written once, at the end of a session.
+
+Old rows still carry unversioned paths and still resolve; nothing needed
+migrating.
 
 ## Data durability — important
 
