@@ -216,6 +216,7 @@
     max-width:80%; text-align:center;
   }
   .sight-msg{font-size:14px; font-weight:700; line-height:1.35;}
+  .sight-msg.warn{color:var(--live);}
   .sight-angle{
     font-size:26px; font-weight:700; letter-spacing:0.02em;
     font-variant-numeric:tabular-nums; color:var(--live);
@@ -2541,6 +2542,11 @@
         head.appendChild(icoBtn(o.locked?'lock':'unlock', o.locked?'Unlock this set':'Lock this set',
           o.locked?'on':'', ()=>setLocked(o,!o.locked)));
         head.appendChild(icoBtn('plus','Add more shots to this set','',()=>setResume(o,null)));
+        // Re-sighting the anchor is the one deliberate way to move a set's
+        // datum; offered only where this position already has an anchor shot
+        // to replace.
+        if(anchor && elevShots.some(x=>x.observationId===o.id && x.pointId===anchor.id))
+          head.appendChild(icoBtn('redo','Re-sight the anchor from this position','',()=>setResume(o,anchor)));
         head.appendChild(icoBtn('trash','Delete this set','danger',()=>setDelete(o)));
         wrap.appendChild(head);
         const row=document.createElement('div'); row.className='film-set-row';
@@ -2833,7 +2839,7 @@
   let elevPoints=[], elevShots=[];
   let elevSurveyOn=false, elevActiveObs=null, elevSelected=null;
   let gradeOn=false, gradeObsId=null, gradeArmed=true, dwellStart=0, lastHeading=null;
-  let gradeResuming=false, gradeReshootId=null, gradeAnchorBaseline=null, gradeBlocked=false;
+  let gradeResuming=false, gradeReshootId=null, gradeAnchorBaseline=null, gradeNote='';
   // How far a resumed set's fresh anchor shot may differ from the one already
   // on file before we call the stance into question. Every target in a set is
   // measured against that set's anchor angle, so a changed stance silently
@@ -3040,9 +3046,8 @@
         const obs=elevAddPoint('observation', ll, true,
           lastFix?{lat:lastFix.coords.latitude,lng:lastFix.coords.longitude}:null);
         gradeObsId=obs.id;
-        gradeResuming=false; gradeReshootId=null; gradeAnchorBaseline=null;
+        gradeResuming=false; gradeReshootId=null; gradeAnchorBaseline=null; gradeNote=''; gradeNote='';
       }
-      gradeBlocked=false;
       elevActiveObs=gradeObsId;
       gradeArmed=true; dwellStart=0;
       // Grade mode can be entered from the map (Add shots / Reshoot), and the
@@ -3058,7 +3063,7 @@
       gradeStatus();
     } else {
       gradeObsId=null; dwellStart=0;
-      gradeResuming=false; gradeReshootId=null; gradeAnchorBaseline=null; gradeBlocked=false;
+      gradeResuming=false; gradeReshootId=null; gradeAnchorBaseline=null; gradeNote=''; gradeNote='';
       sightDwell.style.width='0%';
       if(map){
         elevRenderAll();
@@ -3079,18 +3084,31 @@
     const anchor=elevAnchorPoint();
     const shotHere=elevShots.filter(x=>x.observationId===gradeObsId).length;
     const anchorShotHere=anchor && elevShots.some(x=>x.observationId===gradeObsId && x.pointId===anchor.id);
-    const needAnchor = !anchorShotHere || (gradeResuming && gradeAnchorBaseline!==null);
-    if(needAnchor){
-      sightMsg.innerHTML = gradeResuming
-        ? 'Re-sight the <b>ANCHOR</b> first — this set\u2019s targets are measured against it, '
-          + 'so it has to be re-established from where you are standing now'
-        : 'Aim at your <b>ANCHOR</b> — the point that becomes 0.00\u2032 — and hold steady';
+    if(!anchorShotHere){
+      sightMsg.classList.remove('warn');
+      sightMsg.innerHTML='Aim at your <b>ANCHOR</b> — the point that becomes 0.00\u2032 — and hold steady';
       return;
     }
     const re=gradeReshootId && elevPoint(gradeReshootId);
-    sightMsg.innerHTML = re
+    // Resuming a set: the earlier shots were taken from one spot at one eye
+    // height, and the maths only cancels that height if this shot matches.
+    // The observation pin is on the map, so the user can see where that was --
+    // warn rather than making them prove it by re-sighting the anchor.
+    if(gradeResuming){
+      const obsPt=elevPoint(gradeObsId);
+      sightMsg.classList.add('warn');
+      sightMsg.innerHTML='<b>Stand where '+((obsPt&&obsPt.label)||'the observation')+' is on the map</b>, '
+        + 'holding the iPad at the same height as before — otherwise this shot will not line up '
+        + 'with the rest of the set.<br>'
+        + (re ? 'Then sight <b>'+re.label+'</b>; its earlier shots will be replaced.'
+              : 'Then sight your target.');
+      return;
+    }
+    sightMsg.classList.toggle('warn', !!gradeNote);
+    sightMsg.innerHTML = (re
       ? 'Re-shooting <b>'+re.label+'</b> — its earlier shots will be replaced'
-      : 'Aim at a <b>target</b> and hold steady &nbsp;·&nbsp; '+shotHere+' shot'+(shotHere===1?'':'s')+' from here';
+      : 'Aim at a <b>target</b> and hold steady &nbsp;·&nbsp; '+shotHere+' shot'+(shotHere===1?'':'s')+' from here')
+      + (gradeNote ? '<br>'+gradeNote : '');
   }
 
   function elevAddPoint(kind, latlng, placed, gps, setObsId){
@@ -3191,30 +3209,27 @@
     // First shot from this position is always the anchor: either it creates
     // the datum, or it re-establishes it for a new standing position (whose
     // horizontal plane and device height differ, so the old angle is useless).
-    const needAnchor = !anchorShotHere || (gradeResuming && gradeAnchorBaseline!==null);
-    let pt;
+    const reshootingAnchor = anchor && gradeReshootId===anchor.id;
+    let pt, driftNote='';
     if(!anchor) pt=elevAddPoint('anchor', provisionalLatLng(obs, 0), false, null, null);
-    else if(needAnchor){
+    else if(!anchorShotHere || reshootingAnchor){
       pt=anchor;
-      // Resuming: compare the fresh anchor angle with the one this set was
-      // built on. A real difference means we are not standing where we were,
-      // and every target already in the set would shift with it.
-      if(gradeResuming && gradeAnchorBaseline!==null){
-        const drift=Math.abs(angle-gradeAnchorBaseline);
-        gradeResuming=false; gradeAnchorBaseline=null;
-        if(drift>ANCHOR_DRIFT_DEG){
-          // Nothing has been pushed yet, so there is nothing to undo -- an
-          // earlier version popped here and silently destroyed the PREVIOUS
-          // shot. Just refuse, and block further shooting so the warning
-          // cannot be overwritten by the re-arm handler a moment later.
-          gradeBlocked=true;
-          gradeArmed=false; dwellStart=0; sightDwell.style.width='0%';
-          gradeStatus('<b>Stance has moved</b> — the anchor now reads '+drift.toFixed(1)
-            +'\u00b0 off this set\u2019s original. Shots taken now would not match the '
-            +'targets already in it. Press END GRADE and start a NEW set instead.');
-          return;
+      if(reshootingAnchor){
+        // Replace only THIS observation's sighting of the anchor; every other
+        // standing position keeps its own.
+        elevShots=elevShots.filter(x=>!(x.pointId===anchor.id && x.observationId===obs.id));
+        if(anchor.remoteId) apiDelete('/elevation-points/'+anchor.remoteId+'/shots?observationId='+(obs.remoteId||''));
+        gradeReshootId=null;
+        // Report the shift, never refuse it: the user asked to replace this
+        // shot, so replacing it is the whole point. But the datum has just
+        // moved and every target in the set moved with it -- say so.
+        if(gradeAnchorBaseline!==null){
+          const drift=Math.abs(angle-gradeAnchorBaseline);
+          if(drift>ANCHOR_DRIFT_DEG)
+            driftNote='<b>'+drift.toFixed(1)+'\u00b0 off the old anchor</b> \u2014 every elevation in this set has shifted with it';
         }
       }
+      gradeAnchorBaseline=null;
     }
     else if(gradeReshootId && elevPoint(gradeReshootId)){
       pt=elevPoint(gradeReshootId);
@@ -3235,10 +3250,15 @@
     elevFlushPending();
 
     snapFlash.classList.remove('go'); void snapFlash.offsetWidth; snapFlash.classList.add('go');
+    gradeResuming=false;                 // the stance warning has served its purpose
+    // A drift note has to outlive the re-arm handler, which calls gradeStatus()
+    // again the moment the user moves off -- so it is sticky until the next shot.
+    gradeNote=driftNote; sightMsg.classList.toggle('warn', !!driftNote);
     gradeArmed=false; dwellStart=0;
     sightDwell.style.width='0%';
     renderStrip();          // the new frame joins the filmstrip straight away
-    gradeStatus('<b>'+pt.label+'</b> captured at '+(angle>=0?'+':'')+angle.toFixed(1)+'\u00b0 — move to the next point');
+    gradeStatus('<b>'+pt.label+'</b> captured at '+(angle>=0?'+':'')+angle.toFixed(1)+'\u00b0'
+                + (driftNote ? '<br>'+driftNote : ' — move to the next point'));
   }
 
   // Called from handleOrientation. Runs the steadiness gate and the dwell
@@ -3250,7 +3270,6 @@
     sightSteady.textContent = steady ? (gradeArmed?'HOLDING':'MOVE OFF TO RE-ARM') : 'HOLD STEADY';
     sightSteady.classList.toggle('ready', steady && gradeArmed);
     if(!gradeOn) return;
-    if(gradeBlocked){ sightDwell.style.width='0%'; return; }
 
     // Re-arm only once the user has genuinely moved off the last point,
     // otherwise one long hold would machine-gun shots at the same spot.
@@ -3329,12 +3348,16 @@
     elevRenderAll(); renderStrip(); elevStatusUpdate();
   }
 
-  // Resume a set, or re-shoot one of its targets. Both need the anchor
-  // re-established first: every target in a set is measured against that
-  // set's anchor angle, which is only valid for the stance it was taken from.
+  // Resume a set, or re-shoot one of its points. Every target in a set is
+  // measured against that set's anchor angle, which is only valid for the
+  // stance it was taken from -- so the sighting overlay warns the user to
+  // stand where the observation pin is. It warns rather than demanding a
+  // fresh anchor shot: the pin is right there on the map to stand on.
   function setResume(obs, reshootPt){
     const anchor=elevAnchorPoint();
     const prior=elevShots.filter(x=>x.observationId===obs.id && anchor && x.pointId===anchor.id);
+    // Kept for the case where the anchor itself is being re-shot on purpose;
+    // that is the only time we can still compare stances.
     gradeAnchorBaseline = prior.length ? mean(prior.map(x=>x.angleDeg)) : null;
     gradeResuming=true;
     gradeReshootId = reshootPt ? reshootPt.id : null;
@@ -3349,7 +3372,7 @@
     elevActiveObs=null; elevSelected=null;
     gradeOn=false; gradeObsId=null; dwellStart=0;
     gradeBtn.classList.remove('on'); gradeBtn.innerHTML='SHOOT<br>GRADE';
-    gradeResuming=false; gradeReshootId=null; gradeAnchorBaseline=null; gradeBlocked=false;
+    gradeResuming=false; gradeReshootId=null; gradeAnchorBaseline=null; gradeNote='';
     sightOverlay.classList.remove('show');
   }
   function elevSetSurvey(on){

@@ -48,7 +48,9 @@ Endpoints under `/functions/v1/upright-api`:
 `PATCH /sessions/:id` (assign property), `GET /properties` (address picker),
 `POST /sessions/:id/audio|clips|photos|sketches|measures|plan`,
 `POST /sessions/:id/elevation-points|elevation-shots`,
-`PATCH /elevation-points/:id`,
+`PATCH /elevation-points/:id`, `DELETE /elevation-points/:id`,
+`DELETE /elevation-points/:id/shots` (all, or `?observationId=` for one
+position's sightings), `POST /elevation-points/:id/photo`,
 `PATCH /photos/:id`, `POST /photos/:id/image`,
 `POST /sessions/:id/transcribe`, `GET /sessions/:id/transcript`.
 
@@ -245,11 +247,29 @@ only seeds the first observation so there is something to drag. Against an
 aligned plan a tapped pin is far better than a 3–5 m fix, and that is what
 makes the numbers worth anything. Do not "simplify" this to use the live fix.
 
-**A second observation position must re-shoot the anchor.** Its angle is
+**A new observation position must shoot the anchor first.** Its angle is
 relative to *that* position's horizontal plane and device height, so reusing
-another observation's anchor shot silently produces nonsense. `elevBeginSight()`
-refuses to sight a target until the current observation has its own anchor
-shot, and says why.
+another observation's anchor shot silently produces nonsense. The first shot
+from a position that has never sighted the anchor is therefore always the
+anchor, and the overlay says so.
+
+**Returning to a position warns, it does not demand.** Add-shots and Reshoot
+(`setResume()`) resume an existing set, and the maths only holds if you stand
+where you stood before at the same eye height. But the observation pin is on
+the map — you can see where that was — so the overlay shows a red *Stand where
+Observation A is on the map* warning and then lets you shoot. An earlier
+version forced a fresh anchor sighting and refused the shot if it drifted more
+than `ANCHOR_DRIFT_DEG`; that made changing one target a three-step chore for
+information the map already gives you.
+
+Re-shooting the anchor deliberately is still possible — the set header carries
+a *Re-sight the anchor from this position* control — and that path replaces
+only that observation's anchor sighting. It **reports** drift against the old
+angle rather than refusing it: you asked to move the datum, so it moves, but
+every elevation in the set moved with it and the overlay says by how much.
+That note is sticky (`gradeNote`) because the re-arm handler calls
+`gradeStatus()` again the moment you move off the point, which would otherwise
+wipe it before it was read.
 
 **Repeatability is not accuracy.** Shot spread (`angle_spread_deg`, and the
 `± repeat` figure) only measures how steadily you held the iPad. Five shots
