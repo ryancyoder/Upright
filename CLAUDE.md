@@ -84,6 +84,26 @@ AssemblyAI fetches the audio from Storage.
 - Measured polygons must be anchored to a snapped photo's pin as one vertex.
 - The field drawing editor stays minimal; a richer desk-side editor is deferred.
 
+## Camera preview freezes
+
+iOS parks the camera whenever the preview stops being what's on screen — the
+page backgrounds, the system takes the capture device, or the `<video>` sits
+covered by the map while the iPad is flat. The element is then left holding
+its **last frame**, which looks exactly like a live picture: raise the iPad
+and you frame a shot against whatever it was pointed at when it went down.
+
+`wakeCamera()` re-asserts the preview on every path back to the camera —
+`showMap(false)` (which covers grade mode entered from the map, not just
+`resumeRec()`), and returning from the background. It restarts a suspended
+element and re-acquires the stream outright when the track has `ended`.
+`resumeRec()` waits on it before `startVideoClip()`, because a MediaRecorder
+built on a dead stream throws and the clip is lost.
+
+Note how `cameraWaking` is cleared — from **outside** the async body. With
+nothing to await, that body runs to completion synchronously, so an inner
+`finally` nulls the flag *before* the assignment sets it, and the guard then
+latches on for the rest of the session and swallows every later wake.
+
 ## Audio playback gotcha
 
 Review routes playback through GainNode (`REVIEW_GAIN`, currently 14×) into a

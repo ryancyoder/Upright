@@ -949,6 +949,42 @@
       video:{facingMode:'environment', width:{ideal:1280}, height:{ideal:720}}
     });
     liveVideo.srcObject = videoStream;
+    // A track that ends is not coming back on its own -- and the <video> keeps
+    // showing its last frame, so nothing looks wrong.
+    videoStream.getVideoTracks().forEach(t=>t.addEventListener('ended', ()=>{
+      if(sessionActive && !isPausedFlat) wakeCamera();
+    }));
+  }
+
+  // iOS parks the camera whenever the preview stops being the thing on screen:
+  // the page backgrounds, the system takes the capture device, or the element
+  // is left covered by the map. The track goes muted or ended and the <video>
+  // is left holding its last frame -- which looks exactly like a live picture,
+  // so the user lines up a shot against whatever the iPad was pointing at when
+  // it went flat. Re-assert the preview on every path back to the camera.
+  let cameraWaking=null;
+  function wakeCamera(){
+    if(!sessionActive) return Promise.resolve();   // nothing on screen wants the camera
+    if(cameraWaking) return cameraWaking;
+    const run = (async()=>{
+      try{
+        const t = videoStream && videoStream.getVideoTracks()[0];
+        if(!t || t.readyState==='ended'){
+          if(videoStream){ try{ videoStream.getTracks().forEach(x=>x.stop()); }catch(e){} }
+          await startCamera();                       // re-acquire: the old one is dead
+        } else if(liveVideo.srcObject!==videoStream){
+          liveVideo.srcObject = videoStream;
+        }
+        if(liveVideo.paused) await liveVideo.play(); // a suspended element is the frozen frame
+      }catch(e){ console.warn('camera wake failed', e); }
+    })();
+    // Cleared from OUTSIDE the async body: with nothing to await the body runs
+    // to completion synchronously, so an inner finally would null the flag
+    // before the assignment below ever sets it -- and it would then stay set
+    // for the life of the session, which is exactly the bug this guard causes.
+    cameraWaking = run;
+    run.then(()=>{ if(cameraWaking===run) cameraWaking=null; });
+    return run;
   }
   async function startAudioStream(){
     audioStream = await navigator.mediaDevices.getUserMedia({
@@ -1008,8 +1044,11 @@
   function resumeRec(){
     if(!sessionActive || !isPausedFlat) return;
     isPausedFlat=false; segStart=Date.now();
-    startVideoClip();
     setState('recording'); showMap(false);
+    // Recording waits on the wake: a MediaRecorder built on a dead stream
+    // produces an empty clip. Re-check the state afterwards in case the iPad
+    // went back down inside that window.
+    wakeCamera().then(()=>{ if(sessionActive && !isPausedFlat) startVideoClip(); });
     snapBtn.classList.add('show'); gradeBtn.classList.add('show'); annoBar.classList.add('show'); refreshAnnoUI(); updatePinCount();
   }
   function pauseRec(){
@@ -3422,6 +3461,7 @@
       renderStrip(); markSelectedMarkers();
     } else {
       mapwrap.classList.remove('show');
+      wakeCamera();          // covers every path back, not just resumeRec()
       // The survey deliberately SURVIVES going upright: points are placed on
       // the map lying flat, then sighted standing up. Only the bar hides with
       // the map; elevSurveyOn and every point stay exactly as they were.
@@ -3733,7 +3773,9 @@
     try{ if('wakeLock' in navigator) wakeLock=await navigator.wakeLock.request('screen'); }catch(e){}
   }
   document.addEventListener('visibilitychange', ()=>{
-    if(document.visibilityState==='visible' && sessionActive) requestWake();
+    if(document.visibilityState!=='visible' || !sessionActive) return;
+    requestWake();
+    if(!isPausedFlat) wakeCamera();
   });
 
   // ---------- enable flow ----------
