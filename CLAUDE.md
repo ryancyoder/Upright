@@ -315,6 +315,41 @@ preferences only show their effect from inside a view.
 - **Eye height when shooting grade** — the `h` in `d = h / tan|θ|`, used only to
   park a just-shot pin. The one preference here that is a number, not a switch.
 
+## The window holds still
+
+**Nothing zooms or scrolls the app itself.** It is held in one hand in a yard:
+a stray second finger must not be able to leave the shutter half off the
+screen, and a drag that misses the map must not bounce the whole page. What
+still moves is what the app owns — the Leaflet map, the section stage, the plan
+overlay, and the panels that scroll their own contents (start, done, Settings,
+history, transcript, and the strips that scroll sideways).
+
+It takes four separate things, because no one of them covers the others:
+
+- `overflow:hidden` on `body` — the page has no scroll to begin with.
+- `overscroll-behavior:none` on `html` and `body` — no rubber-band at the end
+  of any scroll chain.
+- `touch-action:manipulation` on `body` — no double-tap-to-zoom. Children that
+  need finer control set their own (`.ev-stage` is `none`).
+- **`gesturestart` / `gesturechange` / `gestureend` are refused in script.**
+  This is the one that actually stops Safari pinching the window, and the
+  reason it is safe is that those are WebKit's own two-finger events, **separate
+  from the touch events** Leaflet, the section stage and the plan overlay pinch
+  with. Blocking them costs the app no gesture it owns. Note what does *not*
+  work: iOS Safari has ignored `user-scalable=no` since iOS 10 (it is in the
+  meta tag for everything else), and `touch-action` does not govern Safari's
+  pinch. The listener must be non-passive or `preventDefault()` is a no-op.
+
+**And the page zoom no gesture blocker can catch: a focused text field.** iOS
+zooms the whole window in when a field smaller than **16px** takes focus, and
+three were under it — the pin note at 13, the address search and the eye-height
+box at 15. All three are 16px exactly now. Any new field has to be too, or the
+app will zoom the moment somebody types in it.
+
+Worth knowing this is a deliberate accessibility trade: pinching to magnify
+text is gone. For a single crew on a known iPad that is the right side of the
+trade, but it is a trade.
+
 ## Only the pencil draws
 
 **A pinch used to lay down a stroke with each finger while it zoomed.** Any

@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <title>Upright — Site Session</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <style>
@@ -17,11 +17,23 @@
     --cut:#c9a227;            /* section cuts: a frame of reference, not a measurement */
   }
   *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
-  html,body{height:100%;}
+  /* THE WINDOW ITSELF NEVER ZOOMS OR SCROLLS.
+     This is a field tool held in one hand: a stray second finger must not be
+     able to leave the shutter half off the screen, and a drag that misses the
+     map must not bounce the whole app. What still moves is what the app owns --
+     the Leaflet map, the section stage, the plan overlay, and the panels that
+     scroll their own contents.
+       overscroll-behavior  kills the rubber-band at the ends of any scroll
+       touch-action         kills double-tap-to-zoom (children that need finer
+                            control set their own, e.g. .ev-stage: none)
+     Safari's pinch-to-zoom is not covered by either; it rides `gesture*`
+     events, blocked in script. */
+  html,body{height:100%; overscroll-behavior:none;}
   body{
     margin:0; background:var(--bg); color:var(--ink);
     font-family:-apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
     overflow:hidden; height:100vh; height:100dvh;
+    touch-action:manipulation;
   }
   .frame{display:flex; flex-direction:column; height:100%;}
 
@@ -210,7 +222,9 @@
     font-variant-numeric:tabular-nums;
   }
   .pi-note{
-    width:100%; margin-top:6px; min-height:56px; font:inherit; font-size:13px;
+    /* 16px exactly: iOS zooms the whole page in on a focused field smaller
+       than that, which is the one page zoom no gesture blocker can catch. */
+    width:100%; margin-top:6px; min-height:56px; font:inherit; font-size:16px;
     border-radius:8px; border:1px solid var(--line);
     background:var(--bg); color:var(--ink); padding:7px 8px; resize:vertical;
   }
@@ -803,7 +817,7 @@
   .pref-switch.on{border-color:var(--flat);}
   .pref-switch.on i{left:26px; background:var(--flat);}
   .pref-num{
-    flex:0 0 auto; width:74px; padding:8px 10px; font:inherit; font-size:15px;
+    flex:0 0 auto; width:78px; padding:8px 10px; font:inherit; font-size:16px;
     text-align:right; border-radius:8px; border:1px solid var(--line);
     background:var(--bg); color:var(--ink);
   }
@@ -842,7 +856,7 @@
   .prop-search{
     flex:0 0 auto; margin:12px 16px 0; padding:11px 14px;
     border-radius:10px; border:1px solid var(--line);
-    background:var(--bg2); color:var(--ink); font-size:15px;
+    background:var(--bg2); color:var(--ink); font-size:16px;   /* see .pi-note */
   }
   .link-btn{
     margin-top:14px; padding:9px 16px; border-radius:100px;
@@ -1346,6 +1360,25 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script>
 (function(){
+  // ---------- the window holds still ----------
+  // Safari's page zoom rides `gesture*`, which are WebKit's own two-finger
+  // events -- SEPARATE from the touch events Leaflet, the section stage and the
+  // plan overlay all pinch with. Blocking them therefore stops the window
+  // zooming without costing the app a single gesture it owns. (touch-action and
+  // user-scalable do not cover this: iOS Safari has ignored user-scalable=no
+  // since iOS 10, and touch-action:manipulation only removes double-tap.)
+  //
+  // Non-passive on purpose -- a passive listener cannot preventDefault, and the
+  // browser assumes passive for these by default on some engines.
+  ['gesturestart','gesturechange','gestureend'].forEach(t=>
+    document.addEventListener(t, e=>e.preventDefault(), {passive:false}));
+  // Nothing outside a scroller may scroll the page. body is overflow:hidden, so
+  // this only ever fires if something has escaped its container -- in which case
+  // putting it back is better than letting the UI sit half off screen.
+  window.addEventListener('scroll', ()=>{
+    if(window.scrollX || window.scrollY) window.scrollTo(0,0);
+  }, {passive:true});
+
   const $ = id => document.getElementById(id);
   const modeAudioBtn=$('modeAudioBtn'), modeVideoBtn=$('modeVideoBtn'), modeNote=$('modeNote'),
         recModes=$('recModes'), startModeSlot=$('startModeSlot'), doneModeSlot=$('doneModeSlot'),
