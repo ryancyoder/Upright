@@ -532,6 +532,7 @@
     white-space:nowrap; text-shadow:0 1px 3px rgba(0,0,0,0.95), 0 0 2px rgba(0,0,0,0.95);
     pointer-events:auto;
   }
+  .fold-path{filter:drop-shadow(0 1px 2px rgba(0,0,0,0.9));}
   .cut-handle{
     width:26px; height:26px; border-radius:50%; box-sizing:border-box;
     border:2px solid #fff; background:var(--cut);
@@ -601,6 +602,9 @@
   }
   .ev-svg{position:absolute; inset:0; width:100%; height:100%; pointer-events:none;}
   .ev-svg .ev-hit{pointer-events:auto; cursor:pointer;}
+  /* Folds -- a projection, never a drawing. Beads rather than a line, and the
+     legibility comes from a shadow rather than from weight. */
+  .ev-svg .fold-bead{filter:drop-shadow(0 1px 2px rgba(0,0,0,0.85));}
   .ev-corner{
     position:absolute; width:26px; height:26px; margin:-13px 0 0 -13px;
     border-radius:50%; border:2px solid #fff; background:rgba(99,179,232,0.9);
@@ -1090,6 +1094,7 @@
         <button class="mt-btn" id="cutsBtn">Section cuts</button>
         <button class="mt-btn" id="mapGridBtn">Grid</button>
         <button class="mt-btn" id="mapAlignBtn">Align to grid</button>
+        <button class="mt-btn" id="foldMapBtn">Fold</button>
         <button class="mt-btn" id="splitBtn">Split</button>
         <button class="mt-btn" id="panelsMapBtn">Preview</button>
         <button class="mt-btn" id="stripMapBtn">Filmstrip</button>
@@ -1118,6 +1123,7 @@
         <button class="mt-btn" id="evGridBtn">Grid</button>
         <button class="mt-btn" id="evSketchBtn">Sketch</button>
         <button class="mt-btn" id="evLevels">Level lines</button>
+        <button class="mt-btn" id="foldEvBtn">Fold</button>
         <button class="mt-btn" id="evXray">X-ray</button>
         <button class="mt-btn" id="panelsEvBtn">Preview</button>
         <button class="mt-btn" id="stripEvBtn">Filmstrip</button>
@@ -1272,6 +1278,19 @@
         </div>
         <div class="pref-row">
           <div class="pref-main">
+            <div class="pref-title">Fold drawings between views</div>
+            <div class="pref-sub">Show each drawing on the other view. A stroke drawn in a
+              section casts its <b>extent</b> onto that section's cut line on the plan &mdash;
+              exact, since the cut is a real line on the ground, though only the length
+              survives. A stroke drawn on the plan appears in a section as the <b>plan folded
+              down</b>, beaded just under the anchor line: it says where something sits along
+              the section and <b>nothing about how high it is</b>. Nothing is stored either
+              way, and neither can be edited from the view it is shown in.</div>
+          </div>
+          <button class="pref-switch" id="prefFolds" role="switch"><i></i></button>
+        </div>
+        <div class="pref-row">
+          <div class="pref-main">
             <div class="pref-title">Eye height when shooting grade</div>
             <div class="pref-sub">How high off the ground you hold the iPad. A shot pointed at
               the ground gives its own distance from this &mdash;
@@ -1387,11 +1406,12 @@
         settingsClose=$('settingsClose'), evSettingsBtn=$('evSettingsBtn'),
         evExagLabel=$('evExagLabel'), prefVertExag=$('prefVertExag'),
         prefInspector=$('prefInspector'), prefFilmstrip=$('prefFilmstrip'),
-        prefSplit=$('prefSplit'), prefEyeHeight=$('prefEyeHeight'),
+        prefSplit=$('prefSplit'), prefFolds=$('prefFolds'), prefEyeHeight=$('prefEyeHeight'),
         panelsMapBtn=$('panelsMapBtn'), stripMapBtn=$('stripMapBtn'),
         panelsEvBtn=$('panelsEvBtn'), stripEvBtn=$('stripEvBtn'),
         settingsMapBtn=$('settingsMapBtn'), splitBtn=$('splitBtn'), stage=$('stage'),
-        mapGridBtn=$('mapGridBtn'), mapAlignBtn=$('mapAlignBtn');
+        mapGridBtn=$('mapGridBtn'), mapAlignBtn=$('mapAlignBtn'),
+        foldMapBtn=$('foldMapBtn'), foldEvBtn=$('foldEvBtn');
 
   const UPRIGHT_ON=55, UPRIGHT_OFF=35, HOLD_MS=350;
 
@@ -1403,7 +1423,7 @@
   // able to stop a session starting.
   const PREFS_KEY='upright.prefs';
   const PREF_DEFAULTS={vertExag:true, inspector:true, filmstrip:true, splitPortrait:true,
-                       eyeHeightFt:4.5};
+                       folds:true, eyeHeightFt:4.5};
   const prefs=Object.assign({}, PREF_DEFAULTS);
   try{
     const raw=localStorage.getItem(PREFS_KEY);
@@ -1415,7 +1435,7 @@
   }
   function renderPrefs(){
     [[prefVertExag,'vertExag'],[prefInspector,'inspector'],[prefFilmstrip,'filmstrip'],
-      [prefSplit,'splitPortrait']]
+      [prefSplit,'splitPortrait'],[prefFolds,'folds']]
       .forEach(([el,key])=>{
         const on = prefs[key]!==false;
         el.classList.toggle('on', on);
@@ -1433,6 +1453,8 @@
     try{
       panelsSync();
       renderStrip();
+      syncFoldBtns();
+      foldsDraw();
       if(evActive) evRender();
     }catch(err){ console.warn('prefs apply failed', err); }
   }
@@ -3747,6 +3769,18 @@
     splitManual = !splitOn;
     setSplit(splitManual);
   });
+  function syncFoldBtns(){
+    const on = prefs.folds!==false;
+    foldMapBtn.classList.toggle('active', on);
+    foldEvBtn.classList.toggle('active', on);
+    const t = on ? 'Each drawing is shown on the other view. Off hides both.'
+                 : 'Show each drawing on the other view: a section stroke on its cut line, '
+                   + 'the plan folded down under the anchor.';
+    foldMapBtn.title=t; foldEvBtn.title=t;
+  }
+  foldMapBtn.addEventListener('click', ()=>prefToggle('folds'));
+  foldEvBtn.addEventListener('click', ()=>prefToggle('folds'));
+  prefFolds.addEventListener('click', ()=>prefToggle('folds'));
   panelsMapBtn.addEventListener('click', ()=>prefToggle('inspector'));
   panelsEvBtn.addEventListener('click', ()=>prefToggle('inspector'));
   stripMapBtn.addEventListener('click', ()=>prefToggle('filmstrip'));
@@ -3939,6 +3973,7 @@
       apiPost('/sessions/'+sessionId+'/sketches', { colour:rec.colour, lengthFt:rec.lengthFt, latlngs:rec.latlngs });
     } else if(sketchLine){ map.removeLayer(sketchLine); }
     sketchLine=null; sketchPts=[]; alignReset();
+    if(evActive) evRenderSoon();     // it folds down into every section
   }
 
   sketchBtn.addEventListener('click', ()=>{
@@ -3972,6 +4007,7 @@
     } else if(mapMode==='sketch'){
       const last=sketches.pop();
       if(last && last.layer) map.removeLayer(last.layer);
+      if(evActive) evRenderSoon();
     }
   });
   modeDone.addEventListener('click', ()=>{
@@ -4184,6 +4220,8 @@
     // reading it from up here is a temporal dead zone throw that takes the
     // whole script with it. Map wiring runs long after every let is live.
     syncGridBtns();
+    syncFoldBtns();
+    foldsDraw();               // an archived session arrives with strokes already
     // The cuts are drawn as segments long enough to cross the viewport, so they
     // have to be re-cut whenever the viewport changes.
     map.on('moveend zoomend', ()=>{ if(cutsOn) cutsRefresh(); if(mapGridOn) gridDraw(); });
@@ -5738,6 +5776,7 @@
   // left alone so it tracks the touch instead of being snapped back.
   function cutsRefresh(dragging){
     if(mapGridOn) gridDraw();
+    foldsDraw();               // the shadows ride the cut lines
     if(!cutObjs || !cutPivot) return;
     EV_SIDES.forEach(side=>{
       const g=cutEndpoints(side);
@@ -5750,6 +5789,84 @@
     if(cutObjs.foot) cutObjs.foot.setLatLngs(cutFootprint()||[]);
   }
   function cutsRender(){ cutsBuild(); }
+
+  // ---------- folds: each drawing shown on the other view ----------
+  // Two projections of data that already exists. NOTHING is stored -- same rule
+  // as elevationOf() and slopeOf(); drag a cut or turn the cross and both move.
+  //
+  // They are NOT the same operation in opposite directions, and the difference
+  // matters:
+  //
+  //   Section -> plan is a MEASUREMENT. A section is a real line on the ground,
+  //   so a stroke drawn on it genuinely lives there. All that is lost is height,
+  //   which is a section's whole content -- so what survives the trip is EXTENT:
+  //   where along the cut the thing starts and stops. An L-shaped wall becomes a
+  //   segment and its vertical leg becomes a point, which is why this is drawn
+  //   as the x-intervals covered rather than as the squiggle itself.
+  //
+  //   Plan -> section INVENTS A HEIGHT. The plan has no y, so laying it on the
+  //   datum would read as "this is at 0.00 ft", which in a yard with any fall is
+  //   false. What it actually means is "the plan, folded down, seen edge-on" --
+  //   true, and useful, but only if the mark says so. Hence the separate visual
+  //   language below, and the label.
+  //
+  // PROJECTIONS ARE BEADS, DRAWINGS ARE LINES. One rule, both surfaces, so a
+  // fold can never be mistaken for something somebody drew here.
+  // Subordinate to a real stroke (solid, 4px, 0.95) but still readable over
+  // bright turf -- which comes from the drop-shadow on .fold-path, not from
+  // more weight, the same rule the survey pins follow.
+  const FOLD_DASH='1 12', FOLD_W=9, FOLD_OP=0.55;
+  // The point on a side's cut line at a given profile x. This is evProject()'s
+  // `x = dot(localEN, along)` run backwards -- the foot of the perpendicular
+  // from the pivot is x zero by construction, whatever the rotation.
+  function cutLineAt(side, xFt){
+    if(!cutPivot) return null;
+    const ax=sideAxes(side), off=sideOffset(side), m=xFt*M_PER_FT;
+    return fromEN(ax.normal.e*off + ax.along.e*m,
+                  ax.normal.n*off + ax.along.n*m);
+  }
+  // Merge segment spans into the disjoint runs they cover, so a stroke that
+  // doubles back reads as the ground it crosses rather than as a scribble.
+  function foldMerge(spans){
+    const out=[];
+    spans.slice().sort((a,b)=>a[0]-b[0]).forEach(sp=>{
+      const last=out[out.length-1];
+      if(last && sp[0] <= last[1] + 0.05){ last[1]=Math.max(last[1], sp[1]); }
+      else out.push([sp[0], sp[1]]);
+    });
+    return out;
+  }
+  // A section stroke's shadow: the x it covers, laid on its own cut line.
+  function foldSpansOfSection(k){
+    const spans=[];
+    for(let i=1;i<k.pts.length;i++){
+      const a=k.pts[i-1].x, b=k.pts[i].x;
+      if(Math.abs(b-a) < 0.05) continue;      // a purely vertical leg is a point
+      spans.push([Math.min(a,b), Math.max(a,b)]);
+    }
+    return foldMerge(spans);
+  }
+  let foldLayers=[];
+  function foldsClear(){
+    foldLayers.forEach(l=>{ if(map){ try{ map.removeLayer(l); }catch(e){} } });
+    foldLayers=[];
+  }
+  function foldsDraw(){
+    foldsClear();
+    if(!map || !mapInited || !prefs.folds || !cutPivot) return;
+    evSketches.forEach(k=>{
+      if(!k.pts || k.pts.length<2) return;
+      foldSpansOfSection(k).forEach(sp=>{
+        const a=cutLineAt(k.side, sp[0]), b=cutLineAt(k.side, sp[1]);
+        if(!a || !b) return;
+        foldLayers.push(L.polyline([a,b], {
+          color:k.colour||'#e8c33a', weight:FOLD_W, opacity:FOLD_OP,
+          dashArray:FOLD_DASH, lineCap:'round',
+          className:'fold-path', interactive:false     // a shadow, not a drawing
+        }).addTo(map));
+      });
+    });
+  }
 
   let cutsOn=false;
   function cutsSet(on){
@@ -5807,6 +5924,41 @@
     });
     return out.sort((a,b)=>a.x-b.x);
   }
+  // The plan folded down, as seen from one side. Every rule here is evProject()'s
+  // own -- x along the axis, `beyond` across it, the lateral band, the mode and
+  // the strict/faded distinction -- because a stroke on the ground obeys exactly
+  // the same visibility as a point on the ground does.
+  function foldPlanSpans(side){
+    if(!cutPivot || !prefs.folds) return [];
+    const ax=sideAxes(side), off=sideOffset(side);
+    const perp = (side==='north'||side==='south') ? ['east','west'] : ['north','south'];
+    const out=[];
+    sketches.forEach(k=>{
+      const lls=k.latlngs||[];
+      if(lls.length<2) return;
+      const P=lls.map(q=>{
+        const p=localEN(L.latLng(q.lat, q.lng));
+        const beyond=(dot(p, ax.normal)-off)/M_PER_FT;
+        const inBand=perp.every(w=>dot(p, sideAxes(w).normal) <= sideOffset(w));
+        const blocked=(beyond<=0) && inBand;
+        return { x: dot(p, ax.along)/M_PER_FT, strict: beyond>0,
+                 shown: evMode==='xray' ? true : evMode==='sight' ? !blocked : beyond>0 };
+      });
+      const strict=[], loose=[];
+      for(let i=1;i<P.length;i++){
+        const a=P[i-1], b=P[i];
+        if(!a.shown || !b.shown) continue;
+        const sp=[Math.min(a.x,b.x), Math.max(a.x,b.x)];
+        if(Math.abs(sp[1]-sp[0]) < 0.05) continue;
+        (a.strict && b.strict ? strict : loose).push(sp);
+      }
+      const col=k.colour||'#e8c33a';
+      foldMerge(strict).forEach(sp=>out.push({x0:sp[0], x1:sp[1], strict:true, colour:col}));
+      foldMerge(loose).forEach(sp=>out.push({x0:sp[0], x1:sp[1], strict:false, colour:col}));
+    });
+    return out;
+  }
+
   // Vertical exaggeration is CONTINUOUS. The stepped cycle jumped the whole
   // drawing every tap; a log-spaced slider moves it smoothly and still spans
   // the useful range. The snap list survives only as a starting guess.
@@ -6001,6 +6153,25 @@
     // the datum: the anchor, 0.00', one third up from the bottom
     line(0,G.datumY,G.W,G.datumY,'#e8c33a',2,null,0.95);
     text(6,G.datumY-5,"0.00' anchor",'#e8c33a',11,'start');
+
+    // ---- the plan, folded down ----
+    // Beads UNDER the datum, never on it: laid on the anchor line this would
+    // read as a claim that the drawing sits at 0.00 ft, which it never measured.
+    // Sitting below it, in a different stroke language and at a third the
+    // weight, it reads as what it is -- the plan seen edge-on, telling you where
+    // something is along the section and nothing whatever about how high.
+    const folded=foldPlanSpans(side);
+    if(folded.length){
+      const fy=G.datumY+10;
+      folded.forEach(f=>{
+        const a=G.toX(f.x0), b=G.toX(f.x1);
+        if(b<-40 || a>G.W+40) return;
+        const l=line(a, fy, b, fy, f.colour, 8, '1 10', f.strict ? 0.6 : 0.3);
+        l.setAttribute('stroke-linecap','round');
+        l.setAttribute('class','fold-bead');
+      });
+      text(6, fy+14, 'plan, folded down', '#8b887f', 10, 'start');
+    }
 
     // ---- sketch strokes, in view feet ----
     // Drawn over the grid and the images, under the survey points: an
@@ -6349,6 +6520,7 @@
     const rec={ id:'local-'+uuid(), remoteId:null, side:side,
                 colour:annoColor(), pts:pts };
     evSketches.push(rec);
+    foldsDraw();
     if(sessionId){
       apiPost('/sessions/'+sessionId+'/elevation-sketches',
         {side:side, colour:rec.colour, points:pts})
@@ -6363,6 +6535,7 @@
       if(gone.remoteId) apiDelete('/elevation-sketches/'+gone.remoteId);
       break;
     }
+    foldsDraw();
     evRenderSoon();
   }
   function evSketchClear(){
@@ -6372,6 +6545,7 @@
     if(!confirm('Remove all '+mine.length+' stroke'+(mine.length===1?'':'s')+' from this section?')) return;
     mine.forEach(k=>{ if(k.remoteId) apiDelete('/elevation-sketches/'+k.remoteId); });
     evSketches=evSketches.filter(k=>k.side!==evActive);
+    foldsDraw();
     evRenderSoon();
   }
   // Sketching owns the stage while it is on, the same way a tool does: the

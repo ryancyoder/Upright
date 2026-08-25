@@ -308,6 +308,7 @@ screen is gone once a visit is under way, and because two of the three
 preferences only show their effect from inside a view.
 
 - **Vertical exaggeration** — off holds every section at ×1.
+- **Fold drawings between views** — see *Folds* below.
 - **Preview column** — the pin inspector, on the map and in every elevation view.
 - **Filmstrip** — likewise.
 - **Split screen in portrait** — see *Split screen: section over plan*.
@@ -355,6 +356,57 @@ never sees a descendant's — but a capture-phase one does, and the pointer
 leaving the path it had *just drawn* ended every stroke on its second move.
 The phase buys nothing anyway: Leaflet drags off `mousedown`/`touchstart`, and
 `pointerdown` precedes both by event type whatever the phase.
+
+## Folds: each drawing shown on the other view
+
+Two projections of data that already exists. **Nothing is stored** — same rule
+as `elevationOf()` and `slopeOf()`. Drag a cut, turn the cross, or change a
+section's visibility mode and both move. One preference, `prefs.folds`, and a
+**Fold** button in the map toolbar and the elevation bar writing it, as Preview
+and Filmstrip do.
+
+They are **not the same operation in opposite directions**, and the difference
+is the whole design:
+
+**Section → plan is a measurement.** A section *is* a real line on the ground,
+so a stroke drawn on it genuinely lives there. `cutLineAt(side, x)` is
+`evProject()`'s `x = dot(localEN, along)` run backwards — the foot of the
+perpendicular from the pivot is x zero by construction, whatever the rotation.
+What is lost is height, which is a section's entire content, so what survives
+the trip is **extent**: where along the cut the thing starts and stops. An
+L-shaped wall becomes a segment and its vertical leg becomes a point. Hence the
+shadow is drawn as the x-intervals covered (`foldMerge()`), not as the squiggle
+itself — a stroke that doubles back reads as the ground it crosses rather than
+as a scribble.
+
+**Plan → section invents a height.** The plan has no y. Laying it on the datum
+would read as *this is at 0.00 ft*, which in a yard with any fall is false.
+What it actually means is *the plan, folded down, seen edge-on* — true, and
+useful — but the two look identical on screen unless the mark says which. So it
+is beaded **under** the anchor line rather than on it, at a third the weight,
+and labelled `plan, folded down` in as many words.
+
+Everything else about that direction is `evProject()`'s own rules, reused
+rather than reimplemented: x along the axis, `beyond` across it, the lateral
+band, the visibility mode, and the strict/faded distinction — because a stroke
+on the ground obeys exactly the same visibility as a point on the ground does.
+
+**PROJECTIONS ARE BEADS, DRAWINGS ARE LINES.** One visual rule on both
+surfaces, so a fold can never be mistaken for something somebody drew there.
+Neither is interactive (`interactive:false` on the plan, `pointer-events:none`
+in the section) — a fold belongs to its source, and two owners for one stroke
+is how you get edits that vanish. Legibility over bright turf comes from a
+drop-shadow on `.fold-path` / `.fold-bead`, not from more weight, the same rule
+the survey pins follow.
+
+Worth knowing: it is **not a round trip**. Send a stroke across and back and
+the heights are gone. And the same machinery would project measured polygons
+and photo pins; only sketches use it so far.
+
+The natural upgrade, once a ground line exists (interpolated between survey
+points — it is on the not-yet-built list with contours): plan strokes could
+ride the ground instead of the datum. That is their honest home. The datum is
+the right answer only until that exists.
 
 ## Data durability — important
 
@@ -1361,6 +1413,9 @@ not just abandoned starts.
   match a pin to a place at arm's length, and whether losing that much map
   while dragging is a fair trade for never having a bubble over the pin.
 - Sketch/Measure accuracy against known dimensions.
+- Whether folds read as help or as clutter in a yard: whether a section stroke's
+  shadow is legible on the cut line at working zoom, and whether anyone reads
+  the folded plan as a claim about height despite the label and the beads.
 - **The pencil against a real iPad.** The pointerdown-before-touchstart ordering
   that keeps the map still under a stroke is per spec and holds in Chromium, but
   it has only been exercised with synthetic pen events; what needs confirming on
