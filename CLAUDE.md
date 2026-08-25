@@ -194,6 +194,31 @@ duplicated: it is the one map and the one elevation panel, both already
 Sliding a pin down on the plan moves it in the section as you drag, not on the
 drop — the section is right there above your thumb.
 
+### The two halves share one scale
+
+The section's horizontal is not *matched* to the plan's, it is **taken** from
+it. `splitXform()` projects two ground points 100 ft apart along the section
+axis through Leaflet and through the rotation, and the screen positions that
+come back define the whole mapping — pixels per foot, and where a profile x of
+zero lands. `evGeom()` then sets `sx` and `px` from that, so a point in the
+section sits **directly above its own pin on the plan, to the pixel**, and
+stays there through any pan or zoom. (The pivot is profile-x zero by
+construction: `localEN(cutPivot)` is `(0,0)`, so its dot with the along-axis is
+zero whatever the rotation.)
+
+Derive it and the two halves cannot drift apart. Match it — set both to the
+same number and hope — and they will, at the first fractional zoom or the first
+re-fit. The section therefore redraws on `map.on('move zoom')`, every frame of a
+pan, not just where it comes to rest.
+
+**The plan owns the horizontal while split, and the section knows it.** Its own
+`zoom` and `panX` are left untouched (they come back when the iPad is turned
+flat), but ignored: an unlocked drag moves only the datum line, a pinch does
+nothing, and Fit resets the vertical alone. Zooming the section independently
+would put it into silent disagreement with the plan two inches below it, which
+is the one thing this view must never do. The note says `scale locked to the
+plan` and the lock button reads **Drag datum** so nothing looks broken.
+
 **The preview column is absent while split.** Half a portrait screen is already
 a short map, and taking a third of its width to show a photo of the pin you are
 looking at is a bad trade. The preference is untouched, so the column comes

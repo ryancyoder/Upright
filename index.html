@@ -3838,6 +3838,40 @@
     const d=rotVec(clientX-(r.left+r.width/2), clientY-(r.top+r.height/2), -mapRotDeg);
     return L.point(d.x + el.offsetWidth/2, d.y + el.offsetHeight/2);
   }
+  // ...and back the other way, for lining the section up with the plan.
+  function mapScreenPt(cp){
+    const el=map.getContainer(), r=el.getBoundingClientRect();
+    if(!mapRotDeg) return {x:r.left+cp.x, y:r.top+cp.y};
+    const d=rotVec(cp.x-el.offsetWidth/2, cp.y-el.offsetHeight/2, mapRotDeg);
+    return {x:r.left+r.width/2+d.x, y:r.top+r.height/2+d.y};
+  }
+  // Split screen: the section's horizontal scale is not merely matched to the
+  // plan's, it is TAKEN from it. Two points on the ground a known distance
+  // apart along the section axis are projected through Leaflet and through the
+  // rotation, and the screen positions that come back define the whole
+  // mapping -- pixels per foot, and where a profile x of 0 lands. Derive it and
+  // the two halves cannot drift apart; match it and they will, at the first
+  // fractional zoom or the first re-fit.
+  //
+  // The pivot is profile-x 0 by construction: localEN(cutPivot) is (0, 0), so
+  // its dot with the along-axis is zero whatever the rotation.
+  function splitXform(side){
+    if(!map || !mapInited || !cutPivot) return null;
+    const a=sideAxes(side).along;
+    const D=30.48;                                   // 100 ft along the section
+    const mLat=111320, mLng=111320*Math.cos(rad(cutPivot.lat));
+    if(!mLng) return null;
+    const p1=L.latLng(cutPivot.lat + a.n*D/mLat, cutPivot.lng + a.e*D/mLng);
+    let s0, s1;
+    try{
+      s0=mapScreenPt(map.latLngToContainerPoint(cutPivot));
+      s1=mapScreenPt(map.latLngToContainerPoint(p1));
+    }catch(e){ return null; }
+    const per=(s1.x-s0.x)/(D/M_PER_FT);              // screen px per foot
+    if(!isFinite(per) || Math.abs(per)<1e-6) return null;
+    return {per:per, at0:s0.x};
+  }
+
   function mapRotPatch(){
     if(L.Map.prototype.__uprightRot) return;
     L.Map.prototype.__uprightRot = true;
@@ -3971,6 +4005,9 @@
     // The cuts are drawn as segments long enough to cross the viewport, so they
     // have to be re-cut whenever the viewport changes.
     map.on('moveend zoomend', ()=>{ if(cutsOn) cutsRefresh(); });
+    // Split screen: the section's horizontal comes from the map, so it has to
+    // follow every frame of a pan or a zoom, not just where they come to rest.
+    map.on('move zoom', ()=>{ if(splitOn && evActive) evRenderSoon(); });
     c.addEventListener('pointerdown', e=>{
       if(mapMode!=='sketch') return;
       sketching=true; sketchPts=[];
@@ -5123,10 +5160,23 @@
       const pad=(x1-x0)*0.12; x0-=pad; x1+=pad;
     }
     const fit = W/(x1-x0);
-    const sx = fit*(v.zoom||1);
-    evScale = sx;
+    let sx = fit*(v.zoom||1);
     const datumY = H*2/3 + (v.panY||0);       // the anchor sits 1/3 up, then pans
-    const px = (v.panX||0);
+    let px = (v.panX||0);
+    // Split screen: the plan owns the horizontal. sx becomes the map's own
+    // pixels-per-foot and the origin is shifted so a given point lands at the
+    // same screen x in both halves -- so a pin in the section sits exactly
+    // above its pin on the plan. The view's own zoom and panX are left alone,
+    // not overwritten, and come back the moment the iPad is turned flat.
+    let splitLock=null;
+    if(splitOn && side===evActive){
+      splitLock = splitXform(side);
+      if(splitLock && splitLock.per > 0){
+        sx = splitLock.per;
+        px = splitLock.at0 - evStage.getBoundingClientRect().left + x0*sx;
+      } else splitLock = null;
+    }
+    evScale = sx;
     // Auto-exaggeration is resolved ONCE and then held. Left to recompute, it
     // steps between 1/2/3/5/10 as the zoom changes and the vertical scale
     // snaps mid-pinch -- which reads as the view jumping under your fingers.
@@ -5145,7 +5195,7 @@
       if(v.vertExag==null && all.length) v.vertExag = exag;
     }
     return {pts:pts, all:all, W:W, H:H, datumY:datumY, x0:x0, x1:x1, fit:fit, sx:sx, exag:exag,
-            zoom:(v.zoom||1),
+            splitLock:!!splitLock, zoom:(v.zoom||1),
             toX: x => (x-x0)*sx + px,
             toY: ft => datumY - ft*sx*exag,
             fromX: q => (q-px)/sx + x0,
@@ -5320,7 +5370,8 @@
       + ' · ' + visible + ' of ' + total + ' point'+(total===1?'':'s')
       + (evMode!=='cut' ? ' <span class="ev-warn">('+EV_MODE_LABEL[evMode].toLowerCase()+')</span>' : '')
       + ' · ' + ((G.W/G.sx)).toFixed(0) + "' across"
-      + (Math.abs(G.zoom-1)>0.01 ? ' · zoom '+(G.zoom<1?G.zoom.toFixed(2):G.zoom.toFixed(1))+'×' : '')
+      + (G.splitLock ? ' · <span class="ev-warn">scale locked to the plan</span>'
+         : (Math.abs(G.zoom-1)>0.01 ? ' · zoom '+(G.zoom<1?G.zoom.toFixed(2):G.zoom.toFixed(1))+'×' : ''))
       + (Math.abs(G.exag-1)>0.01 ? ' · <span class="ev-warn">vertical ×'+fmtExag(G.exag)+'</span>'
                                   : ' · true proportion');
     evExagVal.innerHTML = fmtExag(G.exag)+'&times;';
@@ -5388,6 +5439,13 @@
         {cx:s.cx, cy:s.cy, scale:k, rotDeg: two ? (info.ang - s.ang) : 0, dx:tx, dy:ty});
       const arr=evCornersOf(evActive, evSlot);
       for(let i=0;i<4;i++) arr[i]=out[i];
+    } else if(splitOn){
+      // The plan owns the horizontal in split screen, so the section only
+      // moves its datum. Zooming here would silently disagree with the map
+      // underneath, which is the one thing this view must never do -- pan and
+      // pinch the plan instead, it is right there.
+      const v=evView(evActive), q=evGest.snap;
+      v.panY = (q.datumY + ty) - q.H*2/3;
     } else {
       // Zoom about the point under the fingers, so what you are looking at
       // stays put; a one-finger drag is pure pan, and its vertical component
@@ -5456,6 +5514,8 @@
       for(let i=0;i<4;i++) arr[i]=out[i];
       evRenderSoon();
       evSaveLater(evActive, evSlot);
+    } else if(splitOn){
+      return;                       // the plan owns the scale; zoom it, not this
     } else {
       const v=evView(evActive), H=Math.max(1, evStage.clientHeight);
       const z0=v.zoom||1, d0=H*2/3+(v.panY||0);
@@ -5781,11 +5841,14 @@
     evToolStretch.classList.toggle('active', evTool==='stretch');
     evToolDistort.classList.toggle('active', evTool==='distort');
     evLockBtn.innerHTML = svgIcon(evViewLocked?'lock':'unlock')
-      + '<span>' + (evViewLocked ? 'Scale' : 'Pinch / pan') + '</span>';
+      + '<span>' + (evViewLocked ? 'Scale'
+                    : (splitOn ? 'Drag datum' : 'Pinch / pan')) + '</span>';
     evLockBtn.classList.toggle('active', !evViewLocked);
-    evLockBtn.title = evViewLocked
-      ? 'Unlock to pinch the scale and drag the anchor line'
-      : 'Pinch to zoom, drag to pan — the vertical drag moves the anchor line';
+    evLockBtn.title = splitOn
+      ? 'Split screen: the plan sets the scale. Unlock to drag the anchor line up and down.'
+      : (evViewLocked
+        ? 'Unlock to pinch the scale and drag the anchor line'
+        : 'Pinch to zoom, drag to pan — the vertical drag moves the anchor line');
     evLevels.classList.toggle('active', evLevelsOn);
     // With exaggeration switched off in Settings the slider would be a control
     // that changes nothing, so it goes away rather than sitting there inert.
@@ -5844,7 +5907,8 @@
   evFitBtn.addEventListener('click', ()=>{
     if(!evActive) return;
     const v=evView(evActive);
-    v.zoom=1; v.panX=0; v.panY=0; v.vertExag=null;   // back to the auto framing
+    v.panY=0; v.vertExag=null;
+    if(!splitOn){ v.zoom=1; v.panX=0; }   // the horizontal is the plan's in split
     evSyncTabs(); evRender();
   });
 
