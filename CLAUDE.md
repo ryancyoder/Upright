@@ -157,6 +157,22 @@ Three things are load-bearing:
   edge is what forces the reflow — don't defer it into a `requestAnimationFrame`
   or the jump gets a frame to show itself.
 
+**The column and the filmstrip follow you into an elevation view.** There is
+exactly ONE of each; `panelsSync()` moves them between `.mapwrap` and
+`.elev-panel` rather than duplicating them. Both are plain DOM — no Leaflet, no
+`<video>` — so re-parenting them is free, which is the same reason the map
+itself gets moved into review. In a profile, tapping a plotted point opens it in
+the column: each gets a fat transparent hit disc over its 5px ring, because
+5px of stroke is not a thumb target.
+
+**Both are preferences, not per-view state** (`prefs.inspector`,
+`prefs.filmstrip`): turn the filmstrip off on the map and it stays off in an
+elevation view too. Each toolbar carries a **Preview** and a **Filmstrip**
+button writing the same preference, and Settings shows both — walking into
+Settings to reclaim screen is not something anyone does mid-visit, which is
+also why the gear now sits in the map toolbar as well as the elevation bar.
+The inspector's own **×** is a one-off close and leaves the preference alone.
+
 Renders during a drag are coalesced to one per animation frame; a drag fires
 far faster than the screen — and within a photo pin's panel the **numeric rows
 are rewritten but the note field is not**. Replacing a focused textarea drops
@@ -186,9 +202,13 @@ returning null, and a thrown preference read must not be able to stop a
 session starting.
 
 The panel is reachable from the start screen, the done panel, and a gear in
-the elevation bar — that last one because the first preference is
-**Vertical exaggeration**, whose effect you only see from inside an
-elevation view. Turning it off holds every section at ×1.
+both the map toolbar and the elevation bar — the last two because the start
+screen is gone once a visit is under way, and because two of the three
+preferences only show their effect from inside a view.
+
+- **Vertical exaggeration** — off holds every section at ×1.
+- **Preview column** — the pin inspector, on the map and in every elevation view.
+- **Filmstrip** — likewise.
 
 ## Data durability — important
 
@@ -742,10 +762,11 @@ slopes here.
   vertical component of a pan is what moves the anchor line up and down. **Fit**
   returns to the automatic framing. Zoom runs 0.05×–60×, which is what makes it
   possible to get far enough out to see the edges of an imported photo.
-- **One thing owns the stage at a time.** Move / scale (the image), Skew
-  corners, and an unlocked scale (the view) are mutually exclusive — including
-  on import, which hands the stage to the image and re-locks the view. Two
-  claimants would leave a lock button reading a lie.
+- **One thing owns the stage at a time.** `evTool` is a single variable —
+  `uniform` / `stretch` / `distort` — and an unlocked view scale clears it.
+  They are mutually exclusive, including on import, which hands the stage to
+  the image and re-locks the view. Two claimants would leave a lock button
+  reading a lie.
 - The horizontal fit is taken from **all** points, not the visible subset, so
   changing visibility mode does not jump the framing under you.
 - **Vertical exaggeration is unavoidable and is always announced.** A yard with
@@ -798,24 +819,66 @@ photographed from the ground needs; a drawing just uses a rectangle.
 `quadMatrix()` is the classic unit-square-to-quad solve, pre-scaled by the
 image's own pixel size and emitted as a CSS `matrix3d`.
 
-**Placing an image is two steps, in this order: Move / scale, then Skew
-corners.** An import lands in **Move / scale** — one finger pans, two fingers
-pinch and twist, exactly as importing a plan on the map does. Only then do you
-pull the four corners to correct the perspective. Skewing straight from a
-default rectangle means fighting the position and the distortion at once.
+**Three tools, in this order: Uniform, then Stretch, then Distort.** An import
+lands in **Uniform** — one finger pans, two fingers pinch and twist, exactly as
+importing a plan on the map does. Only then do you pull the shape about.
+Distorting straight from a default rectangle means fighting the position and
+the distortion at once.
 
-The two modes are exclusive, and **Move / scale applies a similarity transform
-to whatever the four corners currently are** — so it moves an already-skewed
-image without un-skewing it, and the order can be revisited freely.
+- **Uniform** applies a similarity transform to whatever the four corners
+  currently are — so it moves an already-distorted image without un-distorting
+  it, and the order can be revisited freely.
+- **Stretch** puts a handle on each of the four edges. Dragging one moves both
+  its endpoints along that edge's **normal only**: the opposite side stays
+  pinned and nothing shears. Sliding the edge sideways instead would be a
+  shear, and shearing is what Distort is for. Its handles are gold bars rather
+  than the blue corner dots — at arm's length on a bright screen two round
+  handles look identical.
+- **Distort** is the four corner handles, free: the full homography.
+
+Alongside them, three **parametric nudges** — what the iOS crop screen calls
+tipping the photo forward/back and left/right, plus straighten:
+
+- **Tip** and **Turn** are keystones: scale one edge up and the opposite edge
+  down about the shape's own centre line. That is exactly what tilting a plane
+  about a horizontal or vertical axis does to its outline, and the four corners
+  already carry a full homography, so it is only a parametric way of moving
+  them.
+- **Straighten** rotates about the shape's centre, ±15°, without resizing it.
+- All three are **relative, not absolute**, and spring back to centre on
+  release. Distort can move a corner anywhere between two adjustments, so there
+  is no base rectangle left to state an absolute tilt against; each drag works
+  from a snapshot taken when it started.
+
+**Reset shape** returns the image to the default rectangle. A mangled placement
+has to be recoverable without re-importing — re-picking the file off the camera
+roll in a yard is not a real option. **Fade** is the per-image opacity, which
+was stored all along but had no control.
+
+A **mesh warp** (Procreate's Warp, Morpholio's Distort 3D) is deliberately not
+here: CSS `matrix3d` expresses exactly one homography, so a warp would need a
+subdivided mesh drawn to canvas or WebGL. A facade is planar, so the homography
+is the correct model for it anyway.
 
 The gesture maths is done in **screen space and mapped back to view feet**:
 with a vertical exaggeration in play, feet-per-pixel differs by axis, and a
 pinch has to feel uniform under the finger.
 
+**The two stage `<img>` are shared by all four views** — `evOpen()` re-points
+their `src` on every switch. Parking a one-shot import handler on one of them
+therefore fired it again the next time you returned to that view, with the
+*original* import's variables still captured: it recomputed the default
+rectangle over whatever you had carefully placed, and re-uploaded the file for
+good measure. That is why an adjustment did not survive a view switch.
+Measuring happens on a throwaway `Image()` now. The only handler those two
+carry is a repaint, which they need because `evPlaceImg()` reads
+`naturalWidth` and a freshly-pointed `src` has none yet — without it a reopened
+view showed no image at all until something else forced a render.
+
 `evCornerHandles()` **repositions the handles, never rebuilds them.** A drag
 holds pointer capture on the handle; replacing the element mid-drag drops that
 capture and with it every later move and the pointerup that saves the result —
-the same trap that once made elevation reference photos unreachable on the map.
+the same trap that once made elevation reference photos unreachable on the map. `evEdgeHandles()` follows the same rule.
 
 ### Session history
 
@@ -862,7 +925,10 @@ not just abandoned starts.
 - Aligning a plan's *position and rotation* to known GPS points. Its **size**
   now comes from a dimension on the drawing (Set scale); where it sits and
   which way it faces are still placed by eye.
-- Perspective/skew correction for plans photographed at an angle.
+- Perspective/skew correction for plans photographed at an angle **on the
+  map**. The elevation views have the full tool set (Uniform / Stretch /
+  Distort plus Tip / Turn / Straighten); the map's plan overlay still only
+  pinches, twists and drags.
 - ZIP **import** to view old sessions offline. The ZIP already contains everything needed (audio, clips + offsets, photos + offsets, GeoJSON) — except the transcript, which lives only in Supabase. Consider adding `transcript.json` to the export.
 - Retry logic / sync-later indicator for failed uploads.
 - Client-facing deliverable (PDF or web page vs raw GeoJSON/ZIP).
@@ -875,7 +941,9 @@ not just abandoned starts.
   while dragging is a fair trade for never having a bubble over the pin.
 - Sketch/Measure accuracy against known dimensions.
 - 58px sidebar buttons with a gloved thumb; marker base size (30% of screen); yellow marker visibility on sunny turf; stroke weight at 3× zoom.
-- Extent-lock button reachability; whether the filmstrip eats too much map height in landscape.
+- Extent-lock button reachability; whether the filmstrip eats too much map
+  height in landscape — the answer now has a switch either way, so the question
+  is whether people find it.
 - Audio level in real field conditions.
 - Elevation accuracy against a known drop (a step, a wall course, a kerb).
   The maths is verified against an independent calculation; what is unproven

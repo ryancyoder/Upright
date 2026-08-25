@@ -127,7 +127,7 @@
     background:var(--bg2); border-right:1px solid var(--line);
     overflow:hidden;
   }
-  .mapwrap.insp .pin-inspector{display:flex;}
+  .mapwrap.insp .pin-inspector, .elev-panel.insp .pin-inspector{display:flex;}
   .pi-head{
     flex:0 0 auto; display:flex; align-items:center; gap:8px;
     padding:9px 8px 9px 12px; border-bottom:1px solid var(--line);
@@ -514,17 +514,37 @@
   .ev-tab.on{background:var(--ink); color:var(--bg); border-color:var(--ink);}
   .ev-sep{width:1px; height:26px; background:var(--line); flex:0 0 auto;}
   .ev-exag{width:120px; flex:0 0 auto;}
+  /* The image tools get their own row, shown only once the active slot holds an
+     image. Five sliders and four buttons crammed in beside the view tabs made
+     the one bar unreadable, and the tabs are what you reach for most. */
+  .ev-row{flex:1 1 auto; min-height:0; display:flex;}
+  .ev-strip-slot{flex:0 0 auto; display:flex; flex-direction:column;}
+  .elev-panel.insp{--insp-w:min(300px, 34%);}
+  .elev-panel{--insp-w:0px;}
+  .elev-panel .pin-inspector{border-right:1px solid var(--line);}
+  .ev-imgbar{display:none; border-bottom:1px solid var(--line);}
+  .ev-imgbar.show{display:flex;}
+  .ev-imgbar .ev-exag{width:96px;}
   .ev-lock{display:flex; align-items:center; gap:6px; padding:8px 12px;}
   .ev-lock svg{display:block;}
-  .ev-stage{flex:1 1 auto; position:relative; overflow:hidden; background:#0a0a08; touch-action:none;}
+  .ev-stage{flex:1 1 auto; min-width:0; position:relative; overflow:hidden; background:#0a0a08; touch-action:none;}
   .ev-img{
     position:absolute; left:0; top:0; transform-origin:0 0;
     pointer-events:none; will-change:transform;
   }
-  .ev-svg{position:absolute; inset:0; width:100%; height:100%;}
+  .ev-svg{position:absolute; inset:0; width:100%; height:100%; pointer-events:none;}
+  .ev-svg .ev-hit{pointer-events:auto; cursor:pointer;}
   .ev-corner{
     position:absolute; width:26px; height:26px; margin:-13px 0 0 -13px;
     border-radius:50%; border:2px solid #fff; background:rgba(99,179,232,0.9);
+    box-shadow:0 1px 6px rgba(0,0,0,0.6); touch-action:none;
+  }
+  /* Stretch grabs a whole side, so its handle is a bar, not a dot -- and a
+     different shape from the corner dots, since the two can look identical at
+     arm's length on a bright screen. */
+  .ev-edge{
+    position:absolute; width:34px; height:20px; margin:-10px 0 0 -17px;
+    border-radius:6px; border:2px solid #fff; background:rgba(201,162,39,0.92);
     box-shadow:0 1px 6px rgba(0,0,0,0.6); touch-action:none;
   }
   .ev-note{
@@ -976,8 +996,11 @@
         <button class="mt-btn" id="measureBtn">Measure</button>
         <button class="mt-btn" id="elevBtn">Elevation</button>
         <button class="mt-btn" id="cutsBtn">Section cuts</button>
+        <button class="mt-btn" id="panelsMapBtn">Preview</button>
+        <button class="mt-btn" id="stripMapBtn">Filmstrip</button>
         <button class="mt-btn" id="lockExtentBtn">Lock extent</button>
         <button class="mt-btn" id="basemapBtn" style="display:none">Plan + satellite</button>
+        <button class="mt-btn" id="settingsMapBtn" title="Settings">&#9881;</button>
       </div>
     </div>
 
@@ -999,19 +1022,40 @@
         <button class="mt-btn" id="evPhotoBtn">Photo</button>
         <button class="mt-btn" id="evLevels">Level lines</button>
         <button class="mt-btn" id="evXray">X-ray</button>
-        <button class="mt-btn" id="evPlaceBtn">Move / scale</button>
-        <button class="mt-btn" id="evSkewBtn">Skew corners</button>
-        <button class="mt-btn" id="evClearImg">Remove image</button>
-        <button class="mt-btn" id="evSettingsBtn" title="Settings">⚙</button>
+        <button class="mt-btn" id="panelsEvBtn">Preview</button>
+        <button class="mt-btn" id="stripEvBtn">Filmstrip</button>
+        <button class="mt-btn" id="evSettingsBtn" title="Settings">&#9881;</button>
         <input type="file" id="evFile" accept="image/*" style="display:none">
       </div>
-      <div class="ev-stage" id="evStage">
-        <img class="ev-img" id="evPlanImg" alt="">
-        <img class="ev-img" id="evPhotoImg" alt="">
-        <svg class="ev-svg" id="evSvg"></svg>
-        <div class="ev-note" id="evNote"></div>
-        <div class="ev-empty" id="evEmpty"></div>
+      <div class="ev-bar ev-imgbar" id="evImgBar">
+        <span class="mt-label" id="evImgWhich">Image</span>
+        <button class="mt-btn" id="evToolUniform">Uniform</button>
+        <button class="mt-btn" id="evToolStretch">Stretch</button>
+        <button class="mt-btn" id="evToolDistort">Distort</button>
+        <div class="ev-sep"></div>
+        <span class="mt-label">Tip</span>
+        <input type="range" id="evTiltV" min="-100" max="100" value="0" class="ev-exag">
+        <span class="mt-label">Turn</span>
+        <input type="range" id="evTiltH" min="-100" max="100" value="0" class="ev-exag">
+        <span class="mt-label">Straighten</span>
+        <input type="range" id="evStraighten" min="-100" max="100" value="0" class="ev-exag">
+        <div class="ev-sep"></div>
+        <span class="mt-label">Fade</span>
+        <input type="range" id="evOpacity" min="5" max="100" value="85" class="ev-exag">
+        <div class="ev-sep"></div>
+        <button class="mt-btn" id="evResetImg">Reset shape</button>
+        <button class="mt-btn" id="evClearImg">Remove image</button>
       </div>
+      <div class="ev-row" id="evRow">
+        <div class="ev-stage" id="evStage">
+          <img class="ev-img" id="evPlanImg" alt="">
+          <img class="ev-img" id="evPhotoImg" alt="">
+          <svg class="ev-svg" id="evSvg"></svg>
+          <div class="ev-note" id="evNote"></div>
+          <div class="ev-empty" id="evEmpty"></div>
+        </div>
+      </div>
+      <div class="ev-strip-slot" id="evStripSlot"></div>
     </div>
 
     <div class="stage-overlay" id="startOverlay">
@@ -1091,6 +1135,24 @@
           </div>
           <button class="pref-switch" id="prefVertExag" role="switch"><i></i></button>
         </div>
+        <div class="pref-row">
+          <div class="pref-main">
+            <div class="pref-title">Preview column</div>
+            <div class="pref-sub">The photo-and-details column down the left of the site map and
+              every elevation view. It follows whichever pin you tap or drag. Turn it off to give
+              the whole width back to the drawing.</div>
+          </div>
+          <button class="pref-switch" id="prefInspector" role="switch"><i></i></button>
+        </div>
+        <div class="pref-row">
+          <div class="pref-main">
+            <div class="pref-title">Filmstrip</div>
+            <div class="pref-sub">The row of photo pins and grade frames along the bottom, shown
+              on the site map and in every elevation view. Off is more drawing, at the cost of
+              the quickest way to find a particular shot.</div>
+          </div>
+          <button class="pref-switch" id="prefFilmstrip" role="switch"><i></i></button>
+        </div>
       </div>
     </div>
 
@@ -1154,7 +1216,11 @@
         evTabTop=$('evTabTop'), evExagSlider=$('evExagSlider'), evExagVal=$('evExagVal'),
         evPlanBtn=$('evPlanBtn'), evPhotoBtn=$('evPhotoBtn'),
         evLockBtn=$('evLockBtn'), evFitBtn=$('evFitBtn'),
-        evSkewBtn=$('evSkewBtn'), evPlaceBtn=$('evPlaceBtn'), evClearImg=$('evClearImg'),
+        evClearImg=$('evClearImg'), evImgBar=$('evImgBar'), evImgWhich=$('evImgWhich'),
+        evToolUniform=$('evToolUniform'), evToolStretch=$('evToolStretch'),
+        evToolDistort=$('evToolDistort'), evResetImg=$('evResetImg'),
+        evTiltV=$('evTiltV'), evTiltH=$('evTiltH'), evStraighten=$('evStraighten'),
+        evOpacity=$('evOpacity'),
         evFile=$('evFile'), evXray=$('evXray'), evLevels=$('evLevels'),
         sightOverlay=$('sightOverlay'), sightMsg=$('sightMsg'), sightAngle=$('sightAngle'),
         sightSteady=$('sightSteady'), gradeBtn=$('gradeBtn'),
@@ -1180,10 +1246,15 @@
         propPanel=$('propPanel'), propSearch=$('propSearch'), propList=$('propList'),
         propStatus=$('propStatus'), propClose=$('propClose'), propClear=$('propClear'),
         pinInspector=$('pinInspector'), piTitle=$('piTitle'), piClose=$('piClose'),
+        evRow=$('evRow'), evStripSlot=$('evStripSlot'),
         piImg=$('piImg'), piNoImg=$('piNoImg'), piBody=$('piBody'),
         settingsPanel=$('settingsPanel'), settingsBtn=$('settingsBtn'), settingsBtn2=$('settingsBtn2'),
         settingsClose=$('settingsClose'), evSettingsBtn=$('evSettingsBtn'),
-        evExagLabel=$('evExagLabel'), prefVertExag=$('prefVertExag');
+        evExagLabel=$('evExagLabel'), prefVertExag=$('prefVertExag'),
+        prefInspector=$('prefInspector'), prefFilmstrip=$('prefFilmstrip'),
+        panelsMapBtn=$('panelsMapBtn'), stripMapBtn=$('stripMapBtn'),
+        panelsEvBtn=$('panelsEvBtn'), stripEvBtn=$('stripEvBtn'),
+        settingsMapBtn=$('settingsMapBtn');
 
   const UPRIGHT_ON=55, UPRIGHT_OFF=35, HOLD_MS=350;
 
@@ -1194,7 +1265,7 @@
   // rather than returning null -- and a thrown preference read must not be
   // able to stop a session starting.
   const PREFS_KEY='upright.prefs';
-  const PREF_DEFAULTS={vertExag:true};
+  const PREF_DEFAULTS={vertExag:true, inspector:true, filmstrip:true};
   const prefs=Object.assign({}, PREF_DEFAULTS);
   try{
     const raw=localStorage.getItem(PREFS_KEY);
@@ -1205,15 +1276,36 @@
     catch(e){ console.warn('prefs write failed', e); }
   }
   function renderPrefs(){
-    prefVertExag.classList.toggle('on', prefs.vertExag!==false);
-    prefVertExag.setAttribute('aria-checked', prefs.vertExag!==false ? 'true':'false');
+    [[prefVertExag,'vertExag'],[prefInspector,'inspector'],[prefFilmstrip,'filmstrip']]
+      .forEach(([el,key])=>{
+        const on = prefs[key]!==false;
+        el.classList.toggle('on', on);
+        el.setAttribute('aria-checked', on ? 'true':'false');
+      });
   }
+  // The two panels are app-wide furniture, so they are a preference rather than
+  // per-view state: turn the filmstrip off on the map and it stays off in an
+  // elevation view too. Both toolbars carry a button that writes the same
+  // preference, because walking into Settings to reclaim screen is not
+  // something anyone does mid-visit.
+  function prefSet(key, on){
+    prefs[key]=!!on; savePrefs(); renderPrefs();
+    try{
+      panelsSync();
+      renderStrip();
+      if(evActive) evRender();
+    }catch(err){ console.warn('prefs apply failed', err); }
+  }
+  function prefToggle(key){ prefSet(key, prefs[key]===false); }
   function openSettings(){ settingsPanel.classList.add('show'); renderPrefs(); }
   function closeSettings(){ settingsPanel.classList.remove('show'); }
   settingsBtn.addEventListener('click', openSettings);
   settingsBtn2.addEventListener('click', openSettings);
   evSettingsBtn.addEventListener('click', openSettings);
+  settingsMapBtn.addEventListener('click', openSettings);   // the start screen is gone mid-visit
   settingsClose.addEventListener('click', closeSettings);
+  prefInspector.addEventListener('click', ()=>prefToggle('inspector'));
+  prefFilmstrip.addEventListener('click', ()=>prefToggle('filmstrip'));
   prefVertExag.addEventListener('click', ()=>{
     prefs.vertExag = !(prefs.vertExag!==false);
     savePrefs(); renderPrefs();
@@ -3156,7 +3248,7 @@
 
     entries.sort((a,b)=>a.sort-b.sort);
     filmStrip.innerHTML='';
-    if(!entries.length){ filmStrip.classList.remove('show'); return; }
+    if(!entries.length || prefs.filmstrip===false){ filmStrip.classList.remove('show'); return; }
     entries.forEach(e=>filmStrip.appendChild(e.build()));
     filmStrip.classList.add('show');
   }
@@ -3187,10 +3279,35 @@
   // free to destroy.
   let inspectKind=null, inspectId=null, inspectRaf=null;
 
+  // The inspector and the filmstrip are shared furniture: ONE of each, moved
+  // between the map view and an elevation view rather than duplicated. Both are
+  // plain DOM -- no Leaflet, no <video> -- so re-parenting them is free, which
+  // is exactly why the map itself gets moved into review the same way.
+  let panelHome=null;
+  function panelsSync(){
+    if(!panelHome){
+      panelHome={inspNext:pinInspector.nextSibling, inspParent:pinInspector.parentNode,
+                 stripNext:filmStrip.nextSibling, stripParent:filmStrip.parentNode};
+    }
+    const inEv = !!evActive;
+    const inspHost = inEv ? evRow : panelHome.inspParent;
+    const stripHost = inEv ? evStripSlot : panelHome.stripParent;
+    // The column sits BEFORE the drawing in both hosts; the strip sits after.
+    if(pinInspector.parentNode!==inspHost || (!inEv && pinInspector.nextSibling!==panelHome.inspNext))
+      inspHost.insertBefore(pinInspector, inEv ? evStage : panelHome.inspNext);
+    if(filmStrip.parentNode!==stripHost || (!inEv && filmStrip.nextSibling!==panelHome.stripNext))
+      stripHost.insertBefore(filmStrip, inEv ? null : panelHome.stripNext);
+    const showInsp = !!inspectKind && prefs.inspector!==false;
+    mapwrap.classList.toggle('insp', showInsp && !inEv);
+    elevPanel.classList.toggle('insp', showInsp && inEv);
+    [panelsMapBtn, panelsEvBtn].forEach(b=>b && b.classList.toggle('active', prefs.inspector!==false));
+    [stripMapBtn, stripEvBtn].forEach(b=>b && b.classList.toggle('active', prefs.filmstrip!==false));
+  }
+
   function inspectOpen(kind, id){
     inspectKind=kind; inspectId=id;
     inspectSetOpen(true);
-    inspectRender();
+    if(prefs.inspector!==false) inspectRender();
   }
   function inspectClose(){
     inspectKind=null; inspectId=null;
@@ -3213,7 +3330,8 @@
   function inspectSetOpen(open){
     const el = map ? map.getContainer() : null;
     const before = el ? el.getBoundingClientRect().left : 0;
-    mapwrap.classList.toggle('insp', open);
+    panelsSync();
+    if(evActive) evRenderSoon();      // the stage just changed width
     if(!el) return;
     const after = el.getBoundingClientRect().left;
     try{
@@ -3252,7 +3370,7 @@
   function piFt(m){ return m===null||m===undefined ? null : (m/M_PER_FT).toFixed(1)+"'"; }
 
   function inspectRender(){
-    if(!inspectKind) return;
+    if(!inspectKind || prefs.inspector===false) return;
     if(inspectKind==='pin'){
       const pin=pins.find(p=>p.id===inspectId);
       if(!pin){ inspectClose(); return; }
@@ -3372,6 +3490,10 @@
   }
 
   piClose.addEventListener('click', inspectClose);
+  panelsMapBtn.addEventListener('click', ()=>prefToggle('inspector'));
+  panelsEvBtn.addEventListener('click', ()=>prefToggle('inspector'));
+  stripMapBtn.addEventListener('click', ()=>prefToggle('filmstrip'));
+  stripEvBtn.addEventListener('click', ()=>prefToggle('filmstrip'));
 
   function markSelectedMarkers(){
     pins.forEach(pin=>{
@@ -4422,7 +4544,7 @@
   let cutPivot=null, cutRot=0, cutLocked=false;
   let cutOffsets={north:0, south:0, east:0, west:0};      // metres along each normal
   let evViews={};                                          // side -> {vertExag, plan*, photo*}
-  let cutLayers=[], cutObjs=null, evActive=null, evSkew=false, evSlot='plan';
+  let cutLayers=[], cutObjs=null, evActive=null, evSlot='plan';
   let evScale=null, evDragging=null, evSaveTimer=null;
   // The VIEW transform, separate from where any image sits. Locked by default
   // so a stray drag cannot move the datum; unlock and the stage pinches to
@@ -4917,6 +5039,15 @@
       c.setAttribute('cx',x); c.setAttribute('cy',y); c.setAttribute('r',5);
       c.setAttribute('fill','none'); c.setAttribute('stroke',col); c.setAttribute('stroke-width',2.5);
       g.appendChild(c);
+      // A fat transparent disc over the ring: 5px of stroke is not a target you
+      // can hit with a thumb. Tapping it opens the point in the inspector, the
+      // same as tapping its pin on the map -- which is the whole reason the
+      // column follows you into an elevation view.
+      const hit=ns('circle');
+      hit.setAttribute('cx',x); hit.setAttribute('cy',y); hit.setAttribute('r',18);
+      hit.setAttribute('fill','transparent'); hit.setAttribute('class','ev-hit');
+      hit.addEventListener('click', ev=>{ ev.stopPropagation(); inspectOpen('elev', p.pt.id); });
+      g.appendChild(hit);
       const t=ns('text');
       t.setAttribute('x',x); t.setAttribute('y',y-11);
       t.setAttribute('fill',col); t.setAttribute('font-size',11); t.setAttribute('font-weight','700');
@@ -4928,6 +5059,7 @@
     });
 
     evCornerHandles(G);
+    evEdgeHandles(G);
 
     const n=G.pts.length, visible=G.all.filter(q=>q.strict).length, total=G.all.length;
     evEmpty.style.display = n ? 'none' : 'flex';
@@ -4958,7 +5090,14 @@
   // Worked in SCREEN space and mapped back to view feet: with a vertical
   // exaggeration in play, feet-per-pixel differs by axis, and a pinch has to
   // feel uniform under the finger.
-  let evPlace=false, evGest=null;
+  // ONE tool owns the stage at a time -- including the unlocked view scale, so
+  // a lock button can never read a lie:
+  //   uniform  -- move, pinch to scale evenly, twist to rotate (the first move)
+  //   stretch  -- mid-edge handles: one side at a time, opposite side pinned
+  //   distort  -- corner handles, free: the full homography
+  // The perspective sliders are not a tool; they are a parametric nudge that
+  // works whichever of the three is up, because they only ever move corners.
+  let evTool=null, evGest=null;
 
   function evXformCorners(snap, G, o){
     const k=o.scale, th=rad(o.rotDeg||0), cos=Math.cos(th), sin=Math.sin(th);
@@ -4978,10 +5117,10 @@
     return {n:2, cx:(t[0].x+t[1].x)/2, cy:(t[0].y+t[1].y)/2,
             dist:Math.hypot(dx,dy)||1, ang:Math.atan2(dy,dx)*180/Math.PI};
   }
-  function evGestArmed(){ return !!evActive && (evPlace || !evViewLocked); }
+  function evGestArmed(){ return !!evActive && (evTool==='uniform' || !evViewLocked); }
   function evGestStart(info){
     if(!evGestArmed()) return;
-    if(evPlace){
+    if(evTool==='uniform'){
       const arr=evCornersOf(evActive, evSlot);
       if(!arr) return;
       evGest={kind:'img', start:info, snap:arr.map(c=>({x:c.x, y:c.y}))};
@@ -5065,7 +5204,7 @@
     e.preventDefault();
     const r=evStage.getBoundingClientRect();
     const cx=e.clientX-r.left, cy=e.clientY-r.top, k = e.deltaY<0 ? 1.08 : 1/1.08;
-    if(evPlace){
+    if(evTool==='uniform'){
       const arr=evCornersOf(evActive, evSlot); if(!arr) return;
       const out=evXformCorners(arr.map(c=>({x:c.x,y:c.y})), evGeom(evActive), {cx:cx, cy:cy, scale:k});
       for(let i=0;i<4;i++) arr[i]=out[i];
@@ -5096,7 +5235,7 @@
       evDragging={i:i, slot:evSlot, side:evActive};
     });
     d.addEventListener('pointermove', e=>{
-      if(!evDragging || evDragging.i!==i) return;
+      if(!evDragging || evDragging.edge || evDragging.i!==i) return;
       e.preventDefault();
       const arr=evCornersOf(evDragging.side, evDragging.slot);
       if(!arr) return;
@@ -5105,7 +5244,7 @@
       evRenderSoon();
     });
     ['pointerup','pointercancel'].forEach(ev=>d.addEventListener(ev, ()=>{
-      if(!evDragging || evDragging.i!==i) return;
+      if(!evDragging || evDragging.edge || evDragging.i!==i) return;
       const side=evDragging.side, slot=evDragging.slot;
       evDragging=null;
       const arr=evCornersOf(side, slot);
@@ -5113,10 +5252,159 @@
     }));
     return d;
   }
+  // ---------- stretch: one edge at a time ----------
+  // Corners run TL, TR, BR, BL, so an edge is a consecutive pair. Dragging its
+  // handle moves BOTH its endpoints along the edge's own NORMAL only -- the
+  // opposite side stays pinned and nothing shears. Sliding the edge sideways
+  // instead would be a shear, and shearing is what Distort is for.
+  //
+  // Done in screen space and mapped back, like every other gesture here: with a
+  // vertical exaggeration in play, feet-per-pixel differs by axis, so a normal
+  // computed in feet would not be perpendicular on the glass.
+  const EV_EDGES=[[0,1],[1,2],[2,3],[3,0]];
+  function evEdgeHandles(G){
+    const corners=evCornersOf(evActive, evSlot);
+    let have=[...evStage.querySelectorAll('.ev-edge')];
+    if(evTool!=='stretch' || !corners){ have.forEach(e=>e.remove()); return; }
+    // Reposition, never rebuild -- same pointer-capture trap as the corners.
+    if(have.length!==EV_EDGES.length){
+      have.forEach(e=>e.remove());
+      EV_EDGES.forEach((_e,i)=>evStage.appendChild(evMakeEdge(i)));
+      have=[...evStage.querySelectorAll('.ev-edge')];
+    }
+    have.forEach((d,i)=>{
+      const [a,b]=EV_EDGES[i];
+      d.style.left=(G.toX(corners[a].x)+G.toX(corners[b].x))/2+'px';
+      d.style.top =(G.toY(corners[a].y)+G.toY(corners[b].y))/2+'px';
+    });
+  }
+  function evMakeEdge(i){
+    const d=document.createElement('div');
+    d.className='ev-edge';
+    let snap=null, from=null;
+    d.addEventListener('pointerdown', e=>{
+      e.preventDefault(); e.stopPropagation();
+      try{ d.setPointerCapture(e.pointerId); }catch(_e){}
+      const arr=evCornersOf(evActive, evSlot); if(!arr) return;
+      const r=evStage.getBoundingClientRect();
+      evDragging={i:i, slot:evSlot, side:evActive, edge:true};
+      snap=arr.map(c=>({x:c.x, y:c.y}));
+      from={x:e.clientX-r.left, y:e.clientY-r.top};
+    });
+    d.addEventListener('pointermove', e=>{
+      if(!evDragging || !evDragging.edge || evDragging.i!==i || !snap) return;
+      e.preventDefault();
+      const arr=evCornersOf(evDragging.side, evDragging.slot);
+      if(!arr) return;
+      const G=evGeom(evDragging.side), r=evStage.getBoundingClientRect();
+      const [a,b]=EV_EDGES[i];
+      const pa={x:G.toX(snap[a].x), y:G.toY(snap[a].y)};
+      const pb={x:G.toX(snap[b].x), y:G.toY(snap[b].y)};
+      const ex=pb.x-pa.x, ey=pb.y-pa.y, len=Math.hypot(ex,ey);
+      if(!len) return;
+      const nx=-ey/len, ny=ex/len;                       // unit normal to the edge
+      const dx=(e.clientX-r.left)-from.x, dy=(e.clientY-r.top)-from.y;
+      const push=dx*nx + dy*ny;                          // only the normal part
+      [a,b].forEach(k=>{
+        arr[k]={x:G.fromX(G.toX(snap[k].x)+nx*push), y:G.fromY(G.toY(snap[k].y)+ny*push)};
+      });
+      evRenderSoon();
+    });
+    ['pointerup','pointercancel'].forEach(ev=>d.addEventListener(ev, ()=>{
+      if(!evDragging || !evDragging.edge || evDragging.i!==i) return;
+      const side=evDragging.side, slot=evDragging.slot;
+      evDragging=null; snap=null;
+      const arr=evCornersOf(side, slot);
+      if(arr) evSaveSide(side, slot==='plan' ? {planCorners:arr} : {photoCorners:arr});
+    }));
+    return d;
+  }
+
+  // ---------- perspective: tip, turn, straighten ----------
+  // What the iOS crop screen calls tipping the photo forward/back and left/
+  // right. A keystone, and the four corners already carry a full homography, so
+  // it is just a parametric way of moving them: scale one edge up and the
+  // opposite edge down about the shape's own centre line.
+  //
+  // The sliders are RELATIVE, not absolute. Distort can move a corner anywhere
+  // between two adjustments, so there is no base rectangle left to state an
+  // absolute tilt against; each drag works from a snapshot taken when it
+  // started, and the slider springs back to centre on release.
+  function evKeystone(snap, G, kind, amt){
+    const p=snap.map(c=>({x:G.toX(c.x), y:G.toY(c.y)}));
+    // pairs = [the two corners that grow, the two that shrink]
+    const pairs = kind==='tip' ? [[0,1],[3,2]] : [[1,2],[0,3]];
+    const out=p.map(c=>({x:c.x, y:c.y}));
+    pairs.forEach((pair, side)=>{
+      const k = 1 + (side===0 ? amt : -amt);
+      const mx=(p[pair[0]].x+p[pair[1]].x)/2, my=(p[pair[0]].y+p[pair[1]].y)/2;
+      pair.forEach(i=>{ out[i]={x:mx+(p[i].x-mx)*k, y:my+(p[i].y-my)*k}; });
+    });
+    return out.map(c=>({x:G.fromX(c.x), y:G.fromY(c.y)}));
+  }
+  function evSpin(snap, G, deg){
+    const p=snap.map(c=>({x:G.toX(c.x), y:G.toY(c.y)}));
+    const cx=p.reduce((a,c)=>a+c.x,0)/4, cy=p.reduce((a,c)=>a+c.y,0)/4;
+    const th=rad(deg), cos=Math.cos(th), sin=Math.sin(th);
+    return p.map(c=>{
+      const dx=c.x-cx, dy=c.y-cy;
+      return {x:G.fromX(cx+dx*cos-dy*sin), y:G.fromY(cy+dx*sin+dy*cos)};
+    });
+  }
+  let evNudge=null;                                  // {snap} for the live slider
+  function evNudgeApply(el, fn){
+    if(!evActive) return;
+    const arr=evCornersOf(evActive, evSlot); if(!arr) return;
+    if(!evNudge) evNudge={snap:arr.map(c=>({x:c.x, y:c.y}))};
+    const out=fn(evNudge.snap, evGeom(evActive), +el.value);
+    for(let i=0;i<4;i++) arr[i]=out[i];
+    evRenderSoon();
+  }
+  function evNudgeEnd(el){
+    el.value=0;
+    if(!evNudge) return;
+    evNudge=null;
+    if(!evActive) return;
+    const arr=evCornersOf(evActive, evSlot);
+    if(arr) evSaveSide(evActive, evSlot==='plan' ? {planCorners:arr} : {photoCorners:arr});
+  }
+  function evWireNudge(el, fn){
+    el.addEventListener('input', ()=>evNudgeApply(el, fn));
+    ['change','pointerup','touchend'].forEach(ev=>el.addEventListener(ev, ()=>evNudgeEnd(el)));
+  }
+  evWireNudge(evTiltV, (snap,G,val)=>evKeystone(snap, G, 'tip',  val/250));
+  evWireNudge(evTiltH, (snap,G,val)=>evKeystone(snap, G, 'turn', val/250));
+  evWireNudge(evStraighten, (snap,G,val)=>evSpin(snap, G, val/100*15));   // ±15°
+
+  evOpacity.addEventListener('input', ()=>{
+    if(!evActive) return;
+    const v=evView(evActive), o=(+evOpacity.value)/100;
+    if(evSlot==='plan') v.planOpacity=o; else v.photoOpacity=o;
+    evRenderSoon();
+  });
+  evOpacity.addEventListener('change', ()=>{
+    if(!evActive) return;
+    const v=evView(evActive);
+    evSaveSide(evActive, evSlot==='plan' ? {planOpacity:v.planOpacity} : {photoOpacity:v.photoOpacity});
+  });
+
+  // A mangled shape has to be recoverable without re-importing the file --
+  // re-picking it off the camera roll in a yard is not a real option.
+  evResetImg.addEventListener('click', ()=>{
+    if(!evActive) return;
+    const v=evView(evActive);
+    const el = evSlot==='plan' ? evPlanImg : evPhotoImg;
+    if(!el.naturalWidth) return;
+    const corners=evDefaultCorners(evGeom(evActive), el);
+    if(evSlot==='plan') v.planCorners=corners; else v.photoCorners=corners;
+    evSaveSide(evActive, evSlot==='plan' ? {planCorners:corners} : {photoCorners:corners});
+    evRender();
+  });
+
   function evCornerHandles(G){
     const corners=evCornersOf(evActive, evSlot);
     let have=[...evStage.querySelectorAll('.ev-corner')];
-    if(!evSkew || !corners){ have.forEach(e=>e.remove()); return; }
+    if(evTool!=='distort' || !corners){ have.forEach(e=>e.remove()); return; }
     // Reposition in place, NEVER rebuild. A drag holds pointer capture on the
     // handle; replacing the element mid-drag drops that capture and with it
     // every later move and the pointerup that saves the result -- the same trap
@@ -5136,17 +5424,20 @@
   function evOpen(side){
     if(!EV_SIDES.includes(side)) return;
     evEnsurePivot();
-    evActive=side; evSkew=false; evPlace=false; evGest=null; evViewLocked=true;
+    evActive=side; evTool=null; evGest=null; evViewLocked=true;
     const v=evView(side);
     evPlanImg.src = v.planUrl || '';
     evPhotoImg.src = v.photoUrl || '';
     elevPanel.classList.add('show');
+    panelsSync();               // the column and the strip come with you
     evSyncTabs();
     requestAnimationFrame(evRender);
   }
   function evClose(){
-    evActive=null; evSkew=false; evPlace=false; evGest=null;
+    evActive=null; evTool=null; evGest=null;
     elevPanel.classList.remove('show');
+    panelsSync();               // ...and go back to the map with you
+    if(map) requestAnimationFrame(()=>{ try{ map.invalidateSize({pan:false}); }catch(e){} });
     evSyncTabs();
   }
   function buildViewSwitch(){
@@ -5170,8 +5461,9 @@
     evTabTop.classList.toggle('on', !evActive);
     [...elevPanel.querySelectorAll('.ev-tab[data-side]')].forEach(b=>
       b.classList.toggle('on', b.dataset.side===evActive));
-    evSkewBtn.classList.toggle('active', evSkew);
-    evPlaceBtn.classList.toggle('active', evPlace);
+    evToolUniform.classList.toggle('active', evTool==='uniform');
+    evToolStretch.classList.toggle('active', evTool==='stretch');
+    evToolDistort.classList.toggle('active', evTool==='distort');
     evLockBtn.innerHTML = svgIcon(evViewLocked?'lock':'unlock')
       + '<span>' + (evViewLocked ? 'Scale' : 'Pinch / pan') + '</span>';
     evLockBtn.classList.toggle('active', !evViewLocked);
@@ -5189,9 +5481,12 @@
     evXray.classList.toggle('active', evMode!=='cut');
     const v=evActive?evView(evActive):null;
     const has=!!(v && (evSlot==='plan'?v.planUrl:v.photoUrl));
-    evSkewBtn.style.display=has?'':'none';
-    evPlaceBtn.style.display=has?'':'none';
-    evClearImg.style.display=has?'':'none';
+    evImgBar.classList.toggle('show', has);
+    evImgWhich.textContent = evSlot==='plan' ? 'Elevation plan' : 'Photo';
+    if(v){
+      const op = evSlot==='plan' ? v.planOpacity : v.photoOpacity;
+      if(document.activeElement!==evOpacity) evOpacity.value=Math.round((op==null?0.85:op)*100);
+    }
     evPlanBtn.classList.toggle('active', evSlot==='plan' && !!(v&&v.planUrl));
     evPhotoBtn.classList.toggle('active', evSlot==='photo' && !!(v&&v.photoUrl));
   }
@@ -5215,15 +5510,19 @@
     evMode = EV_MODES[(EV_MODES.indexOf(evMode)+1) % EV_MODES.length];
     evSyncTabs(); evRender();
   });
-  evPlaceBtn.addEventListener('click', ()=>{
-    evPlace=!evPlace;
-    // Only one thing owns the stage at a time: move the image, or frame the view.
-    if(evPlace){ evSkew=false; evViewLocked=true; }
+  // One tool at a time, and picking one always re-locks the view: two claimants
+  // would leave the lock button reading a lie.
+  function evSetTool(t){
+    evTool = (evTool===t) ? null : t;
+    if(evTool) evViewLocked=true;
     evSyncTabs(); evRender();
-  });
+  }
+  evToolUniform.addEventListener('click', ()=>evSetTool('uniform'));
+  evToolStretch.addEventListener('click', ()=>evSetTool('stretch'));
+  evToolDistort.addEventListener('click', ()=>evSetTool('distort'));
   evLockBtn.addEventListener('click', ()=>{
     evViewLocked=!evViewLocked;
-    if(!evViewLocked){ evPlace=false; evSkew=false; }
+    if(!evViewLocked) evTool=null;      // the view and a tool cannot both own the stage
     evSyncTabs(); evRender();
   });
   evFitBtn.addEventListener('click', ()=>{
@@ -5232,10 +5531,7 @@
     v.zoom=1; v.panX=0; v.panY=0; v.vertExag=null;   // back to the auto framing
     evSyncTabs(); evRender();
   });
-  evSkewBtn.addEventListener('click', ()=>{
-    evSkew=!evSkew; if(evSkew){ evPlace=false; evViewLocked=true; }
-    evSyncTabs(); evRender();
-  });
+
   evClearImg.addEventListener('click', ()=>{
     if(!evActive) return;
     const v=evView(evActive);
@@ -5243,25 +5539,40 @@
     if(evSlot==='plan'){ v.planUrl=null; v.planCorners=null; evPlanImg.src=''; }
     else { v.photoUrl=null; v.photoCorners=null; evPhotoImg.src=''; }
     if(sessionId) apiDelete('/sessions/'+sessionId+'/elevation-views/'+evActive+'/'+evSlot);
-    evSkew=false; evPlace=false; evSyncTabs(); evRender();
+    evTool=null; evSyncTabs(); evRender();
   });
+  // The two stage <img> are SHARED by all four views -- evOpen() re-points their
+  // src on every switch. Parking a one-shot import handler on one of them
+  // therefore fired it again the next time you came back to the view, with the
+  // ORIGINAL import's variables still captured: it recomputed the default
+  // rectangle over whatever you had carefully placed, and re-uploaded the file
+  // for good measure. That is why an adjustment did not survive a view switch.
+  // Measure on a throwaway Image instead. The only handler these two carry is a
+  // repaint, which they need because evPlaceImg() reads naturalWidth and a
+  // freshly-pointed src has none yet -- without it a reopened view showed no
+  // image at all until something else forced a render.
+  [evPlanImg, evPhotoImg].forEach(el=>
+    el.addEventListener('load', ()=>{ if(evActive) evRenderSoon(); }));
+
   evFile.addEventListener('change', e=>{
     const f=e.target.files[0]; e.target.value='';
     if(!f || !evActive) return;
     const side=evActive, slot=evSlot, v=evView(side);
     const url=URL.createObjectURL(f);
-    const el = slot==='plan' ? evPlanImg : evPhotoImg;
-    el.onload=()=>{
-      const G=evGeom(side);
-      const corners=evDefaultCorners(G, el);
+    const probe=new Image();
+    probe.onload=()=>{
+      const corners=evDefaultCorners(evGeom(side), probe);
       if(slot==='plan'){ v.planUrl=url; v.planCorners=corners; }
       else { v.photoUrl=url; v.photoCorners=corners; }
-      evPlace=true; evSkew=false; evViewLocked=true; evSyncTabs(); evRender();
+      if(evActive===side){
+        (slot==='plan' ? evPlanImg : evPhotoImg).src = url;
+        evTool='uniform'; evViewLocked=true; evSyncTabs(); evRender();
+      }
       if(sessionId) apiUpload('/sessions/'+sessionId+'/elevation-views/'+side+'/'+slot, f,
         {corners:corners, opacity: slot==='plan'? v.planOpacity : v.photoOpacity})
         .then(row=>{ if(row && row.url){ if(slot==='plan') v.planUrl=row.url; else v.photoUrl=row.url; } });
     };
-    el.src=url;
+    probe.src=url;
   });
   window.addEventListener('resize', ()=>{ if(evActive) evRender(); });
 
