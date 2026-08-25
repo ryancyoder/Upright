@@ -107,9 +107,83 @@
   .mapwrap{
     position:absolute; inset:0; z-index:10;
     display:none; flex-direction:column;
+    --insp-w:0px;
   }
   .mapwrap.show{display:flex;}
-  #map{flex:1 1 auto; min-height:0; background:#0a0a08;}
+  .mapwrap.insp{--insp-w:min(300px, 34%);}
+  .map-row{flex:1 1 auto; min-height:0; display:flex;}
+  #map{flex:1 1 auto; min-width:0; min-height:0; background:#0a0a08;}
+
+  /* Pin inspector -- the map view's left column.
+     A Leaflet popup is anchored to the pin it describes, so the one moment you
+     most need to see that pin -- dragging it onto the spot it actually belongs
+     -- is the moment the bubble is sitting on top of it, and on top of the
+     ground you are aiming for. The inspector is a fixed column instead: the
+     photo holds still, the map keeps its own space, and nothing covers the
+     thing being moved. */
+  .pin-inspector{
+    flex:0 0 var(--insp-w); width:var(--insp-w); min-width:0;
+    display:none; flex-direction:column;
+    background:var(--bg2); border-right:1px solid var(--line);
+    overflow:hidden;
+  }
+  .mapwrap.insp .pin-inspector{display:flex;}
+  .pi-head{
+    flex:0 0 auto; display:flex; align-items:center; gap:8px;
+    padding:9px 8px 9px 12px; border-bottom:1px solid var(--line);
+  }
+  .pi-title{flex:1 1 auto; min-width:0; font-size:13px; font-weight:700; overflow-wrap:anywhere;}
+  .pi-title .pi-kind{
+    display:block; font-size:10px; font-weight:700; letter-spacing:0.1em;
+    text-transform:uppercase; color:var(--dim); margin-top:2px;
+  }
+  .pi-close{
+    flex:0 0 auto; width:28px; height:28px; padding:0; line-height:1;
+    border-radius:50%; border:1px solid var(--line);
+    background:transparent; color:var(--dim); font-size:16px;
+  }
+  .pi-photo{flex:0 0 auto; position:relative; background:#0a0a08; border-bottom:1px solid var(--line);}
+  .pi-photo img{display:block; width:100%; aspect-ratio:4/3; object-fit:cover;}
+  .pi-photo img.hide{display:none;}
+  .pi-noimg{
+    display:none; aspect-ratio:4/3; align-items:center; justify-content:center;
+    font-size:12px; color:var(--dim); text-align:center; padding:0 12px;
+  }
+  .pi-noimg.show{display:flex;}
+  .pi-body{
+    flex:1 1 auto; min-height:0; overflow-y:auto; -webkit-overflow-scrolling:touch;
+    padding:10px 12px 16px;
+  }
+  .pi-big{font-size:24px; font-weight:700; font-variant-numeric:tabular-nums; line-height:1.1;}
+  .pi-big.dim{font-size:14px; font-weight:400; color:var(--dim);}
+  .pi-sub{font-size:11px; color:var(--dim); margin-top:4px; line-height:1.45;}
+  .pi-body .warn{color:var(--live);}
+  .pi-group{
+    margin-top:12px; font-size:10px; font-weight:700; letter-spacing:0.1em;
+    text-transform:uppercase; color:var(--dim);
+  }
+  .pi-row{
+    display:flex; justify-content:space-between; align-items:baseline; gap:10px;
+    font-size:12px; padding:5px 0; border-bottom:1px solid var(--line);
+  }
+  .pi-row b{font-weight:400; color:var(--dim); flex:0 0 auto;}
+  .pi-row span{
+    text-align:right; overflow-wrap:anywhere;
+    font-variant-numeric:tabular-nums;
+  }
+  .pi-note{
+    width:100%; margin-top:6px; min-height:56px; font:inherit; font-size:13px;
+    border-radius:8px; border:1px solid var(--line);
+    background:var(--bg); color:var(--ink); padding:7px 8px; resize:vertical;
+  }
+  .pi-dl{
+    display:inline-block; margin-top:10px; padding:7px 12px; border-radius:8px;
+    border:1px solid var(--line); background:transparent; color:var(--ink);
+    font-size:12px; font-weight:600;
+  }
+  /* 190px of mini pane has no room for a column, same as the map toolbar. */
+  .review-pane.in-mini .mapwrap{--insp-w:0px;}
+  .review-pane.in-mini .pin-inspector{display:none;}
   .map-toolbar{
     flex:0 0 auto;
     display:flex; align-items:center; gap:8px;
@@ -131,10 +205,6 @@
   #planFile{display:none;}
 
   .leaflet-container{font:inherit;}
-  .pin-popup img{width:180px; border-radius:8px; display:block; margin-bottom:6px;}
-  .pin-popup textarea{width:180px; height:44px; font-size:13px; border-radius:6px; border:1px solid #ccc; padding:4px;}
-  .pin-popup .adj{font-size:11px; color:#5a7a63; font-weight:700;}
-  .pin-popup .dlp{font-size:12px; margin-top:4px; display:inline-block;}
 
   /* Start overlay + done panel */
   /* Both full-screen panels centre their content when it fits and scroll from
@@ -334,7 +404,7 @@
   .elev-bar{
     position:absolute; z-index:1200;
     top:calc(env(safe-area-inset-top,0px) + 10px);
-    left:50%; transform:translateX(-50%);
+    left:calc(50% + var(--insp-w)/2); transform:translateX(-50%);
     max-width:min(600px, calc(100% - 110px));
     display:none; align-items:center; gap:10px;
     padding:6px 6px 6px 14px; border-radius:999px;
@@ -417,7 +487,7 @@
      profile is a cut line, and "toggle top / front / back / side / side" has to
      work from either side of the toggle. */
   .view-switch{
-    position:absolute; z-index:1150; left:12px; top:56px;
+    position:absolute; z-index:1150; left:calc(12px + var(--insp-w)); top:56px;
     display:none; gap:6px; padding:5px;
     border-radius:100px; background:rgba(18,18,14,0.78);
     -webkit-backdrop-filter:blur(12px); backdrop-filter:blur(12px);
@@ -579,7 +649,7 @@
 
   /* Map annotation modes */
   .mode-bar{
-    position:absolute; top:10px; left:50%; transform:translateX(-50%);
+    position:absolute; top:10px; left:calc(50% + var(--insp-w)/2); transform:translateX(-50%);
     z-index:1000; display:none; align-items:center; gap:10px;
     padding:8px 12px; border-radius:12px;
     background:rgba(20,20,15,0.92); border:1px solid var(--line);
@@ -861,7 +931,20 @@
       </div>
     </div>
     <div class="mapwrap" id="mapwrap">
-      <div id="map"></div>
+      <div class="map-row">
+        <aside class="pin-inspector" id="pinInspector">
+          <div class="pi-head">
+            <span class="pi-title" id="piTitle"></span>
+            <button class="pi-close" id="piClose" title="Close">&times;</button>
+          </div>
+          <div class="pi-photo">
+            <img id="piImg" alt="">
+            <div class="pi-noimg" id="piNoImg"></div>
+          </div>
+          <div class="pi-body" id="piBody"></div>
+        </aside>
+        <div id="map"></div>
+      </div>
       <div class="mode-bar" id="modeBar">
         <span class="mode-msg" id="modeMsg"></span>
         <button class="mb-btn" id="modeUndo">Undo</button>
@@ -1096,6 +1179,8 @@
         histStatus=$('histStatus'), histList=$('histList'),
         propPanel=$('propPanel'), propSearch=$('propSearch'), propList=$('propList'),
         propStatus=$('propStatus'), propClose=$('propClose'), propClear=$('propClear'),
+        pinInspector=$('pinInspector'), piTitle=$('piTitle'), piClose=$('piClose'),
+        piImg=$('piImg'), piNoImg=$('piNoImg'), piBody=$('piBody'),
         settingsPanel=$('settingsPanel'), settingsBtn=$('settingsBtn'), settingsBtn2=$('settingsBtn2'),
         settingsClose=$('settingsClose'), evSettingsBtn=$('evSettingsBtn'),
         evExagLabel=$('evExagLabel'), prefVertExag=$('prefVertExag');
@@ -1515,7 +1600,7 @@
     closeReview();
     finalAudioBlob=null; clips=[];
     pins.forEach(p=>{ if(p.marker && map) map.removeLayer(p.marker); });
-    pins=[]; pinSeq=0; selectedPinId=null;
+    pins=[]; pinSeq=0; selectedPinId=null; inspectClose();
     elevSetSurvey(false); elevReset();
     renderStrip();
     startSession(); requestWake();
@@ -1780,13 +1865,26 @@
     if(pin.lat===null) return;
     const m=L.marker([pin.lat,pin.lng],{draggable:true}).addTo(map);
     pin.marker=m;
-    m.bindPopup(()=>popupHtml(pin), {maxWidth:220});
-    m.on('dragstart', ()=>{ pinDragging=true; });
+    // Picking the pin up shows it in the inspector. Deliberately NOT via
+    // selectPin(), which re-renders the filmstrip -- nothing should be rebuilt
+    // while a drag is in flight. markSelectedMarkers() only toggles a class on
+    // icons that already exist, so the highlight can follow straight away.
+    m.on('dragstart', ()=>{
+      pinDragging=true;
+      selectedPinId=pin.id; markSelectedMarkers();
+      inspectOpen('pin', pin.id);
+    });
+    m.on('drag', ()=>{
+      const ll=m.getLatLng();
+      pin.lat=ll.lat; pin.lng=ll.lng;
+      if(inspectIs('pin', pin.id)) inspectSoon();
+    });
     m.on('dragend', ()=>{
       pinDragging=false;
       const ll=m.getLatLng();
       pin.lat=ll.lat; pin.lng=ll.lng; pin.adjusted=true;
-      m.setPopupContent(popupHtml(pin));
+      if(inspectIs('pin', pin.id)) inspectRender();
+      renderStrip();
       if(pin.remoteId) apiPatch('/photos/'+pin.remoteId, {lat:pin.lat, lng:pin.lng, manuallyAdjusted:true});
     });
     m.on('click', ()=>{
@@ -1795,23 +1893,6 @@
       }
       selectPin(pin, 'map');
     });
-    m.on('popupopen', ()=>{
-      const ta=document.querySelector('.pin-popup textarea[data-pin="'+pin.id+'"]');
-      if(ta){
-        ta.addEventListener('input', e=>{ pin.note=e.target.value; });
-        ta.addEventListener('change', ()=>{ if(pin.remoteId) apiPatch('/photos/'+pin.remoteId, {note:pin.note}); });
-      }
-      const dl=document.querySelector('.pin-popup a[data-pindl="'+pin.id+'"]');
-      if(dl) dl.addEventListener('click', ()=>{ dl.href=pin.photo; dl.download='pin-'+pin.id+'.jpg'; });
-    });
-  }
-  function popupHtml(pin){
-    return `<div class="pin-popup">
-      <img src="${pin.photo}">
-      <div><b>Pin ${pin.id}</b> ${pin.adjusted?'<span class="adj">adjusted ✓</span>':''} ${pin.hasDrawing?'<span class="adj">drawn ✎</span>':''}</div>
-      <textarea data-pin="${pin.id}" placeholder="Note…">${pin.note||''}</textarea><br>
-      <a class="dlp" href="#" data-pindl="${pin.id}">Download photo</a>
-    </div>`;
   }
 
   exportPinsBtn.addEventListener('click', exportPins);
@@ -2345,7 +2426,7 @@
     basemapMode='both'; applyBasemap();
     clips=[]; pins=[]; sketches=[]; measures=[];
     elevSetSurvey(false); elevReset();
-    pinSeq=0; selectedPinId=null; sessionId=null;
+    pinSeq=0; selectedPinId=null; sessionId=null; inspectClose();
     finalAudioBlob=null; sessionWallMs=null;
     transcriptSegments=[]; transcriptActiveIdx=-1;
     renderStrip(); updatePinCount();
@@ -2870,7 +2951,7 @@
     if(drawPin && drawStrokes.length){
       drawPin.photo = drawCanvas.toDataURL('image/jpeg',0.85);
       drawPin.hasDrawing = true;
-      if(drawPin.marker) drawPin.marker.setPopupContent(popupHtml(drawPin));
+      if(inspectIs('pin', drawPin.id)) inspectRender();   // the drawing IS the photo now
       renderStrip();
       if(drawPin.remoteId){
         apiUpload('/photos/'+drawPin.remoteId+'/image', dataUrlToBlob(drawPin.photo), null);
@@ -2993,6 +3074,7 @@
             slopesDropFor([anchor.id]);
             elevPoints=elevPoints.filter(x=>x.id!==anchor.id);
             if(elevSelected===anchor.id) elevSelected=null;
+            inspectDrop('elev', anchor.id);
             elevRenderAll(); renderStrip(); elevStatusUpdate();
           }));
         }
@@ -3084,13 +3166,212 @@
   function elevSelectFromStrip(pt){
     const already = (elevSelected===pt.id);
     selectedPinId=null; markSelectedMarkers();
-    if(already){ elevSelected=null; elevRenderAll(); renderStrip(); return; }
+    if(already){ elevSelected=null; inspectDrop('elev', pt.id); elevRenderAll(); renderStrip(); return; }
     if(map){
       map.setView([pt.lat, pt.lng], Math.max(map.getZoom(), 20), {animate:true});
     }
     elevSelect(pt.id);
     renderStrip();
   }
+
+  // ---------- pin inspector: the map's left column ----------
+  // Replaces the Leaflet popups that used to hang off each pin. A bubble is
+  // anchored to the very thing you are trying to look at, so dragging a pin
+  // meant dragging its own description over the ground you were aiming for.
+  // Here the photo and the numbers hold still in a column of their own while
+  // the pin moves.
+  //
+  // It is deliberately OUTSIDE the marker. Selecting an elevation point
+  // rebuilds every marker mid-click, which is what made the old popup
+  // unreachable; nothing the inspector shows lives in an element Leaflet is
+  // free to destroy.
+  let inspectKind=null, inspectId=null, inspectRaf=null;
+
+  function inspectOpen(kind, id){
+    inspectKind=kind; inspectId=id;
+    inspectSetOpen(true);
+    inspectRender();
+  }
+  function inspectClose(){
+    inspectKind=null; inspectId=null;
+    inspectSetOpen(false);
+  }
+  // Opening or closing the column resizes the map, which needs two things done
+  // together and in the same frame.
+  //
+  // Leaflet caches its container size, so `invalidateSize` or you get grey
+  // tiles and mis-placed pins. But the column also pushes the map's left edge
+  // across the screen, and Leaflet knows nothing about that: every tile, pin
+  // and sketch would slide with it. Tap a pin and the pin you just tapped
+  // jumps a column's width sideways; pick one up and it slides out from under
+  // your finger and stays offset for the whole drag, landing somewhere you
+  // never pointed at. So pan by exactly the distance the edge moved, which
+  // holds the ground still on screen and leaves the drag measuring the same
+  // pixels it always did. Both reads happen around the class change, and
+  // reading the second one is what forces the reflow -- don't defer this into
+  // a rAF, or the jump gets a frame to show itself.
+  function inspectSetOpen(open){
+    const el = map ? map.getContainer() : null;
+    const before = el ? el.getBoundingClientRect().left : 0;
+    mapwrap.classList.toggle('insp', open);
+    if(!el) return;
+    const after = el.getBoundingClientRect().left;
+    try{
+      map.invalidateSize({pan:false, animate:false});
+      const dx = after - before;
+      if(dx) map.panBy([dx, 0], {animate:false});
+    }catch(e){}
+  }
+  // Coalesced to one repaint per frame: a drag fires far faster than the screen.
+  function inspectSoon(){
+    if(inspectRaf) return;
+    inspectRaf=requestAnimationFrame(()=>{ inspectRaf=null; inspectRender(); });
+  }
+  function inspectIs(kind, id){ return inspectKind===kind && inspectId===id; }
+  function inspectDrop(kind, id){ if(inspectIs(kind,id)) inspectClose(); }
+
+  function piPhoto(url, fallback, empty){
+    piImg.classList.toggle('hide', !url);
+    piNoImg.classList.toggle('show', !url);
+    piNoImg.textContent = url ? '' : (empty||'No photo');
+    if(!url){ piImg.removeAttribute('src'); return; }
+    // The locally captured frame is kept even after upload, because a fire-and-
+    // forget write plus field connectivity makes a broken Storage URL a real
+    // prospect -- and a pin with no picture cannot be placed at all.
+    piImg.onerror = ()=>{ if(fallback && piImg.src!==fallback) piImg.src=fallback; };
+    if(piImg.getAttribute('src')!==url) piImg.src=url;
+  }
+  function piRow(label, value){
+    if(value===null || value===undefined || value==='') return '';
+    return '<div class="pi-row"><b>'+label+'</b><span>'+value+'</span></div>';
+  }
+  function piCoords(o){
+    if(o.lat===null || o.lat===undefined) return null;
+    return o.lat.toFixed(6)+'<br>'+o.lng.toFixed(6);
+  }
+  function piFt(m){ return m===null||m===undefined ? null : (m/M_PER_FT).toFixed(1)+"'"; }
+
+  function inspectRender(){
+    if(!inspectKind) return;
+    if(inspectKind==='pin'){
+      const pin=pins.find(p=>p.id===inspectId);
+      if(!pin){ inspectClose(); return; }
+      inspectRenderPin(pin);
+    } else {
+      const pt=elevPoint(inspectId);
+      if(!pt){ inspectClose(); return; }
+      inspectRenderElev(pt);
+    }
+  }
+
+  // The rows are rewritten on every drag frame; the note and the download
+  // button are NOT. Replacing a focused textarea drops what is in it along with
+  // the caret, and a note typed but not yet blurred has never been sent
+  // anywhere -- so those two are built once per pin and left alone.
+  function inspectRenderPin(pin){
+    piTitle.innerHTML = 'Pin '+pin.id
+      + '<span class="pi-kind">Photo pin</span>';
+    piPhoto(pin.photo, null, 'No photo');
+    if(piBody.dataset.pin !== String(pin.id)){
+      piBody.dataset.pin = String(pin.id);
+      piBody.innerHTML = '<div id="piRows"></div>'
+        + '<div class="pi-group">Note</div>'
+        + '<textarea class="pi-note" id="piNote" placeholder="Note…"></textarea>'
+        + '<button class="pi-dl" id="piDl">Download photo</button>';
+      const ta=$('piNote');
+      ta.value = pin.note||'';
+      ta.addEventListener('input', e=>{ pin.note=e.target.value; });
+      ta.addEventListener('change', ()=>{ if(pin.remoteId) apiPatch('/photos/'+pin.remoteId, {note:pin.note}); });
+      $('piDl').addEventListener('click', ()=>{
+        const a=document.createElement('a');
+        a.href=pin.photo; a.download='pin-'+pin.id+'.jpg'; a.click();
+      });
+    }
+    const acc = pin.acc!=null ? '±'+(pin.acc/M_PER_FT).toFixed(0)+"'" : null;
+    const when = pin.time ? new Date(pin.time).toLocaleTimeString() : null;
+    const into = pin.offset!=null ? fmtClock(pin.offset/1000) : null;
+    $('piRows').innerHTML =
+        '<div class="pi-group">Position</div>'
+      + piRow('Coordinates', piCoords(pin) || '<span class="warn">no GPS fix</span>')
+      + piRow('GPS accuracy', acc)
+      + piRow('Placement', pin.adjusted ? 'moved by hand' : 'as captured')
+      + '<div class="pi-group">Capture</div>'
+      + piRow('Taken', when)
+      + piRow('Into session', into)
+      + piRow('Drawing', pin.hasDrawing ? 'yes' : 'none');
+  }
+
+  const PI_KIND={observation:'Observation — where you stood',
+                 anchor:'Anchor — the datum',
+                 target:'Target'};
+
+  function inspectRenderElev(pt){
+    const isObs = pt.kind==='observation';
+    piTitle.innerHTML = (pt.label||'')
+      + '<span class="pi-kind">'+(PI_KIND[pt.kind]||pt.kind)+'</span>';
+    piPhoto(pt.photoUrl || pt.photoLocal, pt.photoLocal,
+            isObs ? 'No stance photo' : 'No reference photo');
+
+    const e = isObs ? null : elevationOf(pt.id);
+    const conf = e ? elevConfidence(e) : '';
+    let head;
+    if(isObs){
+      head = '<div class="pi-big dim">A standing position. It records no angle '
+           + 'and measures nothing — it is here so the next person can stand '
+           + 'where you stood.</div>';
+    } else {
+      head = '<div class="pi-big">'+fmtElev(e)+'</div>'
+           + (conf ? '<div class="pi-sub">'+conf+'</div>' : '')
+           + (e && e.needsPlacing
+               ? '<div class="pi-sub"><span class="warn">Not a measurement until the pin '
+                 + 'is where the point actually is.</span></div>' : '');
+    }
+
+    // Every sighting of this point, grouped by the position it was taken from.
+    // The angle is what the device was held at; the distance comes from where
+    // the pins sit on the map, never from GPS -- which is what makes the
+    // number worth anything.
+    let shots='';
+    if(!isObs){
+      elevPoints.filter(o=>o.kind==='observation').forEach(obs=>{
+        const mine=elevShots.filter(x=>x.observationId===obs.id && x.pointId===pt.id);
+        if(!mine.length) return;
+        const ang=mean(mine.map(x=>x.angleDeg));
+        const spread=halfRange(mine.map(x=>x.angleDeg));
+        const sp=mine.map(x=>x.angleSpreadDeg).filter(v=>v!=null);
+        shots += '<div class="pi-group">From '+obs.label+'</div>'
+              + piRow('Angle', (ang>=0?'+':'')+ang.toFixed(2)+'°')
+              + piRow('Sightings', mine.length
+                  + (mine.length>1 && spread!=null ? ' · ±'+spread.toFixed(2)+'°' : ''))
+              + piRow('Hand steadiness', sp.length ? '±'+mean(sp).toFixed(2)+'°' : null)
+              + piRow('Distance', (obs.placed && pt.placed)
+                  ? piFt(metresBetween(obs,pt)) : '<span class="warn">place both pins</span>');
+      });
+      if(!shots) shots='<div class="pi-group">Sightings</div>'
+                     + '<div class="pi-sub">Not shot from anywhere yet.</div>';
+    } else {
+      const targets=elevPoints.filter(t=>t.kind==='target' && t.setObservationId===pt.id);
+      const anchor=elevAnchorPoint();
+      const aShots=anchor ? elevShots.filter(x=>x.observationId===pt.id && x.pointId===anchor.id) : [];
+      shots = '<div class="pi-group">This set</div>'
+            + piRow('Targets', targets.length)
+            + piRow('Anchor sighting', aShots.length
+                ? ((mean(aShots.map(x=>x.angleDeg))>=0?'+':'')
+                    + mean(aShots.map(x=>x.angleDeg)).toFixed(2)+'°')
+                : '<span class="warn">not sighted</span>')
+            + piRow('Anchor distance', (anchor && anchor.placed && pt.placed)
+                ? piFt(metresBetween(pt,anchor)) : null);
+    }
+
+    delete piBody.dataset.pin;      // so coming back to a photo pin rebuilds its note
+    piBody.innerHTML = head + shots
+      + '<div class="pi-group">Position</div>'
+      + piRow('Coordinates', piCoords(pt))
+      + piRow('Pin', pt.placed ? 'placed' : '<span class="warn">still to place</span>')
+      + piRow('Set', isLocked(pt) ? 'locked' : (isHidden(pt) ? 'hidden' : null));
+  }
+
+  piClose.addEventListener('click', inspectClose);
 
   function markSelectedMarkers(){
     pins.forEach(pin=>{
@@ -3109,12 +3390,12 @@
     if(selectedPinId!==null && elevSelected){ elevSelected=null; elevRenderAll(); }
     renderStrip();
     markSelectedMarkers();
-    if(selectedPinId===null) return;
+    if(selectedPinId===null){ inspectDrop('pin', pin.id); return; }
+    inspectOpen('pin', pin.id);
     if(source==='strip'){
       if(map && pin.lat!==null){
         // centre the pin and zoom in on it
         map.setView([pin.lat, pin.lng], Math.max(map.getZoom(), 20), {animate:true});
-        if(pin.marker) pin.marker.openPopup();
       }
     } else {
       scrollThumbIntoView();
@@ -3608,24 +3889,27 @@
         draggable:!isLocked(pt),
         icon:L.divIcon({className:'', html:html, iconSize:[0,0], iconAnchor:[0,0]})
       }).addTo(map);
-      // The reference photo is what makes placing the pin possible at all.
-      // Built lazily so it always picks the best source available at open time,
-      // and falls back to the locally captured frame if the remote one fails.
-      if(pt.photoUrl || pt.photoLocal){
-        m.bindPopup(()=>{
-          const d=document.createElement('div');
-          d.style.textAlign='center';
-          d.innerHTML='<b>'+(pt.label||'')+'</b>';
-          const img=document.createElement('img');
-          img.style.cssText='width:220px;max-width:60vw;border-radius:6px;margin-top:6px;display:block';
-          img.onerror=()=>{ if(pt.photoLocal && img.src!==pt.photoLocal) img.src=pt.photoLocal; };
-          img.src=pt.photoUrl || pt.photoLocal;
-          d.appendChild(img);
-          return d;
-        }, {maxWidth:260});
-      }
+      // The reference photo -- what makes placing the pin possible at all --
+      // now lives in the inspector column, not in a bubble over the pin.
       m.on('click', ()=> elevSelect(pt.id));
-      m.on('dragstart', ()=>{ pinDragging=true; });
+      // NOT elevSelect() here: it calls elevRenderAll(), which destroys the
+      // very marker Leaflet is dragging and kills the drag on its first move.
+      // The inspector is outside the markers, so it can be opened safely.
+      m.on('dragstart', ()=>{
+        pinDragging=true;
+        // elevStatusUpdate() only rewrites the pill's text, so the overlay and
+        // the inspector agree about which point is under your finger. The
+        // marker's own highlight waits for dragend's render.
+        elevSelected=pt.id; elevStatusUpdate();
+        inspectOpen('elev', pt.id);
+      });
+      m.on('drag', ()=>{
+        // Elevation is derived from where the pins sit, so it moves under your
+        // finger -- but only the inspector's own DOM is touched, never the map.
+        const ll=m.getLatLng();
+        pt.lat=ll.lat; pt.lng=ll.lng;
+        if(inspectIs('elev', pt.id)) inspectSoon();
+      });
       m.on('dragend', ()=>{
         pinDragging=false;
         const ll=m.getLatLng();
@@ -3668,13 +3952,10 @@
     const pt=elevPoint(id);
     if(pt && pt.kind==='observation') elevActiveObs=id;
     elevRenderAll(); elevStatusUpdate(); renderStrip();
-    // elevRenderAll() rebuilds every marker, so the popup Leaflet was about to
-    // open on the click belongs to an element that no longer exists. Reopen it
-    // on the new one.
-    const fresh=elevPoint(id);
-    if(fresh && fresh.marker && fresh.photoUrl){
-      try{ fresh.marker.openPopup(); }catch(e){}
-    }
+    // The inspector is not part of any marker, so elevRenderAll() rebuilding
+    // all of them mid-click cannot take it away -- which is exactly what used
+    // to make the reference photo unreachable when it lived in a popup.
+    inspectOpen('elev', id);
   }
 
   function elevStatusUpdate(){
@@ -3880,9 +4161,7 @@
       .then(res=>{
         if(!res || !res.url) return;   // upload failed: keep the local data URL
         pt.photoUrl=res.url;
-        if(pt.marker && pt.marker.isPopupOpen && pt.marker.isPopupOpen()){
-          try{ pt.marker.openPopup(); }catch(e){}   // re-render with the stored URL
-        }
+        if(inspectIs('elev', pt.id)) inspectRender();   // redraw with the stored URL
       });
   }
 
@@ -4094,6 +4373,7 @@
     slopesDropFor([...doomed]);
     if(elevActiveObs===obs.id) elevActiveObs=null;
     if(doomed.has(elevSelected)) elevSelected=null;
+    if(doomed.has(inspectId)) inspectClose();
     elevRenderAll(); renderStrip(); elevStatusUpdate();
   }
   function targetDelete(pt){
@@ -4104,6 +4384,7 @@
     elevShots=elevShots.filter(sh=>sh.pointId!==pt.id);
     slopesDropFor([pt.id]);
     if(elevSelected===pt.id) elevSelected=null;
+    inspectDrop('elev', pt.id);
     elevRenderAll(); renderStrip(); elevStatusUpdate();
   }
 
@@ -4988,7 +5269,7 @@
   function elevReset(){
     elevClearLayers();
     elevPoints=[]; elevShots=[]; elevSlopes=[];
-    elevActiveObs=null; elevSelected=null;
+    elevActiveObs=null; elevSelected=null; inspectClose();
     evClose(); cutsClear(); cutsOn=false; cutLocked=false;
     cutPivot=null; cutRot=0; cutOffsets={north:0, south:0, east:0, west:0}; evViews={};
     if(cutsBtn){ cutsBtn.classList.remove('active'); cutsBtn.textContent='Section cuts'; }

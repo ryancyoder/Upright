@@ -118,6 +118,53 @@ Two things this exposed:
   `overflow-y:auto` with `margin-top/bottom:auto` on the end children, so they
   centre when they fit and scroll when they do not.
 
+## Pin inspector — the map's left column
+
+Every pin on the map — photo pins and survey points alike — is described in a
+fixed **left column**, not in a Leaflet popup. A popup is anchored to the very
+thing it describes, so the one moment you most need to see a pin — dragging it
+onto the spot it actually belongs — is the moment its own bubble is sitting on
+top of it *and* on top of the ground you are aiming for. The column holds
+still: photo on top, everything known about the pin underneath.
+
+**It tracks whatever is under your finger.** Picking a pin up opens it there,
+so the preview swaps to the pin being dragged. The numbers update live —
+coordinates as the pin moves, and for a survey point the **elevation itself**,
+since that is derived from where the pins sit.
+
+Three things are load-bearing:
+
+- **A drag must not rebuild anything.** `dragstart` deliberately does *not*
+  call `selectPin()` or `elevSelect()` — both re-render (the filmstrip, every
+  marker), and rebuilding the element Leaflet is dragging kills the drag on its
+  first move. It sets the selection directly and calls only the cheap repaints:
+  `markSelectedMarkers()` toggles a class on icons that already exist, and
+  `elevStatusUpdate()` just rewrites the pill's text. The marker's own
+  highlight waits for `dragend`.
+- **The inspector is outside the markers**, which is what makes the reference
+  photo reachable at all (see the elevation notes below).
+- **Opening or closing the column resizes the map**, which needs two things
+  done together, in the same frame. Leaflet caches its container size, so
+  `invalidateSize()` — miss that and you get grey tiles and mis-placed pins.
+  But the column also pushes the map's left edge across the screen, and
+  Leaflet knows nothing about that: every tile, pin and sketch slides with it.
+  Tap a pin and the pin you just tapped jumps a column's width sideways; pick
+  one up and it slides out from under your finger and *stays* offset for the
+  whole drag, landing somewhere you never pointed at. `inspectSetOpen()`
+  therefore reads the container's left edge either side of the class change
+  and `panBy()`s the difference, which holds the ground still on screen and
+  leaves the drag measuring the same pixels it always did. Reading the second
+  edge is what forces the reflow — don't defer it into a `requestAnimationFrame`
+  or the jump gets a frame to show itself.
+
+Renders during a drag are coalesced to one per animation frame; a drag fires
+far faster than the screen — and within a photo pin's panel the **numeric rows
+are rewritten but the note field is not**. Replacing a focused textarea drops
+what is in it along with the caret, and a note typed but not yet blurred has
+never been sent anywhere; the note and the download button are built once per
+pin and left alone. The column is hidden while the map sits in
+review's mini pane, same rule as the map toolbar — 190px has no room for it.
+
 ## My location is a toggle
 
 The blue dot and its accuracy circle sit over the work, and a continuous
@@ -560,12 +607,13 @@ boxed labels is unreadable. The point's name shows only while it is
 *unplaced*, which is the one moment identity matters — after that the number
 is all you want.
 
-**The reference photo must be reachable, and that is fiddly.** Tapping a pin
-calls `elevSelect()`, which calls `elevRenderAll()`, which destroys and
+**The reference photo lives in the inspector column** (see *Pin inspector*
+below), not in a popup on the pin. That also retired a nasty bug: tapping a
+pin calls `elevSelect()`, which calls `elevRenderAll()`, which destroys and
 rebuilds every marker *during the click* — so the popup Leaflet was opening
 belonged to an element that no longer existed, and the photo silently could
-never be seen. `elevSelect()` therefore reopens the popup on the freshly
-built marker.
+never be seen. Nothing the inspector shows lives in an element Leaflet is
+free to destroy, so the problem cannot come back.
 
 **Grade frames share the one filmstrip with the photo pins**, in capture
 order — they are pictures of the same site taken minutes apart, so a
@@ -579,7 +627,7 @@ the survey bar and a permanent photo-sized hole in the map was worse than the
 problem it solved.
 
 The locally captured frame is kept in `photoLocal` even after upload, and the
-popup falls back to it if the Storage URL fails to load.
+inspector falls back to it if the Storage URL fails to load.
 Given the fire-and-forget write model and field connectivity, a pin with a
 broken image and no fallback is a real prospect.
 
@@ -821,6 +869,10 @@ not just abandoned starts.
 - Text labels on the map; richer desk-side annotation editor; reference-object photo measuring.
 
 **Needs field testing**
+- The pin inspector against a real yard: whether 34% of the map is the right
+  width on an iPad in both orientations, whether the photo is big enough to
+  match a pin to a place at arm's length, and whether losing that much map
+  while dragging is a fair trade for never having a bubble over the pin.
 - Sketch/Measure accuracy against known dimensions.
 - 58px sidebar buttons with a gloved thumb; marker base size (30% of screen); yellow marker visibility on sunny turf; stroke weight at 3× zoom.
 - Extent-lock button reachability; whether the filmstrip eats too much map height in landscape.
