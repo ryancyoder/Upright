@@ -770,6 +770,11 @@
   }
   .pref-switch.on{border-color:var(--flat);}
   .pref-switch.on i{left:26px; background:var(--flat);}
+  .pref-num{
+    flex:0 0 auto; width:74px; padding:8px 10px; font:inherit; font-size:15px;
+    text-align:right; border-radius:8px; border:1px solid var(--line);
+    background:var(--bg); color:var(--ink);
+  }
   .link-row{display:flex; gap:10px; justify-content:center; flex-wrap:wrap; margin-top:14px;}
   .link-row .link-btn{margin-top:0;}
   .hist-status{flex:0 0 auto; padding:12px 16px; font-size:13px; color:var(--dim);}
@@ -1214,6 +1219,19 @@
           </div>
           <button class="pref-switch" id="prefSplit" role="switch"><i></i></button>
         </div>
+        <div class="pref-row">
+          <div class="pref-main">
+            <div class="pref-title">Eye height when shooting grade</div>
+            <div class="pref-sub">How high off the ground you hold the iPad. A shot pointed at
+              the ground gives its own distance from this &mdash;
+              <b>d&nbsp;=&nbsp;h&nbsp;&divide;&nbsp;tan&nbsp;angle</b> &mdash; so a just-shot pin
+              parks roughly where it belongs instead of on a fan. Chest height against eye
+              height is a 30% difference in that distance. It is only ever a parking spot:
+              nothing here changes an elevation, and once you have properly placed one pin the
+              app measures your real height from it and uses that instead.</div>
+          </div>
+          <input class="pref-num" id="prefEyeHeight" type="number" step="0.1" min="2" max="8">
+        </div>
       </div>
     </div>
 
@@ -1313,7 +1331,7 @@
         settingsClose=$('settingsClose'), evSettingsBtn=$('evSettingsBtn'),
         evExagLabel=$('evExagLabel'), prefVertExag=$('prefVertExag'),
         prefInspector=$('prefInspector'), prefFilmstrip=$('prefFilmstrip'),
-        prefSplit=$('prefSplit'),
+        prefSplit=$('prefSplit'), prefEyeHeight=$('prefEyeHeight'),
         panelsMapBtn=$('panelsMapBtn'), stripMapBtn=$('stripMapBtn'),
         panelsEvBtn=$('panelsEvBtn'), stripEvBtn=$('stripEvBtn'),
         settingsMapBtn=$('settingsMapBtn'), splitBtn=$('splitBtn'), stage=$('stage');
@@ -1327,7 +1345,8 @@
   // rather than returning null -- and a thrown preference read must not be
   // able to stop a session starting.
   const PREFS_KEY='upright.prefs';
-  const PREF_DEFAULTS={vertExag:true, inspector:true, filmstrip:true, splitPortrait:true};
+  const PREF_DEFAULTS={vertExag:true, inspector:true, filmstrip:true, splitPortrait:true,
+                       eyeHeightFt:4.5};
   const prefs=Object.assign({}, PREF_DEFAULTS);
   try{
     const raw=localStorage.getItem(PREFS_KEY);
@@ -1345,6 +1364,7 @@
         el.classList.toggle('on', on);
         el.setAttribute('aria-checked', on ? 'true':'false');
       });
+    if(document.activeElement!==prefEyeHeight) prefEyeHeight.value=eyeHeightFt().toFixed(1);
   }
   // The two panels are app-wide furniture, so they are a preference rather than
   // per-view state: turn the filmstrip off on the map and it stays off in an
@@ -1367,6 +1387,11 @@
   evSettingsBtn.addEventListener('click', openSettings);
   settingsMapBtn.addEventListener('click', openSettings);   // the start screen is gone mid-visit
   settingsClose.addEventListener('click', closeSettings);
+  prefEyeHeight.addEventListener('change', ()=>{
+    const v=+prefEyeHeight.value;
+    prefs.eyeHeightFt = (isFinite(v) && v>=2 && v<=8) ? v : 4.5;
+    savePrefs(); renderPrefs();
+  });
   prefInspector.addEventListener('click', ()=>prefToggle('inspector'));
   prefSplit.addEventListener('click', ()=>{
     prefs.splitPortrait = prefs.splitPortrait===false; savePrefs(); renderPrefs();
@@ -3522,6 +3547,11 @@
     } else {
       head = '<div class="pi-big">'+fmtElev(e)+'</div>'
            + (conf ? '<div class="pi-sub">'+conf+'</div>' : '')
+           + ((pt.placed && pt.parkedEst && !movedFromPark(pt))
+               ? '<div class="pi-sub"><span class="warn">This pin has barely moved from '
+                 + 'where the shot angle parked it.</span> That guess assumes flat ground, '
+                 + 'so a number taken from it is close to the assumption rather than a '
+                 + 'measurement. Drag it onto the point it actually is.</div>' : '')
            + (e && e.needsPlacing
                ? '<div class="pi-sub"><span class="warn">Not a measurement until the pin '
                  + 'is where the point actually is.</span></div>' : '');
@@ -3609,7 +3639,12 @@
     piBody.innerHTML = head + shots + check
       + '<div class="pi-group">Position</div>'
       + piRow('Coordinates', piCoords(pt))
-      + piRow('Pin', pt.placed ? 'placed' : '<span class="warn">still to place</span>')
+      + piRow('Pin', !pt.placed
+          ? '<span class="warn">still to place</span>'
+          : (movedFromPark(pt) ? 'placed' : '<span class="warn">barely moved</span>'))
+      + (pt.parkedEst ? piRow('Parked from', 'the shot angle, at '
+          + (pt.parkedHeightFt||0).toFixed(1)+"' eye height"
+          + (pt.parkedMeasured ? ' (measured)' : ' (assumed)')) : '')
       + piRow('Set', isLocked(pt) ? 'locked' : (isHidden(pt) ? 'hidden' : null));
   }
 
@@ -4311,6 +4346,67 @@
             flagged: residual!=null && Math.abs(residual)>HEADING_FLAG_DEG};
   }
 
+  // ---------- parking a shot pin from its own angle ----------
+  // Stand at a known height above flat ground, sight something ON that ground
+  // at a depression angle, and the horizontal distance falls out: d = h/tan|t|.
+  // With the compass giving the bearing, that is a coordinate -- so a just-shot
+  // pin lands roughly where it belongs instead of on a fan.
+  //
+  // It is a PARKING SPOT and nothing else. Read the note in CLAUDE.md before
+  // trusting it: the estimate contains no elevation information whatsoever. It
+  // assumes a flat plane, so an elevation derived from an unmoved pin just
+  // hands that assumption back -- every target would read exactly 0.00'. That
+  // is why nothing here sets `placed`, and why the sight line stays drawn until
+  // the pin has actually been moved.
+  //
+  // Error grows as 2dt/sin(2t): about +/-10% at 26 ft, +/-20% at 51 ft, +/-33%
+  // at 86 ft and +/-50% at 129 ft for one degree of angle noise. Good close in,
+  // poor far out -- and because the bearing is separately known, what is left
+  // is an error ALONG the ray, which is a one-dimensional drag to correct.
+  const EST_MIN_DOWN_DEG=2;     // shallower than this and the distance runs away
+  const EST_MAX_M=90;           // ~295 ft: past any yard this app is for
+  const PARK_MOVED_M=1.5;       // "actually moved", not nudged
+  function eyeHeightFt(){
+    const v=+prefs.eyeHeightFt;
+    return (isFinite(v) && v>=2 && v<=8) ? v : 4.5;
+  }
+  function estimateDistanceM(angleDeg, heightFt){
+    if(angleDeg==null || !isFinite(angleDeg)) return null;
+    // Level or upward sights a gutter, a wall top, a tree -- nothing on the
+    // ground plane, so there is no distance to derive.
+    if(angleDeg > -EST_MIN_DOWN_DEG) return null;
+    const d=(heightFt*M_PER_FT)/Math.tan(rad(Math.abs(angleDeg)));
+    if(!isFinite(d) || d<=0 || d>EST_MAX_M) return null;
+    return d;
+  }
+  // Once a pin has genuinely been moved, it MEASURES the eye height that shot
+  // it: h = d_map * tan|t|. That is the one thing that breaks the circularity,
+  // so later pins from the same stance are parked from a measured height rather
+  // than the setting. Unmoved pins are excluded on purpose -- each would return
+  // exactly the assumption and dilute the median with it.
+  function measuredEyeHeightFt(obsId){
+    const obs=elevPoint(obsId);
+    if(!obs || !obs.placed) return null;
+    const hs=[];
+    elevPoints.forEach(pt=>{
+      if(pt.kind==='observation' || !pt.placed || !movedFromPark(pt)) return;
+      const shots=elevShots.filter(x=>x.observationId===obsId && x.pointId===pt.id);
+      if(!shots.length) return;
+      const a=mean(shots.map(x=>x.angleDeg));
+      if(a==null || a > -EST_MIN_DOWN_DEG) return;
+      const d=metresBetween(obs, pt);
+      if(!(d>0)) return;
+      hs.push((d*Math.tan(rad(Math.abs(a))))/M_PER_FT);
+    });
+    if(!hs.length) return null;
+    const sorted=hs.slice().sort((x,y)=>x-y), n=sorted.length;
+    return n%2 ? sorted[(n-1)/2] : (sorted[n/2-1]+sorted[n/2])/2;
+  }
+  function movedFromPark(pt){
+    if(!pt || !pt.parkedAt) return true;        // no park recorded: nothing to prove
+    return metresBetween(pt.parkedAt, pt) > PARK_MOVED_M;
+  }
+
   // ---------- sight lines ----------
   // Drawn for a pin that is not placed yet (here is the ray it lies on -- slide
   // it along) and for a placed pin whose bearing disagrees with its own set
@@ -4330,8 +4426,13 @@
       const h=shotHeading(obs.id, pt.id);
       if(h==null) return;
       let colour, opacity;
-      if(!pt.placed){ colour=(pt.kind==='anchor'?ANCHOR_SIGHT:TARGET_SIGHT); opacity=0.5; }
-      else {
+      // Still parked, or dragged but barely: the ray stays. A pin parked from
+      // its own shot angle looks plausible enough to be left alone, and an
+      // unmoved pin's elevation is just the flat-ground assumption handed back,
+      // so the line is a standing reminder that this one is not measured yet.
+      if(!pt.placed || !movedFromPark(pt)){
+        colour=(pt.kind==='anchor'?ANCHOR_SIGHT:TARGET_SIGHT); opacity=0.5;
+      } else {
         const ck=bearingCheck(pt.id);
         if(!ck || !ck.flagged) return;
         colour='#c4432b'; opacity=0.9;
@@ -4709,6 +4810,12 @@
   function elevAddPoint(kind, latlng, placed, gps, setObsId){
     const pt={ id:'local-'+uuid(), remoteId:null, kind:kind, label:elevLabelFor(kind),
                lat:latlng.lat, lng:latlng.lng, placed:!!placed, photoUrl:null,
+               // Where it was parked, and on what basis. Not persisted: an
+               // archived session's pins are all placed already, so there is
+               // nothing left to prove about them.
+               parkedAt: placed ? null : L.latLng(latlng.lat, latlng.lng),
+               parkedEst: !!latlng.__est, parkedHeightFt: latlng.__estH || null,
+               parkedMeasured: !!latlng.__estMeasured,
                offset: sessionT0 ? (Date.now()-sessionT0) : null,
                setObservationId: setObsId || null, hidden:false, locked:false,
                gpsLat:gps?gps.lat:null, gpsLng:gps?gps.lng:null, marker:null };
@@ -4726,12 +4833,19 @@
   // Park a just-shot pin near the observation. Heading, when the device
   // offers one, only points it roughly the right way to shorten the drag --
   // it never enters the elevation maths.
-  function provisionalLatLng(obs, index){
+  function provisionalLatLng(obs, index, angleDeg){
     const bearing = (lastHeading!=null) ? lastHeading : (index*47)%360;
+    // Prefer a height this stance has already MEASURED over the one in Settings.
+    const h = measuredEyeHeightFt(obs.id);
+    const est = (lastHeading!=null) ? estimateDistanceM(angleDeg, h!=null ? h : eyeHeightFt()) : null;
+    const d = est!=null ? est : PROVISIONAL_M;
     const b=rad(bearing);
-    const dLat=(PROVISIONAL_M*Math.cos(b))/111320;
-    const dLng=(PROVISIONAL_M*Math.sin(b))/(111320*Math.cos(rad(obs.lat)));
-    return L.latLng(obs.lat+dLat, obs.lng+dLng);
+    const out=L.latLng(obs.lat + (d*Math.cos(b))/111320,
+                       obs.lng + (d*Math.sin(b))/(111320*Math.cos(rad(obs.lat))));
+    out.__est = est!=null;
+    out.__estH = est!=null ? (h!=null ? h : eyeHeightFt()) : null;
+    out.__estMeasured = est!=null && h!=null;
+    return out;
   }
 
   // Camera frame with the crosshair burned in, so the pin can be identified
@@ -4833,7 +4947,7 @@
     // horizontal plane and device height differ, so the old angle is useless).
     const reshootingAnchor = anchor && gradeReshootId===anchor.id;
     let pt, driftNote='';
-    if(!anchor) pt=elevAddPoint('anchor', provisionalLatLng(obs, 0), false, null, null);
+    if(!anchor) pt=elevAddPoint('anchor', provisionalLatLng(obs, 0, angle), false, null, null);
     else if(!anchorShotHere || reshootingAnchor){
       pt=anchor;
       if(reshootingAnchor){
@@ -4861,7 +4975,7 @@
       if(pt.remoteId) apiDelete('/elevation-points/'+pt.remoteId+'/shots');
       gradeReshootId=null;
     }
-    else pt=elevAddPoint('target', provisionalLatLng(obs, elevPoints.length), false, null, obs.id);
+    else pt=elevAddPoint('target', provisionalLatLng(obs, elevPoints.length, angle), false, null, obs.id);
 
     const shot={ id:'local-'+uuid(), observationId:obs.id, pointId:pt.id,
                  angleDeg:angle, angleSpreadDeg:spread, distanceM:null,

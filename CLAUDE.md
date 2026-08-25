@@ -309,6 +309,8 @@ preferences only show their effect from inside a view.
 - **Preview column** — the pin inspector, on the map and in every elevation view.
 - **Filmstrip** — likewise.
 - **Split screen in portrait** — see *Split screen: section over plan*.
+- **Eye height when shooting grade** — the `h` in `d = h / tan|θ|`, used only to
+  park a just-shot pin. The one preference here that is a number, not a switch.
 
 ## Data durability — important
 
@@ -808,6 +810,57 @@ the compass.** Distance comes from where the pins sit, angle from the tilt
 sensor. A recorded heading buys two things the maths cannot give you on its
 own, and a bad compass makes both worse without making any measurement wrong.
 
+**The parking spot.** Stand at a known height above flat ground, sight
+something *on* that ground at a depression angle, and the horizontal distance
+falls out: `d = h / tan|θ|`. With the compass giving the bearing, that is a
+coordinate — so a just-shot pin lands roughly where it belongs instead of on a
+fan. `prefs.eyeHeightFt` (default 4.5 ft) is the assumption; Settings exposes
+it, because chest height against eye height is a 30% difference in distance.
+
+**It contains no elevation information whatsoever, and this is the thing to
+understand about it.** The estimate assumes a flat plane, so an elevation
+derived from an unmoved pin just hands that assumption straight back:
+`d·tan θ` = `(h/tan|θ|)·tan θ` = `−h`, every time. Difference that against an
+anchor parked the same way and **every target reads exactly `0.00'`**. It is
+circular, not approximate.
+
+That cuts both ways. An untouched survey reads dead flat, which is instantly
+recognisable — it does not read plausibly-wrong. But a *nudge* sets `placed` and
+yields near-zero numbers that look like small real ones, and neither existing
+check catches it: the bearing cross-check stays silent because the pin is on its
+bearing by construction, and a distance error is only caught by shooting the
+same target from a second stance. Hence three rules:
+
+- **Nothing here sets `placed`.** A parked pin still says *place pin*, never a
+  number.
+- **The sight line stays drawn until the pin has moved more than
+  `PARK_MOVED_M`** (1.5 m) from where it was parked — a standing reminder that
+  this one is not measured yet. `pt.parkedAt` records the spot; it is not
+  persisted, since an archived session's pins are all placed already.
+- **A placed-but-barely-moved pin is labelled `barely moved`** and its number
+  carries a caveat, rather than being refused — an estimate that happened to be
+  right needs only a small correction, and refusing it would punish that.
+
+**The height stops being an assumption after the first real placement.** Once a
+pin has genuinely been moved it *measures* the height that shot it —
+`h = d_map · tan|θ|` — so `measuredEyeHeightFt()` takes the median across the
+placed, moved pins of that stance and later pins are parked from that instead.
+Unmoved pins are excluded on purpose: each would return exactly the assumption
+and dilute the median with it. The height is per-stance, so a new observation
+starts from the setting again.
+
+Two guards, both necessary:
+
+- **Level or upward sights nothing on the ground** — a gutter, a wall top, a
+  tree — so no distance is derived and the old fixed parking is used.
+- **`EST_MIN_DOWN_DEG` (2°) and `EST_MAX_M` (90 m).** At 0.5° the formula parks
+  a pin 515 ft away.
+
+Error grows as `2Δθ / sin 2θ`: about ±10% at 26 ft, ±20% at 51 ft, ±33% at 86 ft
+and ±50% at 129 ft for one degree of angle noise — good close in, poor far out.
+Because the bearing is separately known, what is left is an error *along* the
+ray, which is a one-dimensional drag to correct.
+
 **The sight line.** Every shot stores the heading it was taken at
 (`upright_elevation_shots.heading_deg`, plus iOS's own
 `webkitCompassAccuracy`). An unplaced pin is therefore constrained to a ray out
@@ -1118,6 +1171,10 @@ not just abandoned starts.
   practice. It is no longer the *only* accuracy signal — the bearing
   cross-check is a second one — but it is still the only one that catches a
   distance error.
+- Pin parking against a tape measure: whether `d = h/tan|θ|` really lands
+  close enough to be worth having at yard distances, and whether a plausible
+  parking spot tempts anyone into leaving pins where they fell despite the
+  sight line and the *barely moved* label.
 - The bearing cross-check against a real compass: whether iOS's heading is
   steady enough for `HEADING_FLAG_DEG` (15°) to catch real mistakes without
   crying wolf, and whether a set's median offset really is as consistent as the
