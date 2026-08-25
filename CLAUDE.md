@@ -282,12 +282,56 @@ while turned (they would turn with everything else), and a static Esri credit
 is drawn in the corner instead. A default `<img>` photo pin has no child to
 counter-rotate, so it leans — its tip stays exactly on its own coordinate.
 
-## My location is a toggle
+## My location is a three-tap cycle
 
 The blue dot and its accuracy circle sit over the work, and a continuous
 high-accuracy `watchPosition` is the most expensive thing the app asks of the
-battery. **My location** centres on first tap and, once you are already
-centred, turns the whole thing off on the next — graphics *and* `clearWatch`.
+battery. The button cycles **off → centred, north up → centred, heading up →
+off**, which is the cycle a phone map has, so nobody has to learn it. Turning it
+off is graphics *and* `clearWatch`.
+
+**A tap after the view has moved re-centres instead of advancing**, in whichever
+mode you were already in. Having to tap twice to get back to yourself — and
+losing heading-up on the way — is not what that tap meant.
+
+### Heading up
+
+**The heading is the device's TOP EDGE, not the camera.** `deviceTopBearing()`
+is the same orientation matrix as `cameraBearing()`, a different column: device
++y is the second, so the top edge lands on the ground at `(-cos β·sin α,
+cos α·cos β)`. The two are the ends of one problem — `webkitCompassHeading` is
+*wrong* for the camera when the iPad is held up, and *right* for the top edge
+when it is laid down — and the map is only ever used flat. Gamma does not appear
+at all, which is correct by construction: rolling the iPad about its own long
+axis does not change where its top edge points.
+
+**The map turns by `−heading`**, since north started up. That is the same
+`mapRotApply()` split screen uses, so the counter-rotated pin labels, the two
+patched Leaflet input paths and the hidden zoom control all come for free.
+
+**One function owns the rotation**, so the two claimants can never fight over
+it. `mapRotSync()` gives it to **split screen** whenever the split is open —
+that is the split's entire contract, that sliding a pin right on the plan moves
+it right in the section, and a heading-up map would break it. Heading-up stands
+down for the duration and gets it straight back when the split closes; that is
+why `setSplit()` calls `mapRotSync()` rather than `mapRotApply(0)`.
+
+**Smoothed, then gated.** `mapRotApply()` resizes the container and invalidates
+the map, so turning it on every compass reading would be both jittery and
+expensive. The raw bearing goes into a circular mean over 8 samples, and the map
+only turns once that mean has moved `HEADING_UP_DEG` (4°) and at most every
+`HEADING_UP_MS` (180ms). Standing still costs nothing.
+
+**A turned map has lost *up is north*, so it says where north went.** A needle
+in the corner, outside the rotated container (it has to hold still on screen),
+drawn at `mapRotDeg` because north started up and the map turned by that much.
+It shows for *any* rotation, so a split screen facing a section gets it too.
+
+Note the placement trap, the same one `syncGridBtns()` hit: `syncCenterBtn()`
+runs at the top level a few hundred lines above where the orientation code
+lives, so the heading-up state is declared up with `mapRotApply()` rather than
+down beside `handleOrientation()`. Read from up there it would be a temporal
+dead zone throw, and that takes the entire script with it.
 
 Nothing downstream depends on it: distance has never come from the live fix,
 and entering grade mode takes a **one-shot** `getCurrentPosition` to seed the
@@ -1413,9 +1457,9 @@ sketch, so this is the fire-and-forget write model showing up in real data,
 not just abandoned starts.
 
 **Not yet built**
-- More of the compass ideas: a heading-up map (cheap now the rotation
-  machinery exists), auto-selecting the section you are standing in front of,
-  and squaring the cuts to a wall by pointing at it.
+- More of the compass ideas: auto-selecting the section you are standing in
+  front of, and squaring the cuts to a wall by pointing at it. (A heading-up
+  map is built — see *My location*.)
 - ZIP export of an *archived* session. The export reads `pin.photo` as a
   data URL and `clip.blob`, both of which are URLs in archive mode. Not
   currently reachable (the done panel isn't part of the archive flow) but it
@@ -1483,6 +1527,10 @@ not just abandoned starts.
   assumes once you have walked around a yard with a metal-cased iPad. Sets shot
   before this fix are not worth reading back — a change of grip mid-set put 90°
   into a single point's bearing.
+- Heading-up in a real yard: whether 4° and 180ms are the right gate on a
+  handheld iPad or whether the map still swims, and whether a crew reads a
+  turned map more easily than a north-up one once the house is not square to
+  north.
 - The on-screen compass against a known direction: whether the accuracy figure
   iOS reports actually tracks how wrong the heading is, and whether `±20°` is
   the right line to call it bad at.

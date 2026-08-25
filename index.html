@@ -157,6 +157,15 @@
     transform:rotate(var(--maprot-inv, 0deg));
   }
   .map-clip.rot .leaflet-control-container{display:none;}
+  /* A turned map has lost "up is north", so it says where north went. Shown
+     whenever the map is turned at all -- heading-up, or a split screen facing
+     a section. */
+  .map-north{
+    position:absolute; left:8px; top:8px; width:34px; height:34px; z-index:800;
+    display:none; pointer-events:none;
+    filter:drop-shadow(0 1px 3px rgba(0,0,0,0.9));
+  }
+  .map-clip.rot .map-north{display:block;}
   .map-attrib{
     position:absolute; right:4px; bottom:2px; z-index:800;
     font-size:10px; color:var(--dim); pointer-events:none;
@@ -250,6 +259,9 @@
     font-size:13px; font-weight:600; white-space:nowrap;
   }
   .mt-btn.active{background:var(--ink); color:var(--bg);}
+  /* Heading-up wears the locator's own blue, so which of the two "on" states
+     you are in is a glance rather than a read. */
+  .mt-btn.heading{background:#2a6fd6; color:#fff;}
   .mt-label{font-size:11px; color:var(--dim); white-space:nowrap;}
   .map-toolbar input[type=range]{width:90px;}
   .overlay-controls{display:none; align-items:center; gap:8px;}
@@ -1072,6 +1084,14 @@
         </aside>
         <div class="map-clip" id="mapClip">
           <div id="map"></div>
+          <!-- Outside the turned container on purpose: it has to stay put on
+               screen and point at where north has gone. -->
+          <svg class="map-north" id="mapNorth" viewBox="0 0 40 40" aria-hidden="true">
+            <g id="mapNorthDial">
+              <path d="M20 4 L25 22 L20 18 L15 22 Z" fill="#c4432b"/>
+              <path d="M20 36 L25 22 L20 26 L15 22 Z" fill="rgba(255,255,255,0.5)"/>
+            </g>
+          </svg>
           <div class="map-attrib">Imagery &copy; Esri</div>
         </div>
       </div>
@@ -1434,6 +1454,7 @@
         propStatus=$('propStatus'), propClose=$('propClose'), propClear=$('propClear'),
         pinInspector=$('pinInspector'), piTitle=$('piTitle'), piClose=$('piClose'),
         evRow=$('evRow'), evStripSlot=$('evStripSlot'), mapClip=$('mapClip'),
+        mapNorthDial=$('mapNorthDial'),
         piImg=$('piImg'), piNoImg=$('piNoImg'), piBody=$('piBody'),
         settingsPanel=$('settingsPanel'), settingsBtn=$('settingsBtn'), settingsBtn2=$('settingsBtn2'),
         settingsClose=$('settingsClose'), evSettingsBtn=$('evSettingsBtn'),
@@ -4204,8 +4225,47 @@
     // resizes the container, and the one thing that must not move is what you
     // were looking at. Anchoring the top-left instead slides the survey out of
     // the clip the moment you change section.
+    // North started up; the map turned by `deg`, so north is now at `deg`.
+    if(mapNorthDial) mapNorthDial.setAttribute('transform','rotate('+deg.toFixed(1)+' 20 20)');
     if(changed || deg) requestAnimationFrame(()=>{ try{ map.invalidateSize(); }catch(e){} });
   }
+
+  // ---------- heading up ----------
+  // The compass is noisy and mapRotApply() resizes the container and
+  // invalidates the map, so the raw reading is smoothed and then gated: it only
+  // turns once you have genuinely turned, and never more than a few times a
+  // second.
+  const HEADING_UP_DEG=4;          // turn the map only past this much change
+  const HEADING_UP_MS=180;         // and no more often than this
+  const HEADING_UP_N=8;            // samples in the circular mean
+  // Declared HERE, with the rotation it owns, not down beside the orientation
+  // handler: syncCenterBtn() runs at the top level a few hundred lines below,
+  // and reading these from there would be a temporal dead zone throw that takes
+  // the whole script with it.
+  let headingUp=false, headUpSamples=[], headUpApplied=null, headUpAt=0;
+  function headingUpReset(){ headUpSamples=[]; headUpApplied=null; headUpAt=0; }
+  // ONE place decides what the map's rotation is, so the two claimants can
+  // never fight over it. Split screen turns the plan to face its section --
+  // that is the whole contract of the split, that sliding a pin right down
+  // there moves it right up here -- so while it is on, it wins and heading-up
+  // stands down. It comes straight back when the split closes.
+  function mapRotSync(){
+    if(!map || splitOn) return;
+    mapRotApply(headingUp && headUpApplied!=null ? -headUpApplied : 0);
+  }
+  function headingUpFeed(bearing){
+    if(!headingUp || splitOn || bearing==null) return;
+    headUpSamples.push(bearing);
+    if(headUpSamples.length>HEADING_UP_N) headUpSamples.shift();
+    const now=Date.now();
+    if(now-headUpAt < HEADING_UP_MS) return;
+    const mean=meanAngle(headUpSamples);
+    if(mean==null) return;
+    if(headUpApplied!=null && Math.abs(wrap180(mean-headUpApplied)) < HEADING_UP_DEG) return;
+    headUpAt=now; headUpApplied=mean;
+    mapRotSync();
+  }
+
 
   // ---------- split screen: section over plan ----------
   // Standing the iPad on its end while the map is up puts the section above the
@@ -4226,7 +4286,9 @@
       if(!evActive) evOpen(splitSide());
       mapRotApply(mapRotFor(evActive));
     } else {
-      mapRotApply(0);
+      // Not mapRotApply(0): heading-up may have been waiting for the split to
+      // finish with the rotation, and it should get it straight back.
+      mapRotSync();
       if(evActive) evClose();
     }
     panelsSync();
@@ -7138,10 +7200,27 @@
   //
   // Nothing downstream breaks: distance has never come from the live fix, and
   // grade mode takes a ONE-SHOT fix when it needs to seed an observation.
+  function setHeadingUp(on){
+    headingUp = !!on && geoOn;
+    if(!headingUp) headingUpReset();
+    syncCenterBtn();
+    mapRotSync();
+  }
+  function syncCenterBtn(){
+    centerBtn.classList.toggle('active', geoOn);
+    centerBtn.classList.toggle('heading', headingUp);
+    centerBtn.textContent = !geoOn ? 'Location off'
+                          : headingUp ? 'Heading up' : 'My location';
+    centerBtn.title = !geoOn
+      ? 'Tap to show where you are'
+      : headingUp
+        ? 'The map is turned to face the way you are; tap again to turn the locator and its GPS watch off'
+        : 'Tap again to turn the map to face the way you are';
+  }
   function setGeoOn(on){
     geoOn=!!on;
-    centerBtn.classList.toggle('active', geoOn);
-    centerBtn.textContent = geoOn ? 'My location' : 'Location off';
+    if(!geoOn && headingUp){ headingUp=false; headingUpReset(); mapRotSync(); }
+    syncCenterBtn();
     if(geoOn){
       if(geoWatchId===null) startGeo();
       updateMyMarker();
@@ -7156,17 +7235,23 @@
       gpsReadout.textContent='GPS off';
     }
   }
+  // Off -> centred, north up -> centred, HEADING UP -> off. The same three-tap
+  // cycle a phone map has, so nobody has to learn it.
+  //
+  // A tap after you have panned away re-centres instead of advancing, in
+  // whichever mode you were already in: having to tap twice to get back to
+  // yourself, and losing heading-up on the way, is not what that tap meant.
   centerBtn.addEventListener('click', ()=>{
-    // On, and already centred on you: the next tap turns it off.
     if(!geoOn){ setGeoOn(true); return; }
     if(map && lastFix){
       const c=map.getCenter();
       const near = metresBetween(c, L.latLng(lastFix.coords.latitude, lastFix.coords.longitude)) < 6;
       if(!near){ map.setView([lastFix.coords.latitude,lastFix.coords.longitude], Math.max(map.getZoom(),19)); return; }
     }
+    if(!headingUp){ setHeadingUp(true); return; }
     setGeoOn(false);
   });
-  centerBtn.title='Tap to centre on your position; tap again to turn the locator and its GPS watch off';
+  syncCenterBtn();
 
   // ---------- extent lock ----------
   let extentLocked=false;
@@ -7590,6 +7675,28 @@
     if(Math.hypot(camE, camN) < CAM_MIN_HORIZ) return null;
     return ((Math.atan2(camE, camN)/r % 360) + 360) % 360;
   }
+  // The bearing of the device's TOP EDGE -- which, with the iPad lying flat in
+  // your hands, is the direction you are facing.
+  //
+  // Note this is NOT cameraBearing(). The camera axis points at the ground when
+  // the iPad is flat, so it has no azimuth at all; the top edge does. They are
+  // the two ends of the same problem: `webkitCompassHeading` is wrong for the
+  // camera when the iPad is held up, and right for the top edge when it is
+  // laid down. Same matrix, a different column -- device +y is the second, so
+  // (-cB*sA, cA*cB) is where the top edge points on the ground.
+  //
+  // Gamma does not appear, which is correct by construction: rolling the iPad
+  // about its own long axis does not change where its top edge points.
+  function deviceTopBearing(A, B, G){
+    if(A==null || B==null) return null;
+    const r=Math.PI/180;
+    const cA=Math.cos(A*r), sA=Math.sin(A*r), cB=Math.cos(B*r);
+    // Stood upright, the top edge points at the sky and there is no azimuth
+    // left to read. The map is only used flat, so this is a guard, not a case.
+    if(Math.abs(cB) < 0.087) return null;
+    return ((Math.atan2(-cB*sA, cA*cB)/r % 360) + 360) % 360;
+  }
+
   function handleOrientation(evt){
     if(evt.beta===null || evt.beta===undefined) return;
     const b=(evt.beta||0)*Math.PI/180, g=(evt.gamma||0)*Math.PI/180;
@@ -7622,6 +7729,7 @@
       // pin it parks still wants a direction.
       if(bearing!=null) lastHeading=bearing;
       headingLive=bearing;
+      headingUpFeed(deviceTopBearing(alphaTrue, evt.beta||0, evt.gamma||0));
     } else { headingLive=null; }
     tiltSamples.push({t:Date.now(), angle:tilt-90});
     if(tiltSamples.length>240) tiltSamples.splice(0, tiltSamples.length-240);
