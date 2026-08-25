@@ -1097,7 +1097,7 @@
       <div class="ev-bar ev-sketchbar" id="evSketchBar">
         <span class="mt-label">Sketch</span>
         <div class="ev-swatches" id="evSwatches"></div>
-        <button class="mt-btn" id="evSnapBtn">Snap to grid</button>
+        <button class="mt-btn" id="evAlignBtn">Align to grid</button>
         <div class="ev-sep"></div>
         <button class="mt-btn" id="evUndoBtn">Undo</button>
         <button class="mt-btn" id="evClearSketch">Clear section</button>
@@ -1318,7 +1318,7 @@
         evLockBtn=$('evLockBtn'), evFitBtn=$('evFitBtn'),
         evClearImg=$('evClearImg'), evImgBar=$('evImgBar'), evImgWhich=$('evImgWhich'),
         evGridBtn=$('evGridBtn'), evSketchBtn=$('evSketchBtn'), evSketchBar=$('evSketchBar'),
-        evSwatches=$('evSwatches'), evSnapBtn=$('evSnapBtn'), evUndoBtn=$('evUndoBtn'),
+        evSwatches=$('evSwatches'), evAlignBtn=$('evAlignBtn'), evUndoBtn=$('evUndoBtn'),
         evClearSketch=$('evClearSketch'), evDoneSketch=$('evDoneSketch'),
         evToolUniform=$('evToolUniform'), evToolStretch=$('evToolStretch'),
         evToolDistort=$('evToolDistort'), evResetImg=$('evResetImg'),
@@ -5285,7 +5285,7 @@
   // -- x along the section, y above the anchor -- which is what makes them
   // survive a pan, a zoom, a change of exaggeration and a re-fit. Pixels would
   // not, and lat/lng cannot express a height.
-  let evGridOn=true, evSnapOn=true, evSketchOn=false;
+  let evGridOn=true, evAlignOn=true, evSketchOn=false;
   let evSketches=[], evDraft=null, evDrawing=false;
   // What a view is allowed to show:
   //   cut   -- strictly what lies beyond this view's own cut plane
@@ -6029,10 +6029,10 @@
   }, {passive:false});
 
   // ---------- sketching on a section ----------
-  // The same gesture as the map's sketch, in the profile's own units. Snap puts
-  // each point on the nearest grid intersection, which turns a rough drag into
-  // an orthogonal path -- that is what makes drawing a right angle possible at
-  // arm's length, rather than something you eyeball against the lines.
+  // The same gesture as the map's sketch, in the profile's own units. Align
+  // puts each point on the nearest grid intersection, which turns a rough drag
+  // into an orthogonal path -- that is what makes drawing a right angle possible
+  // at arm's length, rather than something you eyeball against the lines.
   function evGridStepX(G){
     let q=1; [1,2,5,10,25,50,100].some(v=>{ q=v; return v*G.sx>=44; }); return q;
   }
@@ -6040,8 +6040,8 @@
     const ftPx=G.sx*G.exag;
     let q=1; [1,2,5,10,25,50].some(v=>{ q=v; return v*ftPx>=34; }); return q;
   }
-  function evSnapPt(pt, G){
-    if(!evSnapOn || !evGridOn) return pt;
+  function evAlignPt(pt, G){
+    if(!evAlignOn || !evGridOn) return pt;
     const sx=evGridStepX(G), sy=evGridStepY(G);
     return {x:Math.round(pt.x/sx)*sx, y:Math.round(pt.y/sy)*sy};
   }
@@ -6052,12 +6052,12 @@
   function evSketchPush(clientX, clientY){
     if(!evActive) return;
     const G=evGeom(evActive);
-    const p=evSnapPt(evStagePt(clientX, clientY), G);
+    const p=evAlignPt(evStagePt(clientX, clientY), G);
     const last=evDraft[evDraft.length-1];
-    // Snapping lands run after run on the same intersection; keep one.
+    // Aligning lands run after run on the same intersection; keep one.
     if(last && Math.abs(last.x-p.x)<1e-9 && Math.abs(last.y-p.y)<1e-9) return;
-    // Unsnapped, thin out the jitter instead.
-    if(!evSnapOn && last && Math.hypot((G.toX(p.x)-G.toX(last.x)), (G.toY(p.y)-G.toY(last.y)))<3) return;
+    // Unaligned, thin out the jitter instead.
+    if(!evAlignOn && last && Math.hypot((G.toX(p.x)-G.toX(last.x)), (G.toY(p.y)-G.toY(last.y)))<3) return;
     evDraft.push(p);
     evRenderSoon();
   }
@@ -6453,10 +6453,10 @@
     evGridBtn.classList.toggle('active', evGridOn);
     evSketchBtn.classList.toggle('active', evSketchOn);
     evSketchBar.classList.toggle('show', evSketchOn);
-    evSnapBtn.classList.toggle('active', evSnapOn && evGridOn);
-    evSnapBtn.disabled = !evGridOn;
-    evSnapBtn.title = evGridOn ? 'Put every point on the nearest grid intersection'
-                               : 'Turn the grid on to snap to it';
+    evAlignBtn.classList.toggle('active', evAlignOn && evGridOn);
+    evAlignBtn.disabled = !evGridOn;
+    evAlignBtn.title = evGridOn ? 'Put every point on the nearest grid intersection'
+                                : 'Turn the grid on to align to it';
     [...evSwatches.children].forEach((b,i)=>b.classList.toggle('on', i===annoColorIdx));
     // With exaggeration switched off in Settings the slider would be a control
     // that changes nothing, so it goes away rather than sitting there inert.
@@ -6505,7 +6505,7 @@
   evDoneSketch.addEventListener('click', ()=>{
     evSketchOn=false; evDrawing=false; evDraft=null; evSyncTabs(); evRender();
   });
-  evSnapBtn.addEventListener('click', ()=>{ evSnapOn=!evSnapOn; evSyncTabs(); });
+  evAlignBtn.addEventListener('click', ()=>{ evAlignOn=!evAlignOn; evSyncTabs(); });
   evUndoBtn.addEventListener('click', evSketchUndo);
   evClearSketch.addEventListener('click', evSketchClear);
   ANNO_COLORS.forEach((col,i)=>{

@@ -1051,12 +1051,12 @@ real distances and the cell shape shows the exaggeration. It costs nothing for
 drawing right angles, since the two axes are perpendicular on screen whatever
 the scale.
 
-**Snap is what actually delivers a right angle.** A visible grid only lets you
-eyeball one. With snap on, every point of a stroke lands on the nearest
+**Align to grid is what actually delivers a right angle.** A visible grid only
+lets you eyeball one. With it on, every point of a stroke lands on the nearest
 intersection, so a rough drag along a wall comes out as an orthogonal path —
 consecutive points on the same intersection collapse to one, and what is left is
-axis-true segments. Unsnapped, the stroke is thinned by pixel distance instead,
-exactly as the map's sketch is.
+axis-true segments. With it off, the stroke is thinned by pixel distance
+instead, exactly as the map's sketch is.
 
 Sketching **owns the stage while it is on**: `evGestArmed()` returns false, so a
 stroke is never also a pan, and picking the tool drops any image tool and
