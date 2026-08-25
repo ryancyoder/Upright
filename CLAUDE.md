@@ -33,7 +33,8 @@ key. Buckets are public-read.
 
 Tables are all prefixed `upright_`: `upright_sessions`, `upright_clips`,
 `upright_photos`, `upright_sketches`, `upright_measures`,
-`upright_transcript_segments`. Storage bucket: `upright-media`.
+`upright_transcript_segments`, `upright_elevation_sketches`. Storage bucket:
+`upright-media`.
 
 `upright_sessions` has a nullable `property_id` FK to the existing
 `properties` table — this is what the history list shows as a session's name.
@@ -50,6 +51,7 @@ Endpoints under `/functions/v1/upright-api`:
 `POST /sessions/:id/elevation-points|elevation-shots` (a shot carries
 `headingDeg`/`headingAccDeg` — evidence, never input),
 `POST /sessions/:id/elevation-slopes`, `DELETE /elevation-slopes/:id`,
+`POST /sessions/:id/elevation-sketches`, `DELETE /elevation-sketches/:id`,
 `PATCH /sessions/:id/elevation-views/:side`,
 `POST|DELETE /sessions/:id/elevation-views/:side/plan|photo`,
 `PATCH /elevation-points/:id`, `DELETE /elevation-points/:id`,
@@ -64,7 +66,7 @@ Secrets — NOT Vault, and NOT Vercel env vars; neither reaches the function).
 If editing the function, pull current source with `Supabase:get_edge_function`
 rather than reconstructing it. The source is now vendored at
 `supabase/functions/upright-api/index.ts` so edits are diffable; keep it in
-step with what is deployed. Currently **v20**.
+step with what is deployed. Currently **v21**.
 
 **Replacing an image writes a NEW storage path, never an upsert in place.**
 Storage public URLs are cached by the browser and by the CDN in front of the
@@ -1030,6 +1032,45 @@ Anything drawn that is **not** strictly beyond its own cut is **faded**, in
 every mode, so a looser mode can never quietly pass itself off as a clean
 section. The note reports `N of M points` and names the mode when it is not
 the strict one.
+
+### Sketching on a section, and the grid that squares it up
+
+The map has had freehand sketch since the beginning; a section now has the same
+thing. **Strokes are stored in view feet** — x along the section's own axis, y
+above the anchor — never pixels and never lat/lng. Pixels would not survive a
+pan, a zoom, a re-fit or a change of exaggeration, and a lat/lng cannot express
+a height. One row per stroke in `upright_elevation_sketches`, tagged with its
+side, so a stroke belongs to the section it was drawn on and no other.
+
+**The grid runs both ways at the same spacing in feet.** The horizontal lines
+were already there — they are the elevation scale, always drawn. The **Grid**
+button adds the vertical half, distance along the section, which is what lets
+you square something up. At a vertical exaggeration other than ×1 the cells are
+therefore *not* square on screen, which is the honest way round: the grid states
+real distances and the cell shape shows the exaggeration. It costs nothing for
+drawing right angles, since the two axes are perpendicular on screen whatever
+the scale.
+
+**Snap is what actually delivers a right angle.** A visible grid only lets you
+eyeball one. With snap on, every point of a stroke lands on the nearest
+intersection, so a rough drag along a wall comes out as an orthogonal path —
+consecutive points on the same intersection collapse to one, and what is left is
+axis-true segments. Unsnapped, the stroke is thinned by pixel distance instead,
+exactly as the map's sketch is.
+
+Sketching **owns the stage while it is on**: `evGestArmed()` returns false, so a
+stroke is never also a pan, and picking the tool drops any image tool and
+re-locks the view — the same rule the image tools apply to each other.
+
+**The plan gets the same grid, squared to the cuts.** This is the one place
+where "aligned" is a real choice, and north is usually the wrong answer: a yard
+is laid out against the house, not against the pole. `gridDraw()` runs its lines
+along the cut cross's own two axes, so a bed or a patio drawn to it comes out
+square with the building *and* square with what the elevation views show — they
+are cuts through the same cross. Spacing is a round number of **feet**, never of
+metres, picked from the current zoom by measuring pixels-per-foot through
+Leaflet rather than assuming it. `cutsRefresh()` redraws it, so turning the
+cross turns the grid.
 
 **Images are placed by four corners, in view coordinates (feet along, feet
 up).** Four corners is a full homography, which is exactly what a facade

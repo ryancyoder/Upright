@@ -561,6 +561,15 @@
   .elev-panel.insp{--insp-w:min(300px, 34%);}
   .elev-panel{--insp-w:0px;}
   .elev-panel .pin-inspector{border-right:1px solid var(--line);}
+  .ev-sketchbar{display:none; border-bottom:1px solid var(--line);}
+  .ev-sketchbar.show{display:flex;}
+  .ev-swatches{display:flex; gap:6px; flex:0 0 auto;}
+  .ev-swatches button{
+    width:26px; height:26px; border-radius:50%; padding:0;
+    border:2px solid transparent;
+  }
+  .ev-swatches button.on{border-color:#fff;}
+  .ev-sketch{pointer-events:none;}
   .ev-imgbar{display:none; border-bottom:1px solid var(--line);}
   .ev-imgbar.show{display:flex;}
   .ev-imgbar .ev-exag{width:96px;}
@@ -1050,6 +1059,7 @@
         <button class="mt-btn" id="measureBtn">Measure</button>
         <button class="mt-btn" id="elevBtn">Elevation</button>
         <button class="mt-btn" id="cutsBtn">Section cuts</button>
+        <button class="mt-btn" id="mapGridBtn">Grid</button>
         <button class="mt-btn" id="splitBtn">Split</button>
         <button class="mt-btn" id="panelsMapBtn">Preview</button>
         <button class="mt-btn" id="stripMapBtn">Filmstrip</button>
@@ -1075,12 +1085,23 @@
         <span class="mt-label" id="evExagVal">1&times;</span>
         <button class="mt-btn" id="evPlanBtn">Elevation plan</button>
         <button class="mt-btn" id="evPhotoBtn">Photo</button>
+        <button class="mt-btn" id="evGridBtn">Grid</button>
+        <button class="mt-btn" id="evSketchBtn">Sketch</button>
         <button class="mt-btn" id="evLevels">Level lines</button>
         <button class="mt-btn" id="evXray">X-ray</button>
         <button class="mt-btn" id="panelsEvBtn">Preview</button>
         <button class="mt-btn" id="stripEvBtn">Filmstrip</button>
         <button class="mt-btn" id="evSettingsBtn" title="Settings">&#9881;</button>
         <input type="file" id="evFile" accept="image/*" style="display:none">
+      </div>
+      <div class="ev-bar ev-sketchbar" id="evSketchBar">
+        <span class="mt-label">Sketch</span>
+        <div class="ev-swatches" id="evSwatches"></div>
+        <button class="mt-btn" id="evSnapBtn">Snap to grid</button>
+        <div class="ev-sep"></div>
+        <button class="mt-btn" id="evUndoBtn">Undo</button>
+        <button class="mt-btn" id="evClearSketch">Clear section</button>
+        <button class="mt-btn go" id="evDoneSketch">Done</button>
       </div>
       <div class="ev-bar ev-imgbar" id="evImgBar">
         <span class="mt-label" id="evImgWhich">Image</span>
@@ -1296,6 +1317,9 @@
         evPlanBtn=$('evPlanBtn'), evPhotoBtn=$('evPhotoBtn'),
         evLockBtn=$('evLockBtn'), evFitBtn=$('evFitBtn'),
         evClearImg=$('evClearImg'), evImgBar=$('evImgBar'), evImgWhich=$('evImgWhich'),
+        evGridBtn=$('evGridBtn'), evSketchBtn=$('evSketchBtn'), evSketchBar=$('evSketchBar'),
+        evSwatches=$('evSwatches'), evSnapBtn=$('evSnapBtn'), evUndoBtn=$('evUndoBtn'),
+        evClearSketch=$('evClearSketch'), evDoneSketch=$('evDoneSketch'),
         evToolUniform=$('evToolUniform'), evToolStretch=$('evToolStretch'),
         evToolDistort=$('evToolDistort'), evResetImg=$('evResetImg'),
         evTiltV=$('evTiltV'), evTiltH=$('evTiltH'), evStraighten=$('evStraighten'),
@@ -1334,7 +1358,8 @@
         prefSplit=$('prefSplit'), prefEyeHeight=$('prefEyeHeight'),
         panelsMapBtn=$('panelsMapBtn'), stripMapBtn=$('stripMapBtn'),
         panelsEvBtn=$('panelsEvBtn'), stripEvBtn=$('stripEvBtn'),
-        settingsMapBtn=$('settingsMapBtn'), splitBtn=$('splitBtn'), stage=$('stage');
+        settingsMapBtn=$('settingsMapBtn'), splitBtn=$('splitBtn'), stage=$('stage'),
+        mapGridBtn=$('mapGridBtn');
 
   const UPRIGHT_ON=55, UPRIGHT_OFF=35, HOLD_MS=350;
 
@@ -2517,6 +2542,10 @@
       angleDeg:sh.angle_deg, angleSpreadDeg:sh.angle_spread_deg, distanceM:sh.distance_m,
       headingDeg:sh.heading_deg, headingAccDeg:sh.heading_acc_deg
     }));
+    evSketches=(data.elevationSketches||[]).map(k=>({
+      id:k.id, remoteId:k.id, side:k.side, colour:k.colour,
+      pts:(k.points||[]).map(q=>({x:+q.x, y:+q.y}))
+    }));
     elevSlopes=(data.elevationSlopes||[]).map(sl=>({
       id:sl.id, remoteId:sl.id, fromId:sl.from_point_id, toId:sl.to_point_id, layers:null
     }));
@@ -3659,6 +3688,12 @@
   }
 
   piClose.addEventListener('click', inspectClose);
+  mapGridBtn.addEventListener('click', ()=>{
+    mapGridOn=!mapGridOn;
+    mapGridBtn.classList.toggle('active', mapGridOn);
+    evEnsurePivot();          // the grid hangs off the cross, so it needs one
+    gridDraw();
+  });
   splitBtn.addEventListener('click', ()=>{
     if(!splitOn && !splitCan()){
       alert('Split screen needs a survey to draw a section from — shoot some grade first.');
@@ -4094,7 +4129,7 @@
     const c=map.getContainer();
     // The cuts are drawn as segments long enough to cross the viewport, so they
     // have to be re-cut whenever the viewport changes.
-    map.on('moveend zoomend', ()=>{ if(cutsOn) cutsRefresh(); });
+    map.on('moveend zoomend', ()=>{ if(cutsOn) cutsRefresh(); if(mapGridOn) gridDraw(); });
     // Split screen: the section's horizontal comes from the map, so it has to
     // follow every frame of a pan or a zoom, not just where they come to rest.
     map.on('move zoom', ()=>{ if(splitOn && evActive) evRenderSoon(); });
@@ -4460,6 +4495,54 @@
   function compassPoint(deg){
     if(deg==null) return null;
     return COMPASS_POINTS[Math.round(((deg%360)+360)%360/22.5)%16];
+  }
+
+  // ---------- the plan's grid, squared to the section cuts ----------
+  // On the plan, "aligned" is a real choice and north is usually the wrong
+  // answer: a yard is laid out against the house, not against the pole. The
+  // grid therefore runs along the same two axes the cut cross does, so a bed or
+  // a patio drawn to it comes out square with the building -- and square with
+  // what the elevation views show, since those are cuts through the same cross.
+  //
+  // Spacing is picked from the current zoom so the lines stay a thumb apart,
+  // and it is a round number of feet, never of metres.
+  const GRID_FT=[1,2,5,10,25,50,100,250];
+  let mapGridOn=false, gridLayers=[];
+  function gridClear(){
+    gridLayers.forEach(l=>{ if(map){ try{ map.removeLayer(l); }catch(e){} } });
+    gridLayers=[];
+  }
+  function gridDraw(){
+    gridClear();
+    if(!map || !mapGridOn || !mapInited) return;
+    const c=cutPivot || map.getCenter();
+    if(!c) return;
+    // Pixels per foot, measured through Leaflet rather than assumed.
+    const p0=map.latLngToContainerPoint(c);
+    const p1=map.latLngToContainerPoint(offsetLatLng(c, 90, 100*M_PER_FT));
+    const perFt=Math.hypot(p1.x-p0.x, p1.y-p0.y)/100;
+    if(!isFinite(perFt) || perFt<=0) return;
+    let stepFt=GRID_FT[GRID_FT.length-1];
+    GRID_FT.some(q=>{ stepFt=q; return q*perFt>=42; });
+    const stepM=stepFt*M_PER_FT;
+    // Long enough to cross the viewport whichever way the cross is turned.
+    const b=map.getBounds();
+    const reach=metresBetween(b.getNorthWest(), b.getSouthEast());
+    const n=Math.ceil(reach/stepM)+2, half=n*stepM;
+    // rot is clockwise from north; the two axes are the cross's own.
+    for(let axis=0; axis<2; axis++){
+      const along = cutRot + (axis?90:0);
+      const across = along + 90;
+      for(let i=-n; i<=n; i++){
+        const mid=offsetLatLng(c, across, i*stepM);
+        const a=offsetLatLng(mid, along, -half), z=offsetLatLng(mid, along, half);
+        gridLayers.push(L.polyline([[a.lat,a.lng],[z.lat,z.lng]], {
+          className:'grid-path', interactive:false,
+          color:'#8b887f', weight: i===0 ? 1.4 : 0.8,
+          opacity: i===0 ? 0.55 : 0.3
+        }).addTo(map));
+      }
+    }
   }
 
   // ---------- sight lines ----------
@@ -5198,6 +5281,12 @@
   // zoom and drags to pan, which is the only way to get far enough out to see
   // the edges of an imported photo.
   let evViewLocked=true, evLevelsOn=false;
+  // The grid, the sketch layer and its draft stroke. Strokes live in VIEW FEET
+  // -- x along the section, y above the anchor -- which is what makes them
+  // survive a pan, a zoom, a change of exaggeration and a re-fit. Pixels would
+  // not, and lat/lng cannot express a height.
+  let evGridOn=true, evSnapOn=true, evSketchOn=false;
+  let evSketches=[], evDraft=null, evDrawing=false;
   // What a view is allowed to show:
   //   cut   -- strictly what lies beyond this view's own cut plane
   //   sight -- everything except what the HOUSE hides: a point is blocked only
@@ -5414,6 +5503,7 @@
   // Reposition only. `dragging` names the one layer under the finger, which is
   // left alone so it tracks the touch instead of being snapped back.
   function cutsRefresh(dragging){
+    if(mapGridOn) gridDraw();
     if(!cutObjs || !cutPivot) return;
     EV_SIDES.forEach(side=>{
       const g=cutEndpoints(side);
@@ -5652,9 +5742,56 @@
       line(0,y,G.W,y,'#33322a',1,null,0.9);
       text(6,y-3,(f>0?'+':'')+f+"'", '#8b887f',10,'start');
     }
+    // The vertical half of the grid: distance ALONG the section. The horizontal
+    // lines above are the elevation scale and are always drawn; these are what
+    // let you square something up, so they answer to their own button.
+    //
+    // Both run at the same spacing in FEET, which at a vertical exaggeration
+    // other than 1 means the cells are not square on screen. That is the honest
+    // way round -- the grid states real distances and the cell shape shows the
+    // exaggeration -- and it costs nothing for drawing right angles, since the
+    // two axes are perpendicular on screen whatever the scale.
+    if(evGridOn){
+      let xs=1;
+      [1,2,5,10,25,50,100].some(q=>{ xs=q; return q*G.sx>=44; });
+      const x0=Math.ceil(G.fromX(0)/xs)*xs, x1=G.fromX(G.W);
+      for(let d=x0; d<=x1; d+=xs){
+        const x=G.toX(d);
+        if(x<0 || x>G.W) continue;
+        line(x,0,x,G.H,'#33322a',1,null, Math.abs(d)<1e-9?0.95:0.75);
+        // Along the TOP: the bottom-left corner belongs to the view's note,
+        // and a distance label landing on it reads as garbled text.
+        text(x, 14, d.toFixed(0)+"'", '#8b887f', 10, 'middle');
+      }
+    }
     // the datum: the anchor, 0.00', one third up from the bottom
     line(0,G.datumY,G.W,G.datumY,'#e8c33a',2,null,0.95);
     text(6,G.datumY-5,"0.00' anchor",'#e8c33a',11,'start');
+
+    // ---- sketch strokes, in view feet ----
+    // Drawn over the grid and the images, under the survey points: an
+    // annotation should never hide the measurement it is annotating.
+    evSketches.filter(k=>k.side===side).forEach(k=>{
+      if(k.pts.length<2) return;
+      const pl=ns('polyline');
+      pl.setAttribute('points', k.pts.map(q=>G.toX(q.x)+','+G.toY(q.y)).join(' '));
+      pl.setAttribute('fill','none');
+      pl.setAttribute('stroke', k.colour||'#e8c33a');
+      pl.setAttribute('stroke-width', 3);
+      pl.setAttribute('stroke-linecap','round');
+      pl.setAttribute('stroke-linejoin','round');
+      pl.setAttribute('class','ev-sketch');
+      evSvg.appendChild(pl);
+    });
+    if(evDraft && evDraft.length>1){
+      const pl=ns('polyline');
+      pl.setAttribute('points', evDraft.map(q=>G.toX(q.x)+','+G.toY(q.y)).join(' '));
+      pl.setAttribute('fill','none'); pl.setAttribute('stroke', annoColor());
+      pl.setAttribute('stroke-width',3); pl.setAttribute('stroke-linecap','round');
+      pl.setAttribute('stroke-linejoin','round');
+      pl.setAttribute('class','ev-sketch draft');
+      evSvg.appendChild(pl);
+    }
 
     // Level lines: a horizontal read-across at each point's elevation, so you
     // can carry a measured height straight onto an imported facade photo and
@@ -5778,7 +5915,7 @@
     return {n:2, cx:(t[0].x+t[1].x)/2, cy:(t[0].y+t[1].y)/2,
             dist:Math.hypot(dx,dy)||1, ang:Math.atan2(dy,dx)*180/Math.PI};
   }
-  function evGestArmed(){ return !!evActive && (evTool==='uniform' || !evViewLocked); }
+  function evGestArmed(){ return !!evActive && !evSketchOn && (evTool==='uniform' || !evViewLocked); }
   function evGestStart(info){
     if(!evGestArmed()) return;
     if(evTool==='uniform'){
@@ -5890,6 +6027,104 @@
       evRenderSoon();
     }
   }, {passive:false});
+
+  // ---------- sketching on a section ----------
+  // The same gesture as the map's sketch, in the profile's own units. Snap puts
+  // each point on the nearest grid intersection, which turns a rough drag into
+  // an orthogonal path -- that is what makes drawing a right angle possible at
+  // arm's length, rather than something you eyeball against the lines.
+  function evGridStepX(G){
+    let q=1; [1,2,5,10,25,50,100].some(v=>{ q=v; return v*G.sx>=44; }); return q;
+  }
+  function evGridStepY(G){
+    const ftPx=G.sx*G.exag;
+    let q=1; [1,2,5,10,25,50].some(v=>{ q=v; return v*ftPx>=34; }); return q;
+  }
+  function evSnapPt(pt, G){
+    if(!evSnapOn || !evGridOn) return pt;
+    const sx=evGridStepX(G), sy=evGridStepY(G);
+    return {x:Math.round(pt.x/sx)*sx, y:Math.round(pt.y/sy)*sy};
+  }
+  function evStagePt(clientX, clientY){
+    const r=evStage.getBoundingClientRect(), G=evGeom(evActive);
+    return {x:G.fromX(clientX-r.left), y:G.fromY(clientY-r.top)};
+  }
+  function evSketchPush(clientX, clientY){
+    if(!evActive) return;
+    const G=evGeom(evActive);
+    const p=evSnapPt(evStagePt(clientX, clientY), G);
+    const last=evDraft[evDraft.length-1];
+    // Snapping lands run after run on the same intersection; keep one.
+    if(last && Math.abs(last.x-p.x)<1e-9 && Math.abs(last.y-p.y)<1e-9) return;
+    // Unsnapped, thin out the jitter instead.
+    if(!evSnapOn && last && Math.hypot((G.toX(p.x)-G.toX(last.x)), (G.toY(p.y)-G.toY(last.y)))<3) return;
+    evDraft.push(p);
+    evRenderSoon();
+  }
+  function evSketchCommit(){
+    const side=evActive;
+    const pts=evDraft; evDraft=null; evDrawing=false;
+    if(!side || !pts || pts.length<2){ evRenderSoon(); return; }
+    const rec={ id:'local-'+uuid(), remoteId:null, side:side,
+                colour:annoColor(), pts:pts };
+    evSketches.push(rec);
+    if(sessionId){
+      apiPost('/sessions/'+sessionId+'/elevation-sketches',
+        {side:side, colour:rec.colour, points:pts})
+        .then(row=>{ if(row && row.id) rec.remoteId=row.id; });
+    }
+    evRenderSoon();
+  }
+  function evSketchUndo(){
+    for(let i=evSketches.length-1;i>=0;i--){
+      if(evSketches[i].side!==evActive) continue;
+      const gone=evSketches.splice(i,1)[0];
+      if(gone.remoteId) apiDelete('/elevation-sketches/'+gone.remoteId);
+      break;
+    }
+    evRenderSoon();
+  }
+  function evSketchClear(){
+    if(!evActive) return;
+    const mine=evSketches.filter(k=>k.side===evActive);
+    if(!mine.length) return;
+    if(!confirm('Remove all '+mine.length+' stroke'+(mine.length===1?'':'s')+' from this section?')) return;
+    mine.forEach(k=>{ if(k.remoteId) apiDelete('/elevation-sketches/'+k.remoteId); });
+    evSketches=evSketches.filter(k=>k.side!==evActive);
+    evRenderSoon();
+  }
+  // Sketching owns the stage while it is on, the same way a tool does: the
+  // gesture handlers stand down (evGestArmed) so a stroke is never also a pan.
+  evStage.addEventListener('pointerdown', e=>{
+    if(!evSketchOn || !evActive || e.pointerType==='touch') return;
+    e.preventDefault(); e.stopPropagation();
+    try{ evStage.setPointerCapture(e.pointerId); }catch(_e){}
+    evDrawing=true; evDraft=[];
+    evSketchPush(e.clientX, e.clientY);
+  }, true);
+  evStage.addEventListener('pointermove', e=>{
+    if(!evDrawing || e.pointerType==='touch') return;
+    e.preventDefault(); evSketchPush(e.clientX, e.clientY);
+  }, true);
+  ['pointerup','pointercancel'].forEach(ev=>evStage.addEventListener(ev, e=>{
+    if(!evDrawing || e.pointerType==='touch') return;
+    evSketchCommit();
+  }, true));
+  evStage.addEventListener('touchstart', e=>{
+    if(!evSketchOn || !evActive || e.touches.length!==1) return;
+    e.preventDefault(); e.stopPropagation();
+    evDrawing=true; evDraft=[];
+    evSketchPush(e.touches[0].clientX, e.touches[0].clientY);
+  }, {passive:false, capture:true});
+  evStage.addEventListener('touchmove', e=>{
+    if(!evDrawing || e.touches.length!==1) return;
+    e.preventDefault(); evSketchPush(e.touches[0].clientX, e.touches[0].clientY);
+  }, {passive:false, capture:true});
+  ['touchend','touchcancel'].forEach(ev=>evStage.addEventListener(ev, e=>{
+    if(!evDrawing) return;
+    if(e.touches && e.touches.length) return;
+    evSketchCommit();
+  }, {capture:true}));
 
   // ---------- dragging the image corners ----------
   function evCornersOf(side, slot){
@@ -6175,6 +6410,7 @@
   function evClose(){
     if(splitOn && evActive){ setSplit(false); return; }
     evActive=null; evTool=null; evGest=null;
+    evSketchOn=false; evDrawing=false; evDraft=null;
     elevPanel.classList.remove('show');
     panelsSync();               // ...and go back to the map with you
     if(map) requestAnimationFrame(()=>{ try{ map.invalidateSize({pan:false}); }catch(e){} });
@@ -6214,6 +6450,14 @@
         ? 'Unlock to pinch the scale and drag the anchor line'
         : 'Pinch to zoom, drag to pan — the vertical drag moves the anchor line');
     evLevels.classList.toggle('active', evLevelsOn);
+    evGridBtn.classList.toggle('active', evGridOn);
+    evSketchBtn.classList.toggle('active', evSketchOn);
+    evSketchBar.classList.toggle('show', evSketchOn);
+    evSnapBtn.classList.toggle('active', evSnapOn && evGridOn);
+    evSnapBtn.disabled = !evGridOn;
+    evSnapBtn.title = evGridOn ? 'Put every point on the nearest grid intersection'
+                               : 'Turn the grid on to snap to it';
+    [...evSwatches.children].forEach((b,i)=>b.classList.toggle('on', i===annoColorIdx));
     // With exaggeration switched off in Settings the slider would be a control
     // that changes nothing, so it goes away rather than sitting there inert.
     const veOn = prefs.vertExag!==false;
@@ -6249,6 +6493,27 @@
   evPlanBtn.addEventListener('click', ()=>{ evSlot='plan';  evSyncTabs(); evFile.click(); });
   evPhotoBtn.addEventListener('click', ()=>{ evSlot='photo'; evSyncTabs(); evFile.click(); });
   evLevels.addEventListener('click', ()=>{ evLevelsOn=!evLevelsOn; evSyncTabs(); evRender(); });
+  evGridBtn.addEventListener('click', ()=>{ evGridOn=!evGridOn; evSyncTabs(); evRender(); });
+  evSketchBtn.addEventListener('click', ()=>{
+    evSketchOn=!evSketchOn;
+    // One thing owns the stage: sketching stands the image tools and the
+    // unlocked view down, exactly as they stand each other down.
+    if(evSketchOn){ evTool=null; evViewLocked=true; }
+    if(!evSketchOn){ evDrawing=false; evDraft=null; }
+    evSyncTabs(); evRender();
+  });
+  evDoneSketch.addEventListener('click', ()=>{
+    evSketchOn=false; evDrawing=false; evDraft=null; evSyncTabs(); evRender();
+  });
+  evSnapBtn.addEventListener('click', ()=>{ evSnapOn=!evSnapOn; evSyncTabs(); });
+  evUndoBtn.addEventListener('click', evSketchUndo);
+  evClearSketch.addEventListener('click', evSketchClear);
+  ANNO_COLORS.forEach((col,i)=>{
+    const b=document.createElement('button');
+    b.style.background=col; b.title=col;
+    b.addEventListener('click', ()=>{ annoColorIdx=i; evSyncTabs(); });
+    evSwatches.appendChild(b);
+  });
   evXray.addEventListener('click', ()=>{
     evMode = EV_MODES[(EV_MODES.indexOf(evMode)+1) % EV_MODES.length];
     evSyncTabs(); evRender();
@@ -6326,7 +6591,8 @@
   // ---------- review / adjust on the map ----------
   function elevReset(){
     elevClearLayers();
-    elevPoints=[]; elevShots=[]; elevSlopes=[];
+    elevPoints=[]; elevShots=[]; elevSlopes=[]; evSketches=[];
+    evDraft=null; evDrawing=false; evSketchOn=false;
     elevActiveObs=null; elevSelected=null; inspectClose();
     evClose(); cutsClear(); cutsOn=false; cutLocked=false;
     cutPivot=null; cutRot=0; cutOffsets={north:0, south:0, east:0, west:0}; evViews={};

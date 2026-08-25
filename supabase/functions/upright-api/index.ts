@@ -211,7 +211,7 @@ Deno.serve(async (req) => {
     // GET /sessions/:id
     if (req.method === "GET" && parts.length === 2 && parts[0] === "sessions") {
       const sessionId = parts[1];
-      const [{ data: session, error: sErr }, { data: clips }, { data: photos }, { data: sketches }, { data: measures }, { data: elevPoints }, { data: elevShots }, { data: elevSlopes }, { data: elevViews }] =
+      const [{ data: session, error: sErr }, { data: clips }, { data: photos }, { data: sketches }, { data: measures }, { data: elevPoints }, { data: elevShots }, { data: elevSlopes }, { data: elevViews }, { data: elevSketches }] =
         await Promise.all([
           supabase.from("upright_sessions").select("*, properties(id,address,latitude,longitude)").eq("id", sessionId).single(),
           supabase.from("upright_clips").select("*").eq("session_id", sessionId).order("start_offset_ms"),
@@ -222,6 +222,7 @@ Deno.serve(async (req) => {
           supabase.from("upright_elevation_shots").select("*").eq("session_id", sessionId).order("created_at"),
           supabase.from("upright_elevation_slopes").select("*").eq("session_id", sessionId).order("created_at"),
           supabase.from("upright_elevation_views").select("*").eq("session_id", sessionId),
+          supabase.from("upright_elevation_sketches").select("*").eq("session_id", sessionId).order("created_at"),
         ]);
       if (sErr || !session) return err("session not found", 404);
       const prop = firstOf<{ id: number; address: string }>((session as Record<string, unknown>).properties);
@@ -240,6 +241,7 @@ Deno.serve(async (req) => {
         })),
         elevationShots: elevShots || [],
         elevationSlopes: elevSlopes || [],
+        elevationSketches: elevSketches || [],
         elevationViews: (elevViews || []).map((v) => ({
           ...v,
           planUrl: v.plan_storage_path ? publicUrl(v.plan_storage_path) : null,
@@ -398,6 +400,30 @@ Deno.serve(async (req) => {
         return err(error.message, 500);
       }
       return json(row);
+    }
+
+    // POST /sessions/:id/elevation-sketches  { side, colour, points }
+    // points are view feet -- x along the section, y above the anchor -- so the
+    // stroke is stored in the same units the profile is plotted in and survives
+    // any pan, zoom or change of vertical exaggeration.
+    if (req.method === "POST" && parts.length === 3 && parts[0] === "sessions" && parts[2] === "elevation-sketches") {
+      const sessionId = parts[1];
+      const body = await req.json();
+      if (!["north", "south", "east", "west"].includes(body.side)) return err("side must be north|south|east|west");
+      if (!Array.isArray(body.points) || body.points.length < 2) return err("points must have at least two entries");
+      const { data: row, error } = await supabase.from("upright_elevation_sketches").insert({
+        session_id: sessionId, side: body.side,
+        colour: body.colour ?? null, points: body.points,
+      }).select().single();
+      if (error) return err(error.message, 500);
+      return json(row);
+    }
+
+    // DELETE /elevation-sketches/:id
+    if (req.method === "DELETE" && parts.length === 2 && parts[0] === "elevation-sketches") {
+      const { error } = await supabase.from("upright_elevation_sketches").delete().eq("id", parts[1]);
+      if (error) return err(error.message, 500);
+      return json({ ok: true, deleted: parts[1] });
     }
 
     // DELETE /elevation-slopes/:id
