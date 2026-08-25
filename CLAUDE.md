@@ -555,6 +555,23 @@ Flow arrows come from `triFlow()`: a triangle is a plane, so it has exactly one
 downhill direction and one slope. Under 0.5% it draws a hollow ring instead of
 an arrow, which is the useful signal — that is where it ponds.
 
+**The arrow glyph points UP at rotation 0**, because `bear` is a compass bearing
+and `rotate(0)` has to mean north. SVG y grows *downward*, so the arrowhead's
+apex is the SMALLEST y. It shipped drawn the other way up and rendered exactly
+180° out — every arrow pointing uphill, which is entirely plausible-looking and
+the worst kind of wrong.
+
+**That is the lesson worth keeping: the maths was verified and the rendering was
+not.** `triFlow()`'s bearing was right to 3.4e-13° the whole time; the glyph
+undid it. Numeric tests over a known plane cannot see a glyph, so `test54.js`
+reads the direction off the RENDERED element — the vector from the glyph's own
+box centre to the centre of its filled arrowhead, post-transform — and checks it
+against the contour labels, which carry their own heights. Note what would NOT
+have caught it: the perpendicularity check passes either way round, because a
+reversed arrow still crosses the contours at 90°. It needed a check with a sign
+in it. Against the broken build that test reports a dot product of −0.955 where
+it should be +0.955.
+
 **The maths is verified numerically, not by eye** (`test52.js`, no browser).
 Over a known plane the contour vertices land on their own level to **3.6e-15 ft**,
 every triangle reports the same downhill bearing to **3.4e-13°**, and the

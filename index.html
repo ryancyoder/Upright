@@ -5169,9 +5169,14 @@
           className:'', iconSize:[0,0], iconAnchor:[0,0],
           html:'<div class="surf-flow" style="--r:'+bear.toFixed(1)+'deg;--o:'
              + (0.35+0.65*Math.min(1,pct/12)).toFixed(2)+'">'
+             // POINTS UP at rotation 0, because `bear` is a compass bearing and
+             // rotate(0) has to mean north. SVG y grows DOWNWARD, so the head's
+             // apex is the SMALLEST y. Drawn the other way up, as this was, the
+             // arrow renders exactly 180 degrees out -- pointing uphill, which
+             // looks entirely plausible and is the worst kind of wrong.
              + '<svg viewBox="0 0 12 30" width="12" height="30">'
-             + '<path d="M6 2 L6 24" stroke="#63b3e8" stroke-width="2" fill="none"/>'
-             + '<path d="M2 20 L6 28 L10 20 Z" fill="#63b3e8"/></svg></div>'
+             + '<path d="M6 28 L6 6" stroke="#63b3e8" stroke-width="2" fill="none"/>'
+             + '<path d="M2 10 L6 2 L10 10 Z" fill="#63b3e8"/></svg></div>'
         })}).addTo(map));
       });
     }
