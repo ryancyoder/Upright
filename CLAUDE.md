@@ -47,7 +47,8 @@ Endpoints under `/functions/v1/upright-api`:
 `POST /sessions`, `GET /sessions` (history list), `GET /sessions/:id`,
 `PATCH /sessions/:id` (assign property), `GET /properties` (address picker),
 `POST /sessions/:id/audio|clips|photos|sketches|measures|plan`,
-`POST /sessions/:id/elevation-points|elevation-shots`,
+`POST /sessions/:id/elevation-points|elevation-shots` (a shot carries
+`headingDeg`/`headingAccDeg` — evidence, never input),
 `POST /sessions/:id/elevation-slopes`, `DELETE /elevation-slopes/:id`,
 `PATCH /sessions/:id/elevation-views/:side`,
 `POST|DELETE /sessions/:id/elevation-views/:side/plan|photo`,
@@ -63,7 +64,7 @@ Secrets — NOT Vault, and NOT Vercel env vars; neither reaches the function).
 If editing the function, pull current source with `Supabase:get_edge_function`
 rather than reconstructing it. The source is now vendored at
 `supabase/functions/upright-api/index.ts` so edits are diffable; keep it in
-step with what is deployed. Currently **v18**.
+step with what is deployed. Currently **v19**.
 
 **Replacing an image writes a NEW storage path, never an upsert in place.**
 Storage public URLs are cached by the browser and by the CDN in front of the
@@ -796,8 +797,59 @@ GPS has a fix, in which case it sits on the Hebron fallback tens of km away —
 which used to park freshly shot pins off-screen where they could not be
 dragged. Recentring is first-fix-only so it can never yank the view later.
 
-No compass is needed — bearings come from map geometry, which sidesteps iOS
-compass calibration entirely.
+No compass is needed for any measurement — bearings come from map geometry,
+which sidesteps iOS compass calibration entirely. What the compass *is* used
+for, strictly as evidence, is below.
+
+### The compass, as evidence
+
+The rule is unchanged and load-bearing: **no elevation is ever computed from
+the compass.** Distance comes from where the pins sit, angle from the tilt
+sensor. A recorded heading buys two things the maths cannot give you on its
+own, and a bad compass makes both worse without making any measurement wrong.
+
+**The sight line.** Every shot stores the heading it was taken at
+(`upright_elevation_shots.heading_deg`, plus iOS's own
+`webkitCompassAccuracy`). An unplaced pin is therefore constrained to a ray out
+of its observation, drawn dashed on the map — placing it becomes one question,
+*how far along this line*, instead of two. The ray disappears once the pin is
+placed.
+
+**The bearing cross-check.** Once a pin is placed, the bearing it now implies
+can be compared with the bearing its shot was actually taken at. Until now the
+only real check on a misplaced pin was shooting the same target from a second
+observation, which is why a single-observation point is labelled *unverified*;
+this is a second, independent check for the cost of one column.
+
+The useful part is the pattern, not the number:
+
+- A **consistent** offset across a set is the compass being out — declination
+  it failed to apply, a phone case, a calibration it never did. Harmless, and
+  subtracted. `headingDeltas()` collects them and `medianAngle()` takes the
+  middle one.
+- A **single** point disagreeing with its own set is a pin in the wrong place.
+  Beyond `HEADING_FLAG_DEG` (15°) it is flagged: the survey pill names it
+  without anything being opened, the inspector says the pin is the likely
+  fault, and the sight line comes *back* in red — so you can see where the shot
+  pointed and where the pin actually is.
+- **Three sightings** is the minimum that can tell those two apart. Below it
+  the raw figure is reported with no verdict, rather than a verdict being
+  invented.
+
+The median is taken about the circular mean so it survives the wrap at ±180°
+and still ignores an outlier — which is the entire point, since the outlier is
+the thing being hunted.
+
+Note the check only ever speaks about **bearing**. Sliding a pin further out
+along its own ray is a distance error and it stays quiet, correctly: distance
+is what the two-observation cross-check catches.
+
+**`compassBearing()` is deliberately not called `bearingDeg()`.** That name was
+already taken by the *screen* bearing the slope arrows are drawn at, and since
+both are function declarations the later one silently wins. The collision cost
+an hour: every check still came out right, because the two differ by a constant
+90° and the set's median offset absorbed it, but the reported figure was
+nonsense.
 
 ## Elevation view (branch `claude/elevation-view`)
 
@@ -1016,6 +1068,9 @@ sketch, so this is the fire-and-forget write model showing up in real data,
 not just abandoned starts.
 
 **Not yet built**
+- More of the compass ideas: a heading-up map (cheap now the rotation
+  machinery exists), auto-selecting the section you are standing in front of,
+  squaring the cuts to a wall by pointing at it, and view cones on photo pins.
 - ZIP export of an *archived* session. The export reads `pin.photo` as a
   data URL and `clip.blob`, both of which are URLs in archive mode. Not
   currently reachable (the done panel isn't part of the archive flow) but it
@@ -1060,7 +1115,13 @@ not just abandoned starts.
   annoying, and whether tapping your own standing position on the plan is as
   easy in a yard as it is at a desk.
 - Whether the two-observation cross-check actually catches bad pins in
-  practice, since that is the only real accuracy signal in the system.
+  practice. It is no longer the *only* accuracy signal — the bearing
+  cross-check is a second one — but it is still the only one that catches a
+  distance error.
+- The bearing cross-check against a real compass: whether iOS's heading is
+  steady enough for `HEADING_FLAG_DEG` (15°) to catch real mistakes without
+  crying wolf, and whether a set's median offset really is as consistent as the
+  method assumes once you have walked around a yard with a metal-cased iPad.
 - Plan persistence against a real plan photo on the iPad: whether the upload
   size is sensible over cellular, and whether a restored plan lands exactly
   where it was left.

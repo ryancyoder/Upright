@@ -361,6 +361,10 @@ Deno.serve(async (req) => {
         session_id: sessionId, observation_id: body.observationId, point_id: body.pointId,
         angle_deg: body.angleDeg, angle_spread_deg: body.angleSpreadDeg ?? null,
         distance_m: body.distanceM ?? null,
+        // Evidence, not input: the heading feeds the sight line and the bearing
+        // cross-check. No elevation is ever computed from it.
+        heading_deg: body.headingDeg ?? null,
+        heading_acc_deg: body.headingAccDeg ?? null,
       }).select().single();
       if (error) return err(error.message, 500);
       return json(row);

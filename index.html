@@ -453,6 +453,7 @@
   }
   .elev-bar.show{display:flex;}
   .elev-status{font-size:12.5px; line-height:1.35; color:var(--ink); min-width:0;}
+  .elev-status .warn{color:var(--live);}
   .elev-actions{display:flex; gap:6px; align-items:center; flex:0 0 auto;}
   .elev-bar .mt-btn{padding:5px 13px; border-radius:999px; font-size:12px;}
   .mt-btn.go{border-color:var(--flat);}
@@ -2480,7 +2481,8 @@
     }));
     elevShots=(data.elevationShots||[]).map(sh=>({
       id:sh.id, remoteId:sh.id, observationId:sh.observation_id, pointId:sh.point_id,
-      angleDeg:sh.angle_deg, angleSpreadDeg:sh.angle_spread_deg, distanceM:sh.distance_m
+      angleDeg:sh.angle_deg, angleSpreadDeg:sh.angle_spread_deg, distanceM:sh.distance_m,
+      headingDeg:sh.heading_deg, headingAccDeg:sh.heading_acc_deg
     }));
     elevSlopes=(data.elevationSlopes||[]).map(sl=>({
       id:sl.id, remoteId:sl.id, fromId:sl.from_point_id, toId:sl.to_point_id, layers:null
@@ -3543,7 +3545,11 @@
                   + (mine.length>1 && spread!=null ? ' · ±'+spread.toFixed(2)+'°' : ''))
               + piRow('Hand steadiness', sp.length ? '±'+mean(sp).toFixed(2)+'°' : null)
               + piRow('Distance', (obs.placed && pt.placed)
-                  ? piFt(metresBetween(obs,pt)) : '<span class="warn">place both pins</span>');
+                  ? piFt(metresBetween(obs,pt)) : '<span class="warn">place both pins</span>')
+              + piRow('Shot heading', (()=>{
+                  const h=shotHeading(obs.id, pt.id);
+                  return h==null ? null : h.toFixed(0)+'\u00b0';
+                })());
       });
       if(!shots) shots='<div class="pi-group">Sightings</div>'
                      + '<div class="pi-sub">Not shot from anywhere yet.</div>';
@@ -3562,7 +3568,45 @@
     }
 
     delete piBody.dataset.pin;      // so coming back to a photo pin rebuilds its note
-    piBody.innerHTML = head + shots
+    // The bearing cross-check. Reported, never acted on: it can say a pin looks
+    // wrong, it can never move one, and it never touches the elevation.
+    let check='';
+    if(!isObs){
+      const ck=bearingCheck(pt.id);
+      if(ck && ck.residual!=null){
+        const r=Math.abs(ck.residual);
+        check = '<div class="pi-group">Bearing check</div>'
+          + piRow('Against its set', (ck.flagged?'<span class="warn">':'<span>')
+              + r.toFixed(0)+'\u00b0 off</span>')
+          + piRow('Set\u2019s own offset', (ck.offset>=0?'+':'')+ck.offset.toFixed(0)
+              +'\u00b0 over '+ck.n+' sightings')
+          + '<div class="pi-sub">'+(ck.flagged
+              ? '<span class="warn">This pin points somewhere the shot did not.</span> '
+                + 'The rest of the set agrees with the compass, so it is the pin that '
+                + 'is likely in the wrong place, not the compass.'
+              : 'The bearing this pin now implies matches the one it was shot at, '
+                + 'allowing for however far out the compass is across the whole set.')
+          + '</div>';
+      } else if(ck){
+        check = '<div class="pi-group">Bearing check</div>'
+          + piRow('From the sighting', (ck.delta>=0?'+':'')+ck.delta.toFixed(0)+'\u00b0')
+          + '<div class="pi-sub">Three sightings from one position are needed before a '
+          + 'compass that is out can be told apart from a pin in the wrong place. '
+          + 'Until then this is the raw figure, not a verdict.</div>';
+      }
+    } else {
+      const all=headingDeltas(pt.id);
+      const med=all.length>=3 ? medianAngle(all.map(d=>d.delta)) : null;
+      if(med!=null){
+        check = '<div class="pi-group">Compass</div>'
+          + piRow('Offset here', (med>=0?'+':'')+med.toFixed(0)+'\u00b0 over '+all.length+' sightings')
+          + '<div class="pi-sub">How far this position\u2019s compass readings sit from the '
+          + 'bearings the map implies. A steady offset is the compass, and is subtracted '
+          + 'before any pin is judged; it changes no measurement.</div>';
+      }
+    }
+
+    piBody.innerHTML = head + shots + check
       + '<div class="pi-group">Position</div>'
       + piRow('Coordinates', piCoords(pt))
       + piRow('Pin', pt.placed ? 'placed' : '<span class="warn">still to place</span>')
@@ -4058,7 +4102,11 @@
   // measurement, and the UI says so rather than showing a number.
   let elevPoints=[], elevShots=[];
   let elevSurveyOn=false, elevActiveObs=null, elevSelected=null;
-  let gradeOn=false, gradeObsId=null, gradeArmed=true, dwellStart=0, lastHeading=null;
+  let gradeOn=false, gradeObsId=null, gradeArmed=true, dwellStart=0;
+  // The compass, recorded as EVIDENCE and never as input. iOS reports a true
+  // heading (it applies declination itself) and an accuracy in degrees, which
+  // goes negative when the device considers the compass unusable.
+  let lastHeading=null, lastHeadingAcc=null;
   let gradeResuming=false, gradeReshootId=null, gradeAnchorBaseline=null, gradeNote='', lastShotAngle=null;
   let elevSlopes=[], slopeArming=false, slopeFirstId=null;
   // How far a resumed set's fresh anchor shot may differ from the one already
@@ -4161,7 +4209,144 @@
          + '</svg>';
   }
 
+  // ---------- the compass, as evidence ----------
+  // Settled rule, unchanged: no elevation is EVER computed from the compass.
+  // Distance comes from where the pins sit and angle from the tilt sensor, and
+  // both stay that way. What a recorded heading buys is two things the maths
+  // cannot give you on its own:
+  //
+  //   the sight line -- an unplaced pin is constrained to a ray out of its
+  //   observation, so placing it is one question (how far?) instead of two;
+  //   the cross-check -- once placed, the bearing the pin now implies can be
+  //   compared with the bearing the shot was actually taken at.
+  //
+  // A bad compass therefore makes the hint worse and the check noisier. It
+  // cannot make a measurement wrong.
+  const HEADING_FLAG_DEG=15;      // beyond this residual, the pin is suspect
+  const SIGHT_LINE_M=Math.max(40, PROVISIONAL_M*4);
+
+  function wrap180(d){ return ((d+180)%360+360)%360-180; }
+  function meanAngle(list){
+    if(!list.length) return null;
+    const x=list.reduce((a,d)=>a+Math.cos(rad(d)),0);
+    const y=list.reduce((a,d)=>a+Math.sin(rad(d)),0);
+    if(!x && !y) return null;
+    return (Math.atan2(y,x)*180/Math.PI+360)%360;
+  }
+  // Median about the circular mean, so it survives the wrap at ±180 and still
+  // ignores an outlier -- which is the entire point, since the outlier is the
+  // thing we are hunting.
+  function medianAngle(list){
+    const c=meanAngle(list);
+    if(c==null) return null;
+    const rel=list.map(d=>wrap180(d-c)).sort((a,b)=>a-b);
+    const n=rel.length;
+    const m = n%2 ? rel[(n-1)/2] : (rel[n/2-1]+rel[n/2])/2;
+    return wrap180(c+m);
+  }
+  // Degrees clockwise from TRUE NORTH, a -> b. Flat-earth like everything else
+  // here; sub-centimetre at site scale.
+  //
+  // Deliberately not called bearingDeg(): that name is already taken further
+  // down by the SCREEN bearing the slope arrows are drawn at, and since both
+  // are function declarations the later one silently wins. The collision cost
+  // an hour -- every check still came out right, because the two differ by a
+  // constant 90 degrees and the set's median offset absorbed it, but the
+  // reported figure was nonsense.
+  function compassBearing(a, b){
+    const mLat=111320, mLng=111320*Math.cos(rad((a.lat+b.lat)/2));
+    const n=(b.lat-a.lat)*mLat, e=(b.lng-a.lng)*mLng;
+    if(!n && !e) return null;
+    return (Math.atan2(e, n)*180/Math.PI+360)%360;
+  }
+  function offsetLatLng(from, bearing, metres){
+    const b=rad(bearing);
+    return L.latLng(from.lat + metres*Math.cos(b)/111320,
+                    from.lng + metres*Math.sin(b)/(111320*Math.cos(rad(from.lat))));
+  }
+  // The heading this point was sighted at from a given observation.
+  function shotHeading(obsId, pointId){
+    const hs=elevShots.filter(x=>x.observationId===obsId && x.pointId===pointId
+                              && x.headingDeg!=null);
+    return hs.length ? meanAngle(hs.map(x=>x.headingDeg)) : null;
+  }
+  function firstSightingObs(pointId){
+    for(const sh of elevShots){
+      if(sh.pointId===pointId && sh.headingDeg!=null) return elevPoint(sh.observationId);
+    }
+    return null;
+  }
+  // Every placed point this observation sighted, and how far its shot heading
+  // sits from the bearing the map now implies.
+  function headingDeltas(obsId){
+    const obs=elevPoint(obsId);
+    if(!obs || !obs.placed) return [];
+    const out=[];
+    elevPoints.forEach(pt=>{
+      if(pt.kind==='observation' || !pt.placed || isHidden(pt)) return;
+      const h=shotHeading(obsId, pt.id);
+      const b=(h==null) ? null : compassBearing(obs, pt);
+      if(h==null || b==null) return;
+      out.push({id:pt.id, delta:wrap180(h-b)});
+    });
+    return out;
+  }
+  // A CONSISTENT offset across a set is the compass being out -- declination it
+  // failed to apply, a phone case, a calibration it never did. Harmless, and
+  // subtracted. A SINGLE point disagreeing with its own set is the interesting
+  // case: that is a pin in the wrong place. Three sightings is the minimum that
+  // can tell those two apart, and below it the raw figure is reported without a
+  // verdict rather than a verdict being invented.
+  function bearingCheck(pointId){
+    const pt=elevPoint(pointId);
+    if(!pt || pt.kind==='observation' || !pt.placed) return null;
+    const obs=firstSightingObs(pointId);
+    if(!obs || !obs.placed) return null;
+    const all=headingDeltas(obs.id);
+    const mine=all.find(d=>d.id===pointId);
+    if(!mine) return null;
+    const med = all.length>=3 ? medianAngle(all.map(d=>d.delta)) : null;
+    const residual = (med==null) ? null : wrap180(mine.delta-med);
+    return {obs:obs, delta:mine.delta, offset:med, residual:residual, n:all.length,
+            flagged: residual!=null && Math.abs(residual)>HEADING_FLAG_DEG};
+  }
+
+  // ---------- sight lines ----------
+  // Drawn for a pin that is not placed yet (here is the ray it lies on -- slide
+  // it along) and for a placed pin whose bearing disagrees with its own set
+  // (here is where the shot said it was, and there is where you put it).
+  let sightLayers=[];
+  function sightClear(){
+    sightLayers.forEach(l=>{ if(map){ try{ map.removeLayer(l); }catch(e){} } });
+    sightLayers=[];
+  }
+  function sightDraw(){
+    sightClear();
+    if(!map || !elevSurveyOn) return;
+    elevPoints.forEach(pt=>{
+      if(pt.kind==='observation' || isHidden(pt)) return;
+      const obs=firstSightingObs(pt.id);
+      if(!obs) return;
+      const h=shotHeading(obs.id, pt.id);
+      if(h==null) return;
+      let colour, opacity;
+      if(!pt.placed){ colour=(pt.kind==='anchor'?ANCHOR_SIGHT:TARGET_SIGHT); opacity=0.5; }
+      else {
+        const ck=bearingCheck(pt.id);
+        if(!ck || !ck.flagged) return;
+        colour='#c4432b'; opacity=0.9;
+      }
+      const end=offsetLatLng(obs, h, SIGHT_LINE_M);
+      // className so the tests -- and anything else reading the overlay pane --
+      // can tell a sight line from a cut, a slope or the GPS accuracy circle.
+      sightLayers.push(L.polyline([[obs.lat,obs.lng],[end.lat,end.lng]],
+        {color:colour, weight:2, opacity:opacity, dashArray:'6 8',
+         className:'sight-path', interactive:false}).addTo(map));
+    });
+  }
+
   function elevClearLayers(){
+    sightClear();
     elevPoints.forEach(p=>{
       if(p.marker && map){ try{ map.removeLayer(p.marker); }catch(e){} }
       p.marker=null;
@@ -4329,6 +4514,7 @@
       pt.marker=m;
     });
     drawSlopes();
+    sightDraw();
   }
 
   // Arming turns the next two pin taps into a slope run instead of an
@@ -4373,9 +4559,16 @@
       return;
     }
     const unplaced=elevPoints.filter(p=>!p.placed).length;
+    const suspect=elevPoints.filter(p=>{
+      const ck=(p.kind!=='observation' && p.placed) ? bearingCheck(p.id) : null;
+      return ck && ck.flagged;
+    });
     const sel=elevPoint(elevSelected);
     let msg;
     if(unplaced) msg='<b>'+unplaced+' pin'+(unplaced===1?'':'s')+' still to place</b> — tap a pin for its photo, then drag it where it belongs';
+    else if(suspect.length) msg='<b class="warn">'+suspect.map(p=>p.label).join(', ')
+      +'</b> — off the bearing '+(suspect.length===1?'it was':'they were')+' shot at. '
+      +'The dashed line is where the shot pointed.';
     else if(sel){
       const e=elevationOf(sel.id);
       msg='<b>'+sel.label+'</b> — '+fmtElev(e)+(elevConfidence(e)?' · '+elevConfidence(e):'');
@@ -4604,7 +4797,8 @@
       sh.sending=true;
       apiPost('/sessions/'+sessionId+'/elevation-shots', {
         observationId:obs.remoteId, pointId:pt.remoteId,
-        angleDeg:sh.angleDeg, angleSpreadDeg:sh.angleSpreadDeg, distanceM:sh.distanceM
+        angleDeg:sh.angleDeg, angleSpreadDeg:sh.angleSpreadDeg, distanceM:sh.distanceM,
+        headingDeg:sh.headingDeg, headingAccDeg:sh.headingAccDeg
       }).then(row=>{ sh.sending=false; if(row && row.id) sh.remoteId=row.id; });
     });
   }
@@ -4670,7 +4864,8 @@
     else pt=elevAddPoint('target', provisionalLatLng(obs, elevPoints.length), false, null, obs.id);
 
     const shot={ id:'local-'+uuid(), observationId:obs.id, pointId:pt.id,
-                 angleDeg:angle, angleSpreadDeg:spread, distanceM:null };
+                 angleDeg:angle, angleSpreadDeg:spread, distanceM:null,
+                 headingDeg:lastHeading, headingAccDeg:lastHeadingAcc };
     elevShots.push(shot);
 
     // The burned-in crosshair matches the sight the shot was taken through,
@@ -6447,7 +6642,10 @@
     // Heading is a PLACEMENT HINT ONLY -- it parks a just-shot pin roughly the
     // right way round to shorten the drag. It never enters the elevation maths,
     // so iOS compass calibration cannot corrupt a measurement.
-    if(typeof evt.webkitCompassHeading==='number' && !isNaN(evt.webkitCompassHeading)) lastHeading=evt.webkitCompassHeading;
+    if(typeof evt.webkitCompassHeading==='number' && !isNaN(evt.webkitCompassHeading)){
+      lastHeading=evt.webkitCompassHeading;
+      lastHeadingAcc = (typeof evt.webkitCompassAccuracy==='number') ? evt.webkitCompassAccuracy : null;
+    }
     else if(typeof evt.alpha==='number' && evt.absolute) lastHeading=(360-evt.alpha)%360;
     tiltSamples.push({t:Date.now(), angle:tilt-90});
     if(tiltSamples.length>240) tiltSamples.splice(0, tiltSamples.length-240);
