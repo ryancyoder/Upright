@@ -55,6 +55,14 @@
   .end-btn.show{display:block;}
 
   .stage{flex:1 1 auto; position:relative; background:#000; min-height:0;}
+  /* Split screen: the section on top, the site map underneath, one above the
+     other because that is the way a section and its plan are read on paper.
+     Both panels are already `position:absolute; inset:0`, so splitting them is
+     two overrides and a rule. */
+  .stage.split .elev-panel{bottom:50%; border-bottom:2px solid var(--line);}
+  .stage.split .mapwrap{top:50%;}
+  .stage.split .film-strip{max-height:120px;}
+  .stage.split .elev-panel .ev-note{font-size:10px;}
   video{width:100%; height:100%; object-fit:cover; display:block;}
 
   .tilt-readout{
@@ -112,7 +120,37 @@
   .mapwrap.show{display:flex;}
   .mapwrap.insp{--insp-w:min(300px, 34%);}
   .map-row{flex:1 1 auto; min-height:0; display:flex;}
-  #map{flex:1 1 auto; min-width:0; min-height:0; background:#0a0a08;}
+  .map-clip{flex:1 1 auto; min-width:0; min-height:0; position:relative; overflow:hidden;}
+  #map{width:100%; height:100%; background:#0a0a08;}
+  /* Rotated: the Leaflet container is over-sized so its corners still cover the
+     clip once turned, absolutely placed and spun about its own centre. Nothing
+     below is applied while the rotation is off, so every existing path runs on
+     untouched Leaflet. */
+  .map-clip.rot #map{position:absolute; left:50%; top:50%;}
+  /* Counter-rotate the LABELS so the numbers stay level while the map turns.
+     The icon element is what Leaflet positions (translate3d), so this has to go
+     on its child -- and it has to REPEAT that child's own transform, because a
+     `transform` declaration replaces, it does not compose. Dropping the
+     translate(-50%,-50%) here shifted every pin by half its own label and made
+     a dragged pin appear to move in a direction it had not: exactly the sort of
+     wrong-by-a-bit that a survey cannot afford. Named classes only, for the same
+     reason -- a blanket `> *` would silently clobber whatever the next divIcon
+     brings with it. A default <img> photo pin has no child and simply leans;
+     its tip stays exactly on its own coordinate. */
+  .map-clip.rot .elev-pin,
+  .map-clip.rot .slope-label{
+    transform:translate(-50%,-50%) rotate(var(--maprot-inv, 0deg));
+  }
+  .map-clip.rot .measure-label{
+    transform:rotate(var(--maprot-inv, 0deg));
+  }
+  .map-clip.rot .leaflet-control-container{display:none;}
+  .map-attrib{
+    position:absolute; right:4px; bottom:2px; z-index:800;
+    font-size:10px; color:var(--dim); pointer-events:none;
+    text-shadow:0 1px 3px rgba(0,0,0,0.9); display:none;
+  }
+  .map-clip.rot .map-attrib{display:block;}
 
   /* Pin inspector -- the map view's left column.
      A Leaflet popup is anchored to the pin it describes, so the one moment you
@@ -547,6 +585,13 @@
     border-radius:6px; border:2px solid #fff; background:rgba(201,162,39,0.92);
     box-shadow:0 1px 6px rgba(0,0,0,0.6); touch-action:none;
   }
+  /* Stretch's corner: square, so it never reads as Distort's round one, and in
+     the same gold as its edge bars. */
+  .ev-box{
+    position:absolute; width:24px; height:24px; margin:-12px 0 0 -12px;
+    border-radius:4px; border:2px solid #fff; background:rgba(201,162,39,0.92);
+    box-shadow:0 1px 6px rgba(0,0,0,0.6); touch-action:none;
+  }
   .ev-note{
     position:absolute; left:12px; bottom:10px;
     font-size:11px; color:var(--dim); pointer-events:none;
@@ -901,7 +946,7 @@
     </div>
   </header>
 
-  <div class="stage">
+  <div class="stage" id="stage">
     <video id="live" autoplay playsinline muted></video>
     <div class="tilt-readout" id="tiltReadout"></div>
     <div class="gps-readout" id="gpsReadout"></div>
@@ -963,7 +1008,10 @@
           </div>
           <div class="pi-body" id="piBody"></div>
         </aside>
-        <div id="map"></div>
+        <div class="map-clip" id="mapClip">
+          <div id="map"></div>
+          <div class="map-attrib">Imagery &copy; Esri</div>
+        </div>
       </div>
       <div class="mode-bar" id="modeBar">
         <span class="mode-msg" id="modeMsg"></span>
@@ -996,6 +1044,7 @@
         <button class="mt-btn" id="measureBtn">Measure</button>
         <button class="mt-btn" id="elevBtn">Elevation</button>
         <button class="mt-btn" id="cutsBtn">Section cuts</button>
+        <button class="mt-btn" id="splitBtn">Split</button>
         <button class="mt-btn" id="panelsMapBtn">Preview</button>
         <button class="mt-btn" id="stripMapBtn">Filmstrip</button>
         <button class="mt-btn" id="lockExtentBtn">Lock extent</button>
@@ -1153,6 +1202,17 @@
           </div>
           <button class="pref-switch" id="prefFilmstrip" role="switch"><i></i></button>
         </div>
+        <div class="pref-row">
+          <div class="pref-main">
+            <div class="pref-title">Split screen in portrait</div>
+            <div class="pref-sub">Stand the iPad on its end while the map is up and the screen
+              splits: the section on top, the site plan underneath, <b>turned to face that
+              section</b>. Slide a pin left or right down there and it moves the same way up
+              here. Turn the iPad back and it closes. The <b>Split</b> button in the map
+              toolbar does the same thing by hand.</div>
+          </div>
+          <button class="pref-switch" id="prefSplit" role="switch"><i></i></button>
+        </div>
       </div>
     </div>
 
@@ -1246,15 +1306,16 @@
         propPanel=$('propPanel'), propSearch=$('propSearch'), propList=$('propList'),
         propStatus=$('propStatus'), propClose=$('propClose'), propClear=$('propClear'),
         pinInspector=$('pinInspector'), piTitle=$('piTitle'), piClose=$('piClose'),
-        evRow=$('evRow'), evStripSlot=$('evStripSlot'),
+        evRow=$('evRow'), evStripSlot=$('evStripSlot'), mapClip=$('mapClip'),
         piImg=$('piImg'), piNoImg=$('piNoImg'), piBody=$('piBody'),
         settingsPanel=$('settingsPanel'), settingsBtn=$('settingsBtn'), settingsBtn2=$('settingsBtn2'),
         settingsClose=$('settingsClose'), evSettingsBtn=$('evSettingsBtn'),
         evExagLabel=$('evExagLabel'), prefVertExag=$('prefVertExag'),
         prefInspector=$('prefInspector'), prefFilmstrip=$('prefFilmstrip'),
+        prefSplit=$('prefSplit'),
         panelsMapBtn=$('panelsMapBtn'), stripMapBtn=$('stripMapBtn'),
         panelsEvBtn=$('panelsEvBtn'), stripEvBtn=$('stripEvBtn'),
-        settingsMapBtn=$('settingsMapBtn');
+        settingsMapBtn=$('settingsMapBtn'), splitBtn=$('splitBtn'), stage=$('stage');
 
   const UPRIGHT_ON=55, UPRIGHT_OFF=35, HOLD_MS=350;
 
@@ -1265,7 +1326,7 @@
   // rather than returning null -- and a thrown preference read must not be
   // able to stop a session starting.
   const PREFS_KEY='upright.prefs';
-  const PREF_DEFAULTS={vertExag:true, inspector:true, filmstrip:true};
+  const PREF_DEFAULTS={vertExag:true, inspector:true, filmstrip:true, splitPortrait:true};
   const prefs=Object.assign({}, PREF_DEFAULTS);
   try{
     const raw=localStorage.getItem(PREFS_KEY);
@@ -1276,7 +1337,8 @@
     catch(e){ console.warn('prefs write failed', e); }
   }
   function renderPrefs(){
-    [[prefVertExag,'vertExag'],[prefInspector,'inspector'],[prefFilmstrip,'filmstrip']]
+    [[prefVertExag,'vertExag'],[prefInspector,'inspector'],[prefFilmstrip,'filmstrip'],
+      [prefSplit,'splitPortrait']]
       .forEach(([el,key])=>{
         const on = prefs[key]!==false;
         el.classList.toggle('on', on);
@@ -1305,6 +1367,10 @@
   settingsMapBtn.addEventListener('click', openSettings);   // the start screen is gone mid-visit
   settingsClose.addEventListener('click', closeSettings);
   prefInspector.addEventListener('click', ()=>prefToggle('inspector'));
+  prefSplit.addEventListener('click', ()=>{
+    prefs.splitPortrait = prefs.splitPortrait===false; savePrefs(); renderPrefs();
+    try{ splitOrientationCheck(); }catch(e){ console.warn('split pref failed', e); }
+  });
   prefFilmstrip.addEventListener('click', ()=>prefToggle('filmstrip'));
   prefVertExag.addEventListener('click', ()=>{
     prefs.vertExag = !(prefs.vertExag!==false);
@@ -3289,7 +3355,7 @@
       panelHome={inspNext:pinInspector.nextSibling, inspParent:pinInspector.parentNode,
                  stripNext:filmStrip.nextSibling, stripParent:filmStrip.parentNode};
     }
-    const inEv = !!evActive;
+    const inEv = !!evActive && !splitOn;   // split keeps them with the map half
     const inspHost = inEv ? evRow : panelHome.inspParent;
     const stripHost = inEv ? evStripSlot : panelHome.stripParent;
     // The column sits BEFORE the drawing in both hosts; the strip sits after.
@@ -3337,7 +3403,12 @@
     try{
       map.invalidateSize({pan:false, animate:false});
       const dx = after - before;
-      if(dx) map.panBy([dx, 0], {animate:false});
+      // The column moves the map's edge along the SCREEN x axis, so on a turned
+      // map the compensating pan is that shift expressed in container space.
+      if(dx){
+        const v=rotVec(dx, 0, -mapRotDeg);
+        map.panBy([v.x, v.y], {animate:false});
+      }
     }catch(e){}
   }
   // Coalesced to one repaint per frame: a drag fires far faster than the screen.
@@ -3490,6 +3561,14 @@
   }
 
   piClose.addEventListener('click', inspectClose);
+  splitBtn.addEventListener('click', ()=>{
+    if(!splitOn && !splitCan()){
+      alert('Split screen needs a survey to draw a section from — shoot some grade first.');
+      return;
+    }
+    splitManual = !splitOn;
+    setSplit(splitManual);
+  });
   panelsMapBtn.addEventListener('click', ()=>prefToggle('inspector'));
   panelsEvBtn.addEventListener('click', ()=>prefToggle('inspector'));
   stripMapBtn.addEventListener('click', ()=>prefToggle('filmstrip'));
@@ -3719,10 +3798,165 @@
     setMapMode(null);
   });
 
-  function containerPt(e){
-    const r=map.getContainer().getBoundingClientRect();
-    return L.point(e.clientX-r.left, e.clientY-r.top);
+  // ---------- rotating the map to face a section ----------
+  // Leaflet 1.9 has no rotation of its own, and its CRS cannot express one: a
+  // Transformation is (a*x+b, c*y+d), with no cross terms. Rotating the
+  // PROJECTION would work for markers but hands the tile layer coordinates that
+  // no longer match the XYZ scheme, so the satellite comes back as garbage --
+  // and the satellite is half the point of turning the map round in the first
+  // place.
+  //
+  // So the container is turned with a CSS transform and the two places Leaflet
+  // converts screen coordinates to map coordinates are corrected. There are
+  // exactly two: Map.mouseEventToContainerPoint (which every click, tap, pinch
+  // and box-zoom funnels through) and Draggable._onMove (which does NOT --
+  // it works on a raw client-space delta, which is why a rotated map would
+  // otherwise drag pins off sideways). Both patches return the untouched
+  // original the moment the rotation is zero, so nothing that exists today is
+  // running on patched code.
+  let mapRotDeg=0;
+  function rotVec(x, y, deg){
+    if(!deg) return {x:x, y:y};
+    const t=rad(deg), c=Math.cos(t), sn=Math.sin(t);
+    return {x:x*c - y*sn, y:x*sn + y*c};
   }
+  // Screen point -> container point. Exact: a rotation about the element's own
+  // centre leaves that centre where it was, and getBoundingClientRect() of a
+  // rotated element still has the same centre.
+  function mapPt(clientX, clientY){
+    const el=map.getContainer(), r=el.getBoundingClientRect();
+    if(!mapRotDeg) return L.point(clientX-r.left, clientY-r.top);
+    const d=rotVec(clientX-(r.left+r.width/2), clientY-(r.top+r.height/2), -mapRotDeg);
+    return L.point(d.x + el.offsetWidth/2, d.y + el.offsetHeight/2);
+  }
+  function mapRotPatch(){
+    if(L.Map.prototype.__uprightRot) return;
+    L.Map.prototype.__uprightRot = true;
+    const origMEP = L.Map.prototype.mouseEventToContainerPoint;
+    L.Map.prototype.mouseEventToContainerPoint = function(e){
+      if(!mapRotDeg || this!==map) return origMEP.call(this, e);
+      return mapPt(e.clientX, e.clientY);
+    };
+    const rotOwns = el => !!(mapRotDeg && el && map && map.getContainer().contains(el));
+    const origDown = L.Draggable.prototype._onDown;
+    L.Draggable.prototype._onDown = function(e){
+      const out = origDown.call(this, e);
+      // getScale() of a rotated parent reports its bounding box over its layout
+      // size, which is not a scale at all. There is no scaling here, only a
+      // turn, so the honest value is 1.
+      if(rotOwns(this._element)) this._parentScale = {x:1, y:1};
+      return out;
+    };
+    const origMove = L.Draggable.prototype._onMove;
+    L.Draggable.prototype._onMove = function(e){
+      if(!rotOwns(this._element) || !this._startPoint) return origMove.call(this, e);
+      if(e.touches && e.touches.length > 1) return origMove.call(this, e);
+      // Rotate the POINTER before Leaflet reads it, rather than correcting the
+      // position it works out afterwards. Correcting afterwards looks right and
+      // is not: _onMove hands _newPos straight to _updatePosition, so the
+      // uncorrected value is already on screen and already fired as a drag by
+      // the time the correction lands, and the pin tracks the raw screen delta.
+      // Rotating the input leaves Leaflet's own arithmetic to do the rest.
+      //
+      // The delta is turned about the drag's own start point, so the synthetic
+      // pointer differs from the real one by exactly the map's rotation.
+      const first = (e.touches && e.touches.length===1) ? e.touches[0] : e;
+      const d = rotVec(first.clientX-this._startPoint.x,
+                       first.clientY-this._startPoint.y, -mapRotDeg);
+      const cx = this._startPoint.x + d.x, cy = this._startPoint.y + d.y;
+      const pt = {clientX:cx, clientY:cy};
+      const fake = {
+        type:e.type, target:e.target, shiftKey:e.shiftKey,
+        which:e.which, button:e.button,
+        clientX:cx, clientY:cy,
+        touches: e.touches ? [pt] : undefined,
+        preventDefault: ()=>{ if(e.preventDefault) e.preventDefault(); },
+        stopPropagation: ()=>{ if(e.stopPropagation) e.stopPropagation(); }
+      };
+      const out = origMove.call(this, fake);
+      this._lastEvent = e;          // hand listeners the real event, not the shim
+      return out;
+    };
+  }
+  // Turn the map so that RIGHT on screen is the direction the profile's x runs
+  // in. That is the whole contract: slide a pin right on the map and it moves
+  // right in the section. East is screen +x and north is screen -y, so the
+  // along-vector (e, n) points along screen (e, -n), and rotating by
+  // atan2(n, e) lays it flat on the +x axis.
+  //
+  // Falls out exactly as it should: the South view (looking north) needs no
+  // rotation at all, and the West view (looking east) puts east at the top.
+  function mapRotFor(side){
+    if(!side) return 0;
+    const a=sideAxes(side).along;
+    return Math.atan2(a.n, a.e)*180/Math.PI;
+  }
+  function mapRotApply(deg){
+    if(!map) return;
+    const el=map.getContainer();
+    deg = deg||0;
+    const changed = Math.abs(deg-mapRotDeg) > 0.001;
+    mapRotDeg = deg;
+    mapClip.classList.toggle('rot', !!deg);
+    mapClip.style.setProperty('--maprot-inv', (-deg)+'deg');
+    if(!deg){
+      el.style.width=''; el.style.height=''; el.style.transform=''; el.style.margin='';
+    } else {
+      // A turned rectangle no longer covers the box it came from, so the
+      // container is grown to the size whose rotation still does.
+      const cw=mapClip.clientWidth, ch=mapClip.clientHeight;
+      const t=rad(deg), c=Math.abs(Math.cos(t)), sn=Math.abs(Math.sin(t));
+      el.style.width  = Math.ceil(cw*c + ch*sn)+'px';
+      el.style.height = Math.ceil(cw*sn + ch*c)+'px';
+      el.style.transform = 'translate(-50%,-50%) rotate('+deg+'deg)';
+    }
+    // invalidateSize() with its default pan, NOT {pan:false}: turning the map
+    // resizes the container, and the one thing that must not move is what you
+    // were looking at. Anchoring the top-left instead slides the survey out of
+    // the clip the moment you change section.
+    if(changed || deg) requestAnimationFrame(()=>{ try{ map.invalidateSize(); }catch(e){} });
+  }
+
+  // ---------- split screen: section over plan ----------
+  // Standing the iPad on its end while the map is up puts the section above the
+  // plan, and turns the plan to face that section. Nothing is duplicated: it is
+  // the one map and the one elevation panel, both already absolute, told to
+  // take half the height each.
+  let splitOn=false, splitManual=null;      // manual overrides the orientation
+  function splitCan(){ return !!(elevPoints.length && currentlyUpright===false); }
+  function splitSide(){ return evActive || evLastSide || 'south'; }
+  let evLastSide=null;
+  function setSplit(on){
+    on = !!on && splitCan();
+    if(on===splitOn){ if(on) mapRotApply(mapRotFor(splitSide())); return; }
+    splitOn=on;
+    stage.classList.toggle('split', on);
+    if(on){
+      evEnsurePivot();
+      if(!evActive) evOpen(splitSide());
+      mapRotApply(mapRotFor(evActive));
+    } else {
+      mapRotApply(0);
+      if(evActive) evClose();
+    }
+    panelsSync();
+    if(splitBtn) splitBtn.classList.toggle('active', on);
+    if(map) requestAnimationFrame(()=>{ try{ map.invalidateSize({pan:false}); }catch(e){} });
+    if(evActive) evRenderSoon();
+  }
+  // Portrait is the gesture; the button is the override, and it is forgotten
+  // again the next time the iPad is turned so the gesture always wins in the end.
+  function splitOrientationCheck(){
+    splitManual=null;
+    const portrait = window.matchMedia('(orientation: portrait)').matches;
+    setSplit(portrait && prefs.splitPortrait!==false);
+  }
+  window.addEventListener('orientationchange', ()=>setTimeout(splitOrientationCheck, 250));
+  try{
+    window.matchMedia('(orientation: portrait)').addEventListener('change', splitOrientationCheck);
+  }catch(e){ /* older Safari: orientationchange above still fires */ }
+
+  function containerPt(e){ return mapPt(e.clientX, e.clientY); }
   function wireMapAnnotation(){
     const c=map.getContainer();
     // The cuts are drawn as segments long enough to cross the viewport, so they
@@ -4031,6 +4265,9 @@
         const ll=m.getLatLng();
         pt.lat=ll.lat; pt.lng=ll.lng;
         if(inspectIs('elev', pt.id)) inspectSoon();
+        // Split screen: the section is right there above the map, so it has to
+        // follow the pin under the finger rather than wait for the drop.
+        if(splitOn && evActive) evRenderSoon();
       });
       m.on('dragend', ()=>{
         pinDragging=false;
@@ -5235,7 +5472,7 @@
       evDragging={i:i, slot:evSlot, side:evActive};
     });
     d.addEventListener('pointermove', e=>{
-      if(!evDragging || evDragging.edge || evDragging.i!==i) return;
+      if(!evDragging || evDragging.edge || evDragging.box || evDragging.i!==i) return;
       e.preventDefault();
       const arr=evCornersOf(evDragging.side, evDragging.slot);
       if(!arr) return;
@@ -5244,7 +5481,7 @@
       evRenderSoon();
     });
     ['pointerup','pointercancel'].forEach(ev=>d.addEventListener(ev, ()=>{
-      if(!evDragging || evDragging.edge || evDragging.i!==i) return;
+      if(!evDragging || evDragging.edge || evDragging.box || evDragging.i!==i) return;
       const side=evDragging.side, slot=evDragging.slot;
       evDragging=null;
       const arr=evCornersOf(side, slot);
@@ -5265,18 +5502,85 @@
   function evEdgeHandles(G){
     const corners=evCornersOf(evActive, evSlot);
     let have=[...evStage.querySelectorAll('.ev-edge')];
-    if(evTool!=='stretch' || !corners){ have.forEach(e=>e.remove()); return; }
+    let box=[...evStage.querySelectorAll('.ev-box')];
+    if(evTool!=='stretch' || !corners){
+      have.forEach(e=>e.remove()); box.forEach(e=>e.remove()); return;
+    }
     // Reposition, never rebuild -- same pointer-capture trap as the corners.
     if(have.length!==EV_EDGES.length){
       have.forEach(e=>e.remove());
       EV_EDGES.forEach((_e,i)=>evStage.appendChild(evMakeEdge(i)));
       have=[...evStage.querySelectorAll('.ev-edge')];
     }
+    if(box.length!==4){
+      box.forEach(e=>e.remove());
+      for(let i=0;i<4;i++) evStage.appendChild(evMakeBoxCorner(i));
+      box=[...evStage.querySelectorAll('.ev-box')];
+    }
     have.forEach((d,i)=>{
       const [a,b]=EV_EDGES[i];
       d.style.left=(G.toX(corners[a].x)+G.toX(corners[b].x))/2+'px';
       d.style.top =(G.toY(corners[a].y)+G.toY(corners[b].y))/2+'px';
     });
+    box.forEach((d,i)=>{
+      d.style.left=G.toX(corners[i].x)+'px';
+      d.style.top =G.toY(corners[i].y)+'px';
+    });
+  }
+
+  // Freeform, as Procreate and Morpholio Trace mean it: the corner handle
+  // resizes BOTH axes at once about the opposite corner, and the sides stay
+  // parallel -- so it stretches the box, it does not shear it. That is the one
+  // thing that separates it from Distort, whose corner goes wherever you put it.
+  //
+  // Worked in the shape's own frame (the two edge vectors that meet at the
+  // dragged corner) rather than in x and y, so it still behaves on a shape that
+  // Distort or a tilt has already thrown out of square.
+  function evMakeBoxCorner(i){
+    const d=document.createElement('div');
+    d.className='ev-box';
+    let snap=null, from=null;
+    d.addEventListener('pointerdown', e=>{
+      e.preventDefault(); e.stopPropagation();
+      try{ d.setPointerCapture(e.pointerId); }catch(_e){}
+      const arr=evCornersOf(evActive, evSlot); if(!arr) return;
+      const r=evStage.getBoundingClientRect();
+      evDragging={i:i, slot:evSlot, side:evActive, box:true};
+      snap=arr.map(c=>({x:c.x, y:c.y}));
+      from={x:e.clientX-r.left, y:e.clientY-r.top};
+    });
+    d.addEventListener('pointermove', e=>{
+      if(!evDragging || !evDragging.box || evDragging.i!==i || !snap) return;
+      e.preventDefault();
+      const arr=evCornersOf(evDragging.side, evDragging.slot);
+      if(!arr) return;
+      const G=evGeom(evDragging.side), r=evStage.getBoundingClientRect();
+      const opp=(i+2)%4, na=(i+1)%4, nb=(i+3)%4;      // opposite, and the two neighbours
+      const P=k=>({x:G.toX(snap[k].x), y:G.toY(snap[k].y)});
+      const o=P(opp);
+      // The two edges of the box, seen from the fixed corner.
+      const u={x:P(na).x-o.x, y:P(na).y-o.y};
+      const v={x:P(nb).x-o.x, y:P(nb).y-o.y};
+      const det=u.x*v.y - u.y*v.x;
+      if(!det) return;
+      const wx=(e.clientX-r.left)-o.x, wy=(e.clientY-r.top)-o.y;
+      // Decompose the pointer in (u, v) -- those coefficients ARE the two scales.
+      let ku=( wx*v.y - wy*v.x)/det;
+      let kv=(-wx*u.y + wy*u.x)/det;
+      const clamp=k=>Math.max(0.02, Math.min(40, k));
+      ku=clamp(ku); kv=clamp(kv);
+      const at=(a,b)=>({x:G.fromX(o.x+u.x*a+v.x*b), y:G.fromY(o.y+u.y*a+v.y*b)});
+      arr[na]=at(ku, 0); arr[nb]=at(0, kv); arr[i]=at(ku, kv);
+      evRenderSoon();
+    });
+    ['pointerup','pointercancel'].forEach(ev=>d.addEventListener(ev, ()=>{
+      if(!evDragging || !evDragging.box || evDragging.i!==i) return;
+      const side=evDragging.side, slot=evDragging.slot;
+      evDragging=null; snap=null;
+      const arr=evCornersOf(side, slot);
+      if(arr) evSaveSide(side, slot==='plan' ? {planCorners:arr} : {photoCorners:arr});
+    }));
+    return d;
   }
   function evMakeEdge(i){
     const d=document.createElement('div');
@@ -5311,7 +5615,7 @@
       evRenderSoon();
     });
     ['pointerup','pointercancel'].forEach(ev=>d.addEventListener(ev, ()=>{
-      if(!evDragging || !evDragging.edge || evDragging.i!==i) return;
+      if(!evDragging || !evDragging.edge || evDragging.box || evDragging.i!==i) return;
       const side=evDragging.side, slot=evDragging.slot;
       evDragging=null; snap=null;
       const arr=evCornersOf(side, slot);
@@ -5429,11 +5733,14 @@
     evPlanImg.src = v.planUrl || '';
     evPhotoImg.src = v.photoUrl || '';
     elevPanel.classList.add('show');
+    evLastSide=side;
+    if(splitOn) mapRotApply(mapRotFor(side));   // the plan turns to face the new section
     panelsSync();               // the column and the strip come with you
     evSyncTabs();
     requestAnimationFrame(evRender);
   }
   function evClose(){
+    if(splitOn && evActive){ setSplit(false); return; }
     evActive=null; evTool=null; evGest=null;
     elevPanel.classList.remove('show');
     panelsSync();               // ...and go back to the map with you
@@ -5574,7 +5881,10 @@
     };
     probe.src=url;
   });
-  window.addEventListener('resize', ()=>{ if(evActive) evRender(); });
+  window.addEventListener('resize', ()=>{
+    if(mapRotDeg) mapRotApply(mapRotDeg);   // the clip changed size; so must the turned box
+    if(evActive) evRender();
+  });
 
   // ---------- review / adjust on the map ----------
   function elevReset(){
@@ -5614,6 +5924,7 @@
       maxZoom:21, maxNativeZoom:19, attribution:'Imagery © Esri'
     });
     satLayer.addTo(map);
+    mapRotPatch();
     updateMyMarker();
     pins.forEach(p=>{ if(!p.marker) addPinMarker(p); });
     bindPlanGestures();
@@ -5629,6 +5940,7 @@
       renderStrip(); markSelectedMarkers();
     } else {
       mapwrap.classList.remove('show');
+      if(splitOn) setSplit(false);      // the section is a map-view companion
       wakeCamera();          // covers every path back, not just resumeRec()
       // The survey deliberately SURVIVES going upright: points are placed on
       // the map lying flat, then sighted standing up. Only the bar hides with
@@ -5966,14 +6278,15 @@
     if(map.scrollWheelZoom){ planGestureOn ? map.scrollWheelZoom.disable() : map.scrollWheelZoom.enable(); }
   }
 
-  function touchMetrics(t0, t1, container){
-    const r=container.getBoundingClientRect();
+  function touchMetrics(t0, t1){
     const dx=t1.clientX-t0.clientX, dy=t1.clientY-t0.clientY;
+    // The centre has to be un-rotated; the twist angle does not, because it is
+    // only ever used as a difference and the rotation cancels out of that.
+    const c=mapPt((t0.clientX+t1.clientX)/2, (t0.clientY+t1.clientY)/2);
     return {
       dist: Math.hypot(dx,dy) || 1,
       ang: Math.atan2(dy,dx)*180/Math.PI,
-      cx: (t0.clientX+t1.clientX)/2 - r.left,
-      cy: (t0.clientY+t1.clientY)/2 - r.top
+      cx: c.x, cy: c.y
     };
   }
 
@@ -5984,9 +6297,8 @@
       if(e.touches.length===1){
         // one finger: pan only
         e.preventDefault();
-        const r=el.getBoundingClientRect();
         pan1={
-          ll0: map.containerPointToLatLng([e.touches[0].clientX-r.left, e.touches[0].clientY-r.top]),
+          ll0: map.containerPointToLatLng(mapPt(e.touches[0].clientX, e.touches[0].clientY)),
           center0: L.latLng(planCenter.lat, planCenter.lng)
         };
         return;
@@ -5994,7 +6306,7 @@
       if(e.touches.length!==2) return;
       e.preventDefault();
       pan1=null;
-      const m=touchMetrics(e.touches[0], e.touches[1], el);
+      const m=touchMetrics(e.touches[0], e.touches[1]);
       gest={
         dist0:m.dist, ang0:m.ang,
         w0:planWidthM, rot0:planRotDeg,
@@ -6006,8 +6318,7 @@
     el.addEventListener('touchmove', e=>{
       if(!pan1 || e.touches.length!==1) return;
       e.preventDefault();
-      const r=el.getBoundingClientRect();
-      const llNow=map.containerPointToLatLng([e.touches[0].clientX-r.left, e.touches[0].clientY-r.top]);
+      const llNow=map.containerPointToLatLng(mapPt(e.touches[0].clientX, e.touches[0].clientY));
       planCenter = L.latLng(
         pan1.center0.lat + (llNow.lat - pan1.ll0.lat),
         pan1.center0.lng + (llNow.lng - pan1.ll0.lng)
@@ -6019,7 +6330,7 @@
     el.addEventListener('touchmove', e=>{
       if(!gest || e.touches.length!==2) return;
       e.preventDefault();
-      const m=touchMetrics(e.touches[0], e.touches[1], el);
+      const m=touchMetrics(e.touches[0], e.touches[1]);
       // pinch -> size, unless the scale came from a known dimension. Rotate
       // and pan stay live, which is exactly the workflow: set the size once
       // off the drawing, then swing it into place without fear of losing it.

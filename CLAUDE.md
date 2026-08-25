@@ -181,6 +181,71 @@ never been sent anywhere; the note and the download button are built once per
 pin and left alone. The column is hidden while the map sits in
 review's mini pane, same rule as the map toolbar — 190px has no room for it.
 
+## Split screen: section over plan
+
+**Stand the iPad on its end while the map is up** and the screen splits — the
+section on top, the site plan underneath, the way a section and its plan are
+read on paper. Turn it back and the split closes. `prefs.splitPortrait` governs
+it and the **Split** button in the map toolbar does it by hand. Nothing is
+duplicated: it is the one map and the one elevation panel, both already
+`position:absolute`, told to take half the height each.
+
+Sliding a pin down on the plan moves it in the section as you drag, not on the
+drop — the section is right there above your thumb.
+
+### The plan turns to face the section
+
+`mapRotFor(side)` turns the map so that **right on screen is the direction the
+profile's x runs in**. That is the whole contract: slide a pin right on the
+plan and it goes right in the section. East is screen +x and north is screen
+−y, so the along-vector `(e, n)` points along screen `(e, −n)`, and rotating by
+`atan2(n, e)` lays it flat on the +x axis. It falls out exactly as it should —
+the **South** view (looking north) needs no rotation at all, and the **West**
+view (looking east) puts east at the top.
+
+**Leaflet 1.9 cannot do this by itself, and its CRS cannot be made to.** A
+`Transformation` is `(a·x+b, c·y+d)` with no cross terms, so rotation is not
+expressible. Rotating the *projection* would carry markers but hands the tile
+layer coordinates that no longer match the XYZ scheme, and the satellite comes
+back as garbage — which defeats the point of turning the map at all.
+
+So the container is turned with a CSS transform, over-sized to
+`w·|cos| + h·|sin|` so its corners still cover the clip, and the places that
+convert screen coordinates to map coordinates are corrected. **There are
+exactly two in Leaflet**: `Map.mouseEventToContainerPoint` (every click, tap,
+pinch and box-zoom funnels through it) and `Draggable._onMove` (which does
+*not* — it works on a raw client-space delta). Both patches hand back the
+untouched original the moment the rotation is zero, so nothing that existed
+before this is running on patched code. Our own screen→map conversions all go
+through one `mapPt()` helper.
+
+Four things learned the hard way, all of which looked right and were not:
+
+- **Correct the pointer going in, not the position coming out.** `_onMove`
+  hands `_newPos` straight to `_updatePosition`, so a correction applied
+  afterwards lands after the uncorrected position is already on screen and
+  already fired as a drag — the pin tracks the raw screen delta and you would
+  swear the patch was not running. `_onMove` is now given a synthetic pointer,
+  rotated about the drag's own start point, and Leaflet's own arithmetic does
+  the rest.
+- **`invalidateSize()` with its default pan, not `{pan:false}`.** Turning the
+  map resizes the container; anchoring the top-left instead of the centre
+  slides the survey out of the clip every time you change section.
+- **A counter-rotation on a label must repeat that label's own transform.**
+  `transform` replaces, it does not compose, so `rotate(...)` on `.elev-pin`
+  silently dropped its `translate(-50%,-50%)` and shifted every pin by half its
+  own label — a dragged pin then *appeared* to move in a direction it had not.
+  Named classes only, for the same reason: a blanket `> *` would clobber
+  whatever the next divIcon brings with it.
+- **The pan compensation for the inspector column is in container space.** The
+  column moves the map's edge along the *screen* x axis, so on a turned map the
+  compensating `panBy` is that shift rotated into the container's frame.
+
+Consequences worth knowing: the Leaflet zoom control and attribution are hidden
+while turned (they would turn with everything else), and a static Esri credit
+is drawn in the corner instead. A default `<img>` photo pin has no child to
+counter-rotate, so it leans — its tip stays exactly on its own coordinate.
+
 ## My location is a toggle
 
 The blue dot and its accuracy circle sit over the work, and a continuous
@@ -209,6 +274,7 @@ preferences only show their effect from inside a view.
 - **Vertical exaggeration** — off holds every section at ×1.
 - **Preview column** — the pin inspector, on the map and in every elevation view.
 - **Filmstrip** — likewise.
+- **Split screen in portrait** — see *Split screen: section over plan*.
 
 ## Data durability — important
 
@@ -828,12 +894,17 @@ the distortion at once.
 - **Uniform** applies a similarity transform to whatever the four corners
   currently are — so it moves an already-distorted image without un-distorting
   it, and the order can be revisited freely.
-- **Stretch** puts a handle on each of the four edges. Dragging one moves both
-  its endpoints along that edge's **normal only**: the opposite side stays
-  pinned and nothing shears. Sliding the edge sideways instead would be a
-  shear, and shearing is what Distort is for. Its handles are gold bars rather
-  than the blue corner dots — at arm's length on a bright screen two round
-  handles look identical.
+- **Stretch** is freeform, as Procreate and Morpholio Trace mean it: a handle
+  on each of the four **edges** and one on each **corner**. An edge handle moves
+  both its endpoints along that edge's **normal only**; a corner handle resizes
+  *both* axes at once about the opposite corner. Either way the sides stay
+  parallel — it stretches, it does not shear, and shearing is what Distort is
+  for. The corner maths is done in the shape's own frame (the two edge vectors
+  meeting at the fixed corner, and the pointer decomposed in that basis), so it
+  still behaves on a shape a tilt or a Distort has already thrown out of square.
+  Stretch's handles are gold, square corners and bar edges, against Distort's
+  round blue dots — at arm's length on a bright screen two round handles look
+  identical.
 - **Distort** is the four corner handles, free: the full homography.
 
 Alongside them, three **parametric nudges** — what the iOS crop screen calls
@@ -935,6 +1006,10 @@ not just abandoned starts.
 - Text labels on the map; richer desk-side annotation editor; reference-object photo measuring.
 
 **Needs field testing**
+- Split screen on a real iPad: whether half a portrait screen is enough map to
+  place a pin in, whether the turned plan reads naturally or disorientingly
+  against a yard you are standing in, and whether the split opening itself on
+  every turn of the iPad is welcome or a nuisance.
 - The pin inspector against a real yard: whether 34% of the map is the right
   width on an iPad in both orientations, whether the photo is big enough to
   match a pin to a place at arm's length, and whether losing that much map
