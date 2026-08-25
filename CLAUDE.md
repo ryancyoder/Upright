@@ -1154,6 +1154,32 @@ metres, picked from the current zoom by measuring pixels-per-foot through
 Leaflet rather than assuming it. `cutsRefresh()` redraws it, so turning the
 cross turns the grid.
 
+**And the plan gets Align to grid too**, beside Grid in the map toolbar, under
+the same rule: direction is constrained, position is not. `ALIGN_START_PX` and
+`ALIGN_TURN_PX` are shared with the section, and the button is disabled while
+the grid is off — there is nothing to be parallel to otherwise.
+
+What differs is the axes. The section's grid is square with the screen; the
+plan's is square with the **house**, so a run is projected on to `cutRot` /
+`cutRot+90` rather than on to x and y. `gridAxesAt()` measures those two
+directions **through Leaflet at the anchor** instead of computing them from
+`cutRot`, which means the map's own rotation in split screen, the projection and
+the zoom are all accounted for by construction — the same reason `splitXform()`
+takes the section's scale from the plan rather than matching it. The whole thing
+runs in container points, which is the space `containerPt()` already hands back
+with any map rotation undone.
+
+Consequence worth knowing: a stroke drawn **across** a turned grid staircases,
+because that is what aligning a diagonal to two axes means. In the yard you draw
+along the lines, which are right there on screen; it is only a problem if you
+ignore them.
+
+Note the placement trap this walked into. `syncGridBtns()` was first called at
+the top level next to the button wiring, which sits ~800 lines *above*
+`let mapGridOn`. That is a temporal dead zone throw, and it takes **the entire
+script** with it — the map never wires up at all. It is called from
+`wireMapAnnotation()` now, which runs long after every `let` is live.
+
 **Images are placed by four corners, in view coordinates (feet along, feet
 up).** Four corners is a full homography, which is exactly what a facade
 photographed from the ground needs; a drawing just uses a rectangle.

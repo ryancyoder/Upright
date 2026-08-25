@@ -1089,6 +1089,7 @@
         <button class="mt-btn" id="elevBtn">Elevation</button>
         <button class="mt-btn" id="cutsBtn">Section cuts</button>
         <button class="mt-btn" id="mapGridBtn">Grid</button>
+        <button class="mt-btn" id="mapAlignBtn">Align to grid</button>
         <button class="mt-btn" id="splitBtn">Split</button>
         <button class="mt-btn" id="panelsMapBtn">Preview</button>
         <button class="mt-btn" id="stripMapBtn">Filmstrip</button>
@@ -1390,7 +1391,7 @@
         panelsMapBtn=$('panelsMapBtn'), stripMapBtn=$('stripMapBtn'),
         panelsEvBtn=$('panelsEvBtn'), stripEvBtn=$('stripEvBtn'),
         settingsMapBtn=$('settingsMapBtn'), splitBtn=$('splitBtn'), stage=$('stage'),
-        mapGridBtn=$('mapGridBtn');
+        mapGridBtn=$('mapGridBtn'), mapAlignBtn=$('mapAlignBtn');
 
   const UPRIGHT_ON=55, UPRIGHT_OFF=35, HOLD_MS=350;
 
@@ -3719,12 +3720,25 @@
   }
 
   piClose.addEventListener('click', inspectClose);
+  // Align is only meaningful against a grid that is drawn, same as the
+  // section's -- there is nothing to be parallel to otherwise.
+  function syncGridBtns(){
+    mapGridBtn.classList.toggle('active', mapGridOn);
+    mapAlignBtn.classList.toggle('active', mapAlignOn && mapGridOn);
+    mapAlignBtn.disabled = !mapGridOn;
+    mapAlignBtn.title = mapGridOn
+      ? 'Straighten each run on to a grid axis, so it comes out square with the '
+        + 'house. Corners stay where you drew them \u2014 nothing is moved on to a '
+        + 'grid line.'
+      : 'Turn the grid on to align to it';
+  }
   mapGridBtn.addEventListener('click', ()=>{
     mapGridOn=!mapGridOn;
-    mapGridBtn.classList.toggle('active', mapGridOn);
     evEnsurePivot();          // the grid hangs off the cross, so it needs one
+    syncGridBtns();
     gridDraw();
   });
+  mapAlignBtn.addEventListener('click', ()=>{ mapAlignOn=!mapAlignOn; syncGridBtns(); });
   splitBtn.addEventListener('click', ()=>{
     if(!splitOn && !splitCan()){
       alert('Split screen needs a survey to draw a section from — shoot some grade first.');
@@ -3820,6 +3834,9 @@
   }
 
   function setMapMode(mode){
+    // Leaving sketch mid-stroke must not leave a run anchored to a corner that
+    // is no longer being drawn.
+    if(mapMode==='sketch' && mode!=='sketch'){ sketching=false; alignReset(); }
     mapMode=mode;
     sketchBtn.classList.toggle('active', mode==='sketch');
     measureBtn.classList.toggle('active', mode==='measure');
@@ -3916,7 +3933,7 @@
       sketches.push(rec);
       apiPost('/sessions/'+sessionId+'/sketches', { colour:rec.colour, lengthFt:rec.lengthFt, latlngs:rec.latlngs });
     } else if(sketchLine){ map.removeLayer(sketchLine); }
-    sketchLine=null; sketchPts=[];
+    sketchLine=null; sketchPts=[]; alignReset();
   }
 
   sketchBtn.addEventListener('click', ()=>{
@@ -4158,6 +4175,10 @@
   function containerPt(e){ return mapPt(e.clientX, e.clientY); }
   function wireMapAnnotation(){
     const c=map.getContainer();
+    // Not at the top level: mapGridOn is declared further down the file, and
+    // reading it from up here is a temporal dead zone throw that takes the
+    // whole script with it. Map wiring runs long after every let is live.
+    syncGridBtns();
     // The cuts are drawn as segments long enough to cross the viewport, so they
     // have to be re-cut whenever the viewport changes.
     map.on('moveend zoomend', ()=>{ if(cutsOn) cutsRefresh(); if(mapGridOn) gridDraw(); });
@@ -4166,15 +4187,22 @@
     map.on('move zoom', ()=>{ if(splitOn && evActive) evRenderSoon(); });
     c.addEventListener('pointerdown', e=>{
       if(mapMode!=='sketch') return;
-      sketching=true; sketchPts=[];
+      sketching=true; sketchPts=[]; alignReset();
       const ll=map.containerPointToLatLng(containerPt(e));
       sketchPts.push(ll);
+      if(aligningNow()){
+        alignAnchor=ll; alignAxis=null; alignAxes=gridAxesAt(ll);
+      }
       sketchLine=L.polyline([ll],{color:annoColor(), weight:4, opacity:0.95}).addTo(map);
     });
     c.addEventListener('pointermove', e=>{
       if(!sketching || mapMode!=='sketch') return;
       e.preventDefault();
-      const ll=map.containerPointToLatLng(containerPt(e));
+      const cp=containerPt(e);
+      if(aligningNow() && alignAnchor && alignAxes){
+        alignStep(cp); sketchLine.setLatLngs(sketchPts); return;
+      }
+      const ll=map.containerPointToLatLng(cp);
       const prev=sketchPts[sketchPts.length-1];
       if(prev && metresBetween(prev,ll) < 0.25) return;   // thin out jitter
       sketchPts.push(ll); sketchLine.setLatLngs(sketchPts);
@@ -4577,6 +4605,71 @@
         }).addTo(map));
       }
     }
+  }
+
+  // ---------- align to grid, on the plan ----------
+  // Same rule as the section's, and for the same reason: ALIGN constrains
+  // DIRECTION, never position. The stroke starts where the finger went down and
+  // a corner stays where you turned; only the wobble across the run is taken
+  // out. Snapping would round a drawn feature on to a grid line, which on a map
+  // means sliding it off the ground it was traced from.
+  //
+  // What differs from the section is the axes. The plan's grid runs along the
+  // CUT CROSS rather than the screen, because a yard is laid out against the
+  // house -- so a run is projected on to cutRot / cutRot+90, and a bed or a
+  // patio drawn to it comes out square with the building AND square with what
+  // the elevation views show, since those are cuts through the same cross.
+  //
+  // The two directions are measured through Leaflet at the anchor rather than
+  // computed from cutRot, so the map's own rotation in split screen, the
+  // projection and the zoom are all accounted for by construction -- the same
+  // reason splitXform() takes the section's scale from the plan instead of
+  // matching it.
+  let mapAlignOn=true;
+  let alignAnchor=null, alignAxis=null, alignAxes=null;
+  function alignReset(){ alignAnchor=null; alignAxis=null; alignAxes=null; }
+  function aligningNow(){ return mapAlignOn && mapGridOn && !!map && !!cutPivot; }
+  function gridAxesAt(ll){
+    const o=map.latLngToContainerPoint(ll), out=[];
+    for(let axis=0; axis<2; axis++){
+      const p=map.latLngToContainerPoint(offsetLatLng(ll, cutRot+(axis?90:0), 20));
+      const dx=p.x-o.x, dy=p.y-o.y, m=Math.hypot(dx,dy);
+      if(!m || !isFinite(m)) return null;
+      out.push({x:dx/m, y:dy/m});
+    }
+    return out;
+  }
+  // The pointer resolved on to the current run's axis: it keeps whatever it has
+  // along the run and takes the anchor's value across it.
+  function alignProject(cp){
+    const o=map.latLngToContainerPoint(alignAnchor), u=alignAxes[alignAxis];
+    const t=(cp.x-o.x)*u.x + (cp.y-o.y)*u.y;
+    return map.containerPointToLatLng(L.point(o.x+u.x*t, o.y+u.y*t));
+  }
+  // Screen pixels, not metres: the thresholds are about what the hand did, and
+  // a metre is a different number of pixels at every zoom.
+  function alignStep(cp){
+    const o=map.latLngToContainerPoint(alignAnchor);
+    const dx=cp.x-o.x, dy=cp.y-o.y;
+    const along=[0,1].map(i=>dx*alignAxes[i].x + dy*alignAxes[i].y);
+    if(alignAxis===null){
+      if(Math.max(Math.abs(along[0]), Math.abs(along[1])) < ALIGN_START_PX) return;
+      alignAxis = Math.abs(along[0]) >= Math.abs(along[1]) ? 0 : 1;
+      sketchPts.push(alignProject(cp));
+      return;
+    }
+    // Perpendicular axes, so the component along the OTHER one is the distance
+    // across the current run.
+    if(Math.abs(along[alignAxis?0:1]) > ALIGN_TURN_PX){
+      // The tip as it stands is the corner: fix it, and start the next run from
+      // there on the other axis.
+      alignAnchor = sketchPts[sketchPts.length-1];
+      alignAxes = gridAxesAt(alignAnchor) || alignAxes;
+      alignAxis = alignAxis ? 0 : 1;
+      sketchPts.push(alignProject(cp));
+      return;
+    }
+    sketchPts[sketchPts.length-1] = alignProject(cp);
   }
 
   // ---------- sight lines ----------
