@@ -129,12 +129,28 @@ Nothing downstream depends on it: distance has never come from the live fix,
 and entering grade mode takes a **one-shot** `getCurrentPosition` to seed the
 observation, then lets the radio go quiet again.
 
+## Settings
+
+`prefs` is a small object of **UI preferences**, persisted to `localStorage`
+under `upright.prefs` and the only thing this app writes to local storage —
+session data is still RAM-plus-ZIP (see below). Every read and write is
+wrapped: Safari **throws** on storage in private browsing rather than
+returning null, and a thrown preference read must not be able to stop a
+session starting.
+
+The panel is reachable from the start screen, the done panel, and a gear in
+the elevation bar — that last one because the first preference is
+**Vertical exaggeration**, whose effect you only see from inside an
+elevation view. Turning it off holds every section at ×1.
+
 ## Data durability — important
 
 All Supabase writes are **fire-and-forget**. Failures are `console.warn`'d,
 never surfaced, never retried. In-memory arrays (`pins`, `clips`, `sketches`,
 `measures`) plus blobs are the source of truth for the *current* session —
-but that's RAM only. No IndexedDB, no localStorage, no service worker.
+but that's RAM only. No IndexedDB, no service worker, and no session
+data in localStorage — the one thing stored locally is the **Settings**
+preferences blob (see below), which is UI state and nothing else.
 
 Consequence: reload/crash/tab-eviction mid-session loses anything not yet
 uploaded. The **ZIP export is the only offline-durable copy** and is built
@@ -689,7 +705,11 @@ slopes here.
   auto-picks a starting exaggeration and says which (`vertical ×3`) or says
   `true proportion`. It is then a **continuous, log-spaced slider** (0.2×–60×),
   not a stepped cycle: stepping re-snapped the whole drawing mid-pinch, which
-  is what made the view feel jumpy.
+  is what made the view feel jumpy. It can also be **switched off
+  outright in Settings**, which pins every section at ×1; that path writes
+  nothing to any view, so each side's own factor survives and comes back when
+  it is switched on again. The slider hides while it is off rather than
+  sitting there inert.
 - **Auto-exaggeration is resolved once and then held**, and is measured from
   **all** points rather than the visible subset. Left to recompute it steps as
   the zoom changes and the vertical scale snaps under your fingers; measured

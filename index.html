@@ -607,6 +607,35 @@
   }
   .prop-panel{z-index:37;}
   .history-panel.show, .prop-panel.show{display:flex;}
+  /* Settings — app-wide preferences, kept in localStorage. This is UI state
+     only; no session data is ever stored locally (the ZIP export is still the
+     only offline-durable copy of a visit). */
+  .settings-panel{
+    position:absolute; inset:0; background:var(--bg); z-index:38;
+    display:none; flex-direction:column;
+  }
+  .settings-panel.show{display:flex;}
+  .pref-row{
+    display:flex; gap:14px; align-items:flex-start;
+    padding:16px; border-bottom:1px solid var(--line);
+  }
+  .pref-main{flex:1 1 auto; min-width:0;}
+  .pref-title{font-size:15px; font-weight:700;}
+  .pref-sub{font-size:12px; color:var(--dim); margin-top:5px; line-height:1.5;}
+  .pref-sub b{color:var(--ink);}
+  .pref-switch{
+    flex:0 0 auto; width:54px; height:31px; padding:0; position:relative;
+    border-radius:100px; border:1px solid var(--line); background:var(--bg2);
+  }
+  .pref-switch i{
+    position:absolute; top:3px; left:3px; width:23px; height:23px;
+    border-radius:50%; background:var(--dim);
+    transition:left .15s ease, background .15s ease;
+  }
+  .pref-switch.on{border-color:var(--flat);}
+  .pref-switch.on i{left:26px; background:var(--flat);}
+  .link-row{display:flex; gap:10px; justify-content:center; flex-wrap:wrap; margin-top:14px;}
+  .link-row .link-btn{margin-top:0;}
   .hist-status{flex:0 0 auto; padding:12px 16px; font-size:13px; color:var(--dim);}
   .hist-status.err{color:var(--live);}
   .hist-list{flex:1 1 auto; overflow-y:auto; -webkit-overflow-scrolling:touch; min-height:0;}
@@ -880,7 +909,7 @@
         <div class="ev-sep"></div>
         <button class="mt-btn ev-lock" id="evLockBtn"></button>
         <button class="mt-btn" id="evFitBtn">Fit</button>
-        <span class="mt-label">V.E.</span>
+        <span class="mt-label" id="evExagLabel">V.E.</span>
         <input type="range" id="evExagSlider" min="0" max="1000" value="0" class="ev-exag">
         <span class="mt-label" id="evExagVal">1&times;</span>
         <button class="mt-btn" id="evPlanBtn">Elevation plan</button>
@@ -890,6 +919,7 @@
         <button class="mt-btn" id="evPlaceBtn">Move / scale</button>
         <button class="mt-btn" id="evSkewBtn">Skew corners</button>
         <button class="mt-btn" id="evClearImg">Remove image</button>
+        <button class="mt-btn" id="evSettingsBtn" title="Settings">⚙</button>
         <input type="file" id="evFile" accept="image/*" style="display:none">
       </div>
       <div class="ev-stage" id="evStage">
@@ -913,7 +943,10 @@
         <div class="rec-note" id="modeNote"></div>
       </div>
       <button class="go-btn" id="enableBtn">Start session</button>
-      <button class="link-btn" id="historyBtn">Past sessions</button>
+      <div class="link-row">
+        <button class="link-btn" id="historyBtn">Past sessions</button>
+        <button class="link-btn" id="settingsBtn">Settings</button>
+      </div>
       <div class="overlay-sub err" id="errorMsg"></div>
     </div>
 
@@ -926,6 +959,7 @@
         <button class="dl-btn secondary" id="dlVideo">Download audio recording</button>
         <button class="dl-btn secondary" id="dlPins">Download session (ZIP): audio + clips + pins</button>
         <button class="dl-btn secondary" id="historyBtn2">Past sessions</button>
+        <button class="dl-btn secondary" id="settingsBtn2">Settings</button>
         <button class="dl-btn secondary" id="newSession">Start new session</button>
       </div>
     </div>
@@ -953,6 +987,28 @@
       <input class="prop-search" id="propSearch" placeholder="Search address…" autocomplete="off">
       <div class="hist-status" id="propStatus"></div>
       <div class="hist-list" id="propList"></div>
+    </div>
+
+    <div class="settings-panel" id="settingsPanel">
+      <div class="review-head">
+        <span class="title">Settings</span>
+        <div class="review-head-actions">
+          <button class="review-close" id="settingsClose">Close</button>
+        </div>
+      </div>
+      <div class="hist-list">
+        <div class="pref-row">
+          <div class="pref-main">
+            <div class="pref-title">Vertical exaggeration</div>
+            <div class="pref-sub">Elevation views stretch height against distance so a shallow
+              fall stays readable &mdash; a 6&nbsp;ft drop over 200&nbsp;ft is a flat line at true
+              proportion. Turn this off to hold every section at <b>&times;1</b>, where the drawing
+              is to scale and an imported facade photo lines up. The V.E. slider is hidden while
+              it is off; your per-view settings are kept and come back when you switch it on.</div>
+          </div>
+          <button class="pref-switch" id="prefVertExag" role="switch"><i></i></button>
+        </div>
+      </div>
     </div>
 
     <div class="review-panel" id="reviewPanel">
@@ -1039,9 +1095,48 @@
         historyClose=$('historyClose'), historyRefresh=$('historyRefresh'),
         histStatus=$('histStatus'), histList=$('histList'),
         propPanel=$('propPanel'), propSearch=$('propSearch'), propList=$('propList'),
-        propStatus=$('propStatus'), propClose=$('propClose'), propClear=$('propClear');
+        propStatus=$('propStatus'), propClose=$('propClose'), propClear=$('propClear'),
+        settingsPanel=$('settingsPanel'), settingsBtn=$('settingsBtn'), settingsBtn2=$('settingsBtn2'),
+        settingsClose=$('settingsClose'), evSettingsBtn=$('evSettingsBtn'),
+        evExagLabel=$('evExagLabel'), prefVertExag=$('prefVertExag');
 
   const UPRIGHT_ON=55, UPRIGHT_OFF=35, HOLD_MS=350;
+
+  // ---------- preferences ----------
+  // UI preferences only, and the ONLY thing this app puts in localStorage:
+  // session data stays in RAM (the ZIP export is the durable copy). Every
+  // access is guarded, since Safari throws on storage in private browsing
+  // rather than returning null -- and a thrown preference read must not be
+  // able to stop a session starting.
+  const PREFS_KEY='upright.prefs';
+  const PREF_DEFAULTS={vertExag:true};
+  const prefs=Object.assign({}, PREF_DEFAULTS);
+  try{
+    const raw=localStorage.getItem(PREFS_KEY);
+    if(raw) Object.assign(prefs, JSON.parse(raw)||{});
+  }catch(e){ console.warn('prefs read failed', e); }
+  function savePrefs(){
+    try{ localStorage.setItem(PREFS_KEY, JSON.stringify(prefs)); }
+    catch(e){ console.warn('prefs write failed', e); }
+  }
+  function renderPrefs(){
+    prefVertExag.classList.toggle('on', prefs.vertExag!==false);
+    prefVertExag.setAttribute('aria-checked', prefs.vertExag!==false ? 'true':'false');
+  }
+  function openSettings(){ settingsPanel.classList.add('show'); renderPrefs(); }
+  function closeSettings(){ settingsPanel.classList.remove('show'); }
+  settingsBtn.addEventListener('click', openSettings);
+  settingsBtn2.addEventListener('click', openSettings);
+  evSettingsBtn.addEventListener('click', openSettings);
+  settingsClose.addEventListener('click', closeSettings);
+  prefVertExag.addEventListener('click', ()=>{
+    prefs.vertExag = !(prefs.vertExag!==false);
+    savePrefs(); renderPrefs();
+    // The elevation view reads the pref every render; nothing is stored per
+    // side, so switching back restores whatever each view was set to.
+    try{ evSyncTabs(); if(evActive) evRender(); }catch(err){ console.warn('prefs apply failed', err); }
+  });
+  renderPrefs();
 
   // ---------- Supabase persistence ----------
   // Fire-and-forget: every upload/write goes through the upright-api Edge
@@ -4391,8 +4486,15 @@
     // Measured from ALL points, like the horizontal fit: a view whose own cut
     // currently hides everything would otherwise freeze a value computed from
     // nothing at all.
-    const exag = (v.vertExag!=null) ? v.vertExag : evAutoExag(all, H, sx);
-    if(v.vertExag==null && all.length) v.vertExag = exag;
+    //
+    // Settings can switch exaggeration off entirely, which pins every section
+    // at true proportion. Nothing is written to the view when it is off, so
+    // each side's own factor survives and comes back when it is switched on.
+    let exag = 1;
+    if(prefs.vertExag!==false){
+      exag = (v.vertExag!=null) ? v.vertExag : evAutoExag(all, H, sx);
+      if(v.vertExag==null && all.length) v.vertExag = exag;
+    }
     return {pts:pts, all:all, W:W, H:H, datumY:datumY, x0:x0, x1:x1, fit:fit, sx:sx, exag:exag,
             zoom:(v.zoom||1),
             toX: x => (x-x0)*sx + px,
@@ -4796,6 +4898,12 @@
       ? 'Unlock to pinch the scale and drag the anchor line'
       : 'Pinch to zoom, drag to pan — the vertical drag moves the anchor line';
     evLevels.classList.toggle('active', evLevelsOn);
+    // With exaggeration switched off in Settings the slider would be a control
+    // that changes nothing, so it goes away rather than sitting there inert.
+    const veOn = prefs.vertExag!==false;
+    evExagLabel.style.display = veOn?'':'none';
+    evExagSlider.style.display = veOn?'':'none';
+    evExagVal.style.display = veOn?'':'none';
     evXray.textContent = EV_MODE_LABEL[evMode];
     evXray.classList.toggle('active', evMode!=='cut');
     const v=evActive?evView(evActive):null;
