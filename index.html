@@ -3363,17 +3363,26 @@
       inspHost.insertBefore(pinInspector, inEv ? evStage : panelHome.inspNext);
     if(filmStrip.parentNode!==stripHost || (!inEv && filmStrip.nextSibling!==panelHome.stripNext))
       stripHost.insertBefore(filmStrip, inEv ? null : panelHome.stripNext);
-    const showInsp = !!inspectKind && prefs.inspector!==false;
+    // Split screen has no room for the column: half a portrait screen is
+    // already a short map, and taking a third of its width to show a photo of
+    // the pin you are looking at is a bad trade. The preference is untouched --
+    // the column comes straight back when the iPad is turned flat again -- and
+    // the button that sets it goes away rather than sitting there doing nothing.
+    const showInsp = !!inspectKind && prefs.inspector!==false && !splitOn;
     mapwrap.classList.toggle('insp', showInsp && !inEv);
     elevPanel.classList.toggle('insp', showInsp && inEv);
-    [panelsMapBtn, panelsEvBtn].forEach(b=>b && b.classList.toggle('active', prefs.inspector!==false));
+    [panelsMapBtn, panelsEvBtn].forEach(b=>{
+      if(!b) return;
+      b.style.display = splitOn ? 'none' : '';
+      b.classList.toggle('active', prefs.inspector!==false);
+    });
     [stripMapBtn, stripEvBtn].forEach(b=>b && b.classList.toggle('active', prefs.filmstrip!==false));
   }
 
   function inspectOpen(kind, id){
     inspectKind=kind; inspectId=id;
     inspectSetOpen(true);
-    if(prefs.inspector!==false) inspectRender();
+    if(prefs.inspector!==false && !splitOn) inspectRender();
   }
   function inspectClose(){
     inspectKind=null; inspectId=null;
@@ -3441,7 +3450,7 @@
   function piFt(m){ return m===null||m===undefined ? null : (m/M_PER_FT).toFixed(1)+"'"; }
 
   function inspectRender(){
-    if(!inspectKind || prefs.inspector===false) return;
+    if(!inspectKind || prefs.inspector===false || splitOn) return;
     if(inspectKind==='pin'){
       const pin=pins.find(p=>p.id===inspectId);
       if(!pin){ inspectClose(); return; }

@@ -157,7 +157,8 @@ Three things are load-bearing:
   edge is what forces the reflow — don't defer it into a `requestAnimationFrame`
   or the jump gets a frame to show itself.
 
-**The column and the filmstrip follow you into an elevation view.** There is
+**The column and the filmstrip follow you into an elevation view** — though
+not into split screen, where the column is dropped (see below). There is
 exactly ONE of each; `panelsSync()` moves them between `.mapwrap` and
 `.elev-panel` rather than duplicating them. Both are plain DOM — no Leaflet, no
 `<video>` — so re-parenting them is free, which is the same reason the map
@@ -192,6 +193,13 @@ duplicated: it is the one map and the one elevation panel, both already
 
 Sliding a pin down on the plan moves it in the section as you drag, not on the
 drop — the section is right there above your thumb.
+
+**The preview column is absent while split.** Half a portrait screen is already
+a short map, and taking a third of its width to show a photo of the pin you are
+looking at is a bad trade. The preference is untouched, so the column comes
+straight back when the iPad is turned flat again; the **Preview** button goes
+away for the duration rather than sitting there doing nothing. The filmstrip
+stays — it is a row, not a column, and it is what you use to find a frame.
 
 ### The plan turns to face the section
 
