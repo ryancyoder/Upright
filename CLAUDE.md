@@ -517,6 +517,59 @@ and cut/fill together — but it is gated on fieldwork, not code. Eight points
 gives eight big flat triangles and a mesh that is mostly invention; it needs a
 yard shot densely before it means anything.
 
+## The surface: contours and drainage
+
+The ground line is 1D interpolation along one cut. This is the 2D case:
+triangulate **all** the placed points and you can ask what the ground does
+anywhere inside them. **Surface** in the map toolbar cycles
+`off → Contours → Contours + flow → off`.
+
+Same discipline as everywhere else, stated plainly because a shaded surface is
+the most authoritative-looking thing this app can put on screen:
+
+- **The vertices are measurements.**
+- **Every triangle is a flat plane** — an assumption spread over an *area*
+  rather than along a line, so the sparser the shots, the more of what you are
+  looking at is invention. The status line reports `N points · N triangles ·
+  N' of fall · thin · up to N' between shots`; that last figure is how far it is
+  interpolating at its worst.
+- **It covers only the area inside the outermost points.** The hull is drawn
+  dashed so you can see where it stops.
+- **There are no breaklines.** Delaunay will happily triangulate straight across
+  a retaining wall and smooth away the very feature you went out to measure.
+  Until breaklines exist, read a wall in the sections, not here.
+
+**`SUPER_MULT` is 1e5 and that is not paranoia.** Bowyer-Watson's enclosing
+triangle has to be bigger than the biggest **circumcircle**, not merely bigger
+than the points — and three nearly-collinear points have a circumradius of about
+`L²/8h`, which runs away as `h` goes to zero. Shooting eight points along a
+fence line is an ordinary thing to do. At the 20× this started with, the strip
+step then ate the outermost slivers: measured, **90% of the hull covered on a
+fence line and 39% on a straight run**, with no error and nothing on screen to
+say so. 1e4 is where every degenerate case tested reaches 100%; 1e5 leaves an
+order of magnitude on top and costs nothing. The in-circle epsilon is
+**relative**, too — a sliver's `r²` is astronomical and an absolute epsilon
+means nothing against it.
+
+Flow arrows come from `triFlow()`: a triangle is a plane, so it has exactly one
+downhill direction and one slope. Under 0.5% it draws a hollow ring instead of
+an arrow, which is the useful signal — that is where it ponds.
+
+**The maths is verified numerically, not by eye** (`test52.js`, no browser).
+Over a known plane the contour vertices land on their own level to **3.6e-15 ft**,
+every triangle reports the same downhill bearing to **3.4e-13°**, and the
+contour/flow perpendicularity dot product is **7.4e-14**. The triangulation is
+checked for the Delaunay property (no point inside any circumcircle) and for
+tiling the convex hull exactly, on eight point sets including the degenerate
+ones.
+
+**Not built on top of it yet:** cut/fill needs a *proposed* surface to difference
+against; a 3D view would render this mesh, and at this primitive count that is
+SVG with a projection matrix, not WebGL. The sections still build their ground
+line from nearby points rather than by slicing the mesh — the mesh would be more
+correct, but the section's own off-cut honesty reporting would need rethinking
+with it.
+
 ## Folds: each drawing shown on the other view
 
 Two projections of data that already exists. **Nothing is stored** — same rule
@@ -1538,12 +1591,10 @@ sketch, so this is the fire-and-forget write model showing up in real data,
 not just abandoned starts.
 
 **Not yet built**
-- A triangulated surface over the survey points (the ground line is the 1D case
-  of it). Everything downstream — contours, drainage zones, cut/fill, a 3D view
-  — falls out of that one thing. Two known traps: it only covers the area inside
-  the outermost points, and plain Delaunay will triangulate straight across a
-  retaining wall and smooth away the feature you went out to measure, which is
-  what breaklines exist to prevent.
+- Breaklines for the surface — telling it "these points are a wall, do not
+  triangulate across them". Without them a retaining wall is smoothed away.
+- Cut/fill, which needs a proposed surface to difference against.
+- A 3D view of the mesh.
 - More of the compass ideas: auto-selecting the section you are standing in
   front of, and squaring the cuts to a wall by pointing at it. (A heading-up
   map is built — see *My location*.)
@@ -1579,6 +1630,11 @@ not just abandoned starts.
   match a pin to a place at arm's length, and whether losing that much map
   while dragging is a fair trade for never having a bubble over the pin.
 - Sketch/Measure accuracy against known dimensions.
+- **The surface against a real yard, and this is the one that decides whether it
+  was worth building.** Eight points gives eight big flat triangles and contours
+  that are mostly invention. The question is not whether the code works — that is
+  verified — but whether a crew will shoot forty points instead of eight, and
+  whether the contours that come back match what the eye sees on the ground.
 - Whether folds read as help or as clutter in a yard: whether a section stroke's
   shadow is legible on the cut line at working zoom, and whether anyone reads
   the folded plan as a claim about height despite the label and the beads.
