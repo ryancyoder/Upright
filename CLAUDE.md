@@ -1051,12 +1051,32 @@ real distances and the cell shape shows the exaggeration. It costs nothing for
 drawing right angles, since the two axes are perpendicular on screen whatever
 the scale.
 
-**Align to grid is what actually delivers a right angle.** A visible grid only
-lets you eyeball one. With it on, every point of a stroke lands on the nearest
-intersection, so a rough drag along a wall comes out as an orthogonal path —
-consecutive points on the same intersection collapse to one, and what is left is
-axis-true segments. With it off, the stroke is thinned by pixel distance
-instead, exactly as the map's sketch is.
+**Align to grid — and it is align, not snap.** A visible grid only lets you
+eyeball a right angle; this is what delivers one. The two are routinely
+confused and the difference is the whole reason this is the one that shipped:
+
+- **Snap constrains position.** Every point jumps to the nearest intersection,
+  so a wall you drew at +11.4 ft becomes +10 ft. In a tool whose entire purpose
+  is measuring, that silently rounds a measured height to fit a drawing aid —
+  the one unforgivable move.
+- **Align constrains direction.** Each run is made parallel to a grid axis and
+  *nothing moves off where you put it*. The stroke starts exactly where the
+  finger went down, the corner stays exactly where you turned, and the run
+  keeps the height it was drawn at. Only the hand wobble across the run is
+  taken out.
+
+So a wall drawn at the height you actually measured stays at that height and
+still comes out plumb. `ALIGN_START_PX` (7) is how far the finger must travel
+before the stroke has a direction at all; `ALIGN_TURN_PX` (15) is how far
+*across* the current run it must go to count as a turn rather than wobble — at
+which point the tip as it stands becomes the corner and the next run starts
+from there on the other axis. Both are measured in **screen** pixels, not feet:
+with a vertical exaggeration in play a foot is a different number of pixels per
+axis, so choosing the run direction in feet would lean towards whichever axis
+is stretched.
+
+With it off, the stroke is thinned by pixel distance instead, exactly as the
+map's sketch is.
 
 Sketching **owns the stage while it is on**: `evGestArmed()` returns false, so a
 stroke is never also a pan, and picking the tool drops any image tool and

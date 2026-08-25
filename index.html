@@ -6029,21 +6029,55 @@
   }, {passive:false});
 
   // ---------- sketching on a section ----------
-  // The same gesture as the map's sketch, in the profile's own units. Align
-  // puts each point on the nearest grid intersection, which turns a rough drag
-  // into an orthogonal path -- that is what makes drawing a right angle possible
-  // at arm's length, rather than something you eyeball against the lines.
-  function evGridStepX(G){
-    let q=1; [1,2,5,10,25,50,100].some(v=>{ q=v; return v*G.sx>=44; }); return q;
+  // The same gesture as the map's sketch, in the profile's own units.
+  //
+  // ALIGN, not snap -- and the difference is the whole point of using it here.
+  //
+  //   Snap constrains POSITION: every point jumps to the nearest intersection,
+  //   so a corner you drew at +11.4' becomes +10'. In a measuring tool that is
+  //   the one unforgivable move -- it silently rounds a measured height to fit
+  //   the drawing aid.
+  //
+  //   Align constrains DIRECTION: each segment is made parallel to a grid axis
+  //   and nothing else moves. The corner stays exactly where you turned; only
+  //   the hand wobble along the run is taken out.
+  //
+  // So a wall drawn at the height you actually measured stays at that height,
+  // and still comes out plumb. The run is held on one axis until the finger has
+  // travelled far enough across it to mean a turn, and the corner is fixed
+  // where that happened.
+  const ALIGN_START_PX=7;     // before this, a stroke has no direction yet
+  const ALIGN_TURN_PX=15;     // across the run: past this, you meant to turn
+  let evAlignAnchor=null, evAlignAxis=null;
+  function evAlignReset(){ evAlignAnchor=null; evAlignAxis=null; }
+  // Screen-space deltas: with a vertical exaggeration in play a foot is a
+  // different number of pixels on each axis, so choosing the run direction in
+  // feet would lean towards whichever axis is stretched.
+  function evAlignStep(p, G){
+    const a=evAlignAnchor;
+    const sdx=G.toX(p.x)-G.toX(a.x), sdy=G.toY(p.y)-G.toY(a.y);
+    if(!evAlignAxis){
+      if(Math.max(Math.abs(sdx), Math.abs(sdy)) < ALIGN_START_PX) return;
+      evAlignAxis = Math.abs(sdx) >= Math.abs(sdy) ? 'x' : 'y';
+      evDraft.push(evAlignProject(p));
+      return;
+    }
+    const across = evAlignAxis==='x' ? Math.abs(sdy) : Math.abs(sdx);
+    if(across > ALIGN_TURN_PX){
+      // The tip as it stands is the corner: fix it, and start the next run
+      // from there on the other axis.
+      evAlignAnchor = evDraft[evDraft.length-1];
+      evAlignAxis = evAlignAxis==='x' ? 'y' : 'x';
+      evDraft.push(evAlignProject(p));
+      return;
+    }
+    evDraft[evDraft.length-1] = evAlignProject(p);
   }
-  function evGridStepY(G){
-    const ftPx=G.sx*G.exag;
-    let q=1; [1,2,5,10,25,50].some(v=>{ q=v; return v*ftPx>=34; }); return q;
-  }
-  function evAlignPt(pt, G){
-    if(!evAlignOn || !evGridOn) return pt;
-    const sx=evGridStepX(G), sy=evGridStepY(G);
-    return {x:Math.round(pt.x/sx)*sx, y:Math.round(pt.y/sy)*sy};
+  // A point projected onto the current run's axis: it keeps whatever it has
+  // along the run, and takes the anchor's value across it.
+  function evAlignProject(p){
+    return evAlignAxis==='x' ? {x:p.x, y:evAlignAnchor.y}
+                             : {x:evAlignAnchor.x, y:p.y};
   }
   function evStagePt(clientX, clientY){
     const r=evStage.getBoundingClientRect(), G=evGeom(evActive);
@@ -6052,18 +6086,24 @@
   function evSketchPush(clientX, clientY){
     if(!evActive) return;
     const G=evGeom(evActive);
-    const p=evAlignPt(evStagePt(clientX, clientY), G);
+    const p=evStagePt(clientX, clientY);
+    const aligning = evAlignOn && evGridOn;
+    if(!evDraft.length){
+      evDraft.push(p);
+      if(aligning){ evAlignAnchor=p; evAlignAxis=null; }
+      evRenderSoon();
+      return;
+    }
+    if(aligning && evAlignAnchor){ evAlignStep(p, G); evRenderSoon(); return; }
+    // Freehand: thin out the jitter by screen distance, as the map's sketch does.
     const last=evDraft[evDraft.length-1];
-    // Aligning lands run after run on the same intersection; keep one.
-    if(last && Math.abs(last.x-p.x)<1e-9 && Math.abs(last.y-p.y)<1e-9) return;
-    // Unaligned, thin out the jitter instead.
-    if(!evAlignOn && last && Math.hypot((G.toX(p.x)-G.toX(last.x)), (G.toY(p.y)-G.toY(last.y)))<3) return;
+    if(Math.hypot(G.toX(p.x)-G.toX(last.x), G.toY(p.y)-G.toY(last.y)) < 3) return;
     evDraft.push(p);
     evRenderSoon();
   }
   function evSketchCommit(){
     const side=evActive;
-    const pts=evDraft; evDraft=null; evDrawing=false;
+    const pts=evDraft; evDraft=null; evDrawing=false; evAlignReset();
     if(!side || !pts || pts.length<2){ evRenderSoon(); return; }
     const rec={ id:'local-'+uuid(), remoteId:null, side:side,
                 colour:annoColor(), pts:pts };
@@ -6099,7 +6139,7 @@
     if(!evSketchOn || !evActive || e.pointerType==='touch') return;
     e.preventDefault(); e.stopPropagation();
     try{ evStage.setPointerCapture(e.pointerId); }catch(_e){}
-    evDrawing=true; evDraft=[];
+    evDrawing=true; evDraft=[]; evAlignReset();
     evSketchPush(e.clientX, e.clientY);
   }, true);
   evStage.addEventListener('pointermove', e=>{
@@ -6113,7 +6153,7 @@
   evStage.addEventListener('touchstart', e=>{
     if(!evSketchOn || !evActive || e.touches.length!==1) return;
     e.preventDefault(); e.stopPropagation();
-    evDrawing=true; evDraft=[];
+    evDrawing=true; evDraft=[]; evAlignReset();
     evSketchPush(e.touches[0].clientX, e.touches[0].clientY);
   }, {passive:false, capture:true});
   evStage.addEventListener('touchmove', e=>{
@@ -6455,8 +6495,10 @@
     evSketchBar.classList.toggle('show', evSketchOn);
     evAlignBtn.classList.toggle('active', evAlignOn && evGridOn);
     evAlignBtn.disabled = !evGridOn;
-    evAlignBtn.title = evGridOn ? 'Put every point on the nearest grid intersection'
-                                : 'Turn the grid on to align to it';
+    evAlignBtn.title = evGridOn
+      ? 'Straighten each run onto a grid axis. Corners stay where you drew them '
+        + '\u2014 nothing is rounded to a grid line.'
+      : 'Turn the grid on to align to it';
     [...evSwatches.children].forEach((b,i)=>b.classList.toggle('on', i===annoColorIdx));
     // With exaggeration switched off in Settings the slider would be a control
     // that changes nothing, so it goes away rather than sitting there inert.
@@ -6499,11 +6541,11 @@
     // One thing owns the stage: sketching stands the image tools and the
     // unlocked view down, exactly as they stand each other down.
     if(evSketchOn){ evTool=null; evViewLocked=true; }
-    if(!evSketchOn){ evDrawing=false; evDraft=null; }
+    if(!evSketchOn){ evDrawing=false; evDraft=null; evAlignReset(); }
     evSyncTabs(); evRender();
   });
   evDoneSketch.addEventListener('click', ()=>{
-    evSketchOn=false; evDrawing=false; evDraft=null; evSyncTabs(); evRender();
+    evSketchOn=false; evDrawing=false; evDraft=null; evAlignReset(); evSyncTabs(); evRender();
   });
   evAlignBtn.addEventListener('click', ()=>{ evAlignOn=!evAlignOn; evSyncTabs(); });
   evUndoBtn.addEventListener('click', evSketchUndo);
