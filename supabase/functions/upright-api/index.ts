@@ -571,6 +571,10 @@ Deno.serve(async (req) => {
         gps_accuracy_m: meta.accM ?? null, note: meta.note ?? null,
         manually_adjusted: !!meta.manuallyAdjusted, has_drawing: !!meta.hasDrawing,
         taken_at: meta.takenAt ?? null,
+        // Which way the camera was pointed: the view cone on the map. Evidence,
+        // like the elevation shot headings -- never an input to a measurement.
+        heading_deg: meta.headingDeg ?? null,
+        heading_acc_deg: meta.headingAccDeg ?? null,
       }).select().single();
       if (insErr) return err(insErr.message, 500);
       return json({ ...row, url: publicUrl(path) });

@@ -64,7 +64,7 @@ Secrets — NOT Vault, and NOT Vercel env vars; neither reaches the function).
 If editing the function, pull current source with `Supabase:get_edge_function`
 rather than reconstructing it. The source is now vendored at
 `supabase/functions/upright-api/index.ts` so edits are diffable; keep it in
-step with what is deployed. Currently **v19**.
+step with what is deployed. Currently **v20**.
 
 **Replacing an image writes a NEW storage path, never an upsert in place.**
 Storage public URLs are cached by the browser and by the CDN in front of the
@@ -861,6 +861,20 @@ and ±50% at 129 ft for one degree of angle noise — good close in, poor far ou
 Because the bearing is separately known, what is left is an error *along* the
 ray, which is a one-dimensional drag to correct.
 
+**View cones on photo pins.** A photo pin is a point; with a heading it is a
+point *and* a direction. `upright_photos.heading_deg` records which way the
+camera was pointed and the map draws a wedge — `PHOTO_FOV_DEG` (62°, roughly an
+iPad's rear camera) over `PHOTO_CONE_M` (10 m). That is what turns a yard full
+of *Pin 7* into something readable at the desk: it says what the picture is
+**of**, not just where it was taken from. The inspector reads *Facing 320° NW*,
+and the GeoJSON export carries `headingDeg`.
+
+Fixed ground distance rather than fixed screen size, so it scales with the map
+like everything else, and deliberately short — a GPS pin is good to 3–5 m, so a
+10 m wedge is about as much precision as it has any business implying. Faint for
+every pin, solid for the selected one: the wash reads as coverage, the solid one
+answers *what am I looking at*.
+
 **The sight line.** Every shot stores the heading it was taken at
 (`upright_elevation_shots.heading_deg`, plus iOS's own
 `webkitCompassAccuracy`). An unplaced pin is therefore constrained to a ray out
@@ -1123,7 +1137,7 @@ not just abandoned starts.
 **Not yet built**
 - More of the compass ideas: a heading-up map (cheap now the rotation
   machinery exists), auto-selecting the section you are standing in front of,
-  squaring the cuts to a wall by pointing at it, and view cones on photo pins.
+  and squaring the cuts to a wall by pointing at it.
 - ZIP export of an *archived* session. The export reads `pin.photo` as a
   data URL and `clip.blob`, both of which are URLs in archive mode. Not
   currently reachable (the done panel isn't part of the archive flow) but it

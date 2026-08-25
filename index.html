@@ -2030,16 +2030,20 @@
       lng: lastFix ? lastFix.coords.longitude : null,
       acc: lastFix ? lastFix.coords.accuracy : null,
       time:new Date().toISOString(),
+      // Which way the camera was pointed. Evidence for the view cone, never an
+      // input: nothing about where this pin sits is computed from it.
+      heading: lastHeading, headingAcc: lastHeadingAcc,
       note:'', adjusted:false, marker:null, remoteId:null
     };
     pins.push(pin);
     snapFlash.classList.remove('go'); void snapFlash.offsetWidth; snapFlash.classList.add('go');
     updatePinCount();
-    if(map && pin.lat!==null) addPinMarker(pin);
+    if(map && pin.lat!==null){ addPinMarker(pin); conesDraw(); }
     renderStrip();
     apiUpload('/sessions/'+sessionId+'/photos', dataUrlToBlob(pin.photo), {
       seq: pin.id, offsetMs: pin.offset, lat: pin.lat, lng: pin.lng, accM: pin.acc,
-      note: pin.note, takenAt: pin.time, manuallyAdjusted: pin.adjusted, hasDrawing: false
+      note: pin.note, takenAt: pin.time, manuallyAdjusted: pin.adjusted, hasDrawing: false,
+      headingDeg: pin.heading, headingAccDeg: pin.headingAcc
     }).then(row=>{ if(row && row.id) pin.remoteId = row.id; });
     return pin;
   }
@@ -2062,6 +2066,7 @@
       const ll=m.getLatLng();
       pin.lat=ll.lat; pin.lng=ll.lng;
       if(inspectIs('pin', pin.id)) inspectSoon();
+      conesDraw();          // the cone comes from the pin, so it moves with it
     });
     m.on('dragend', ()=>{
       pinDragging=false;
@@ -2086,7 +2091,7 @@
     const gj={type:'FeatureCollection', features:pins.filter(p=>p.lat!==null).map(p=>({
       type:'Feature',
       geometry:{type:'Point', coordinates:[p.lng,p.lat]},
-      properties:{uuid:p.uuid, sessionId:p.sessionId, seq:p.id, photo:'photos/pin-'+p.id+'.jpg', note:p.note, time:p.time, offsetMs:p.offset, gpsAccuracyM:p.acc, manuallyAdjusted:p.adjusted}
+      properties:{uuid:p.uuid, sessionId:p.sessionId, seq:p.id, photo:'photos/pin-'+p.id+'.jpg', note:p.note, time:p.time, offsetMs:p.offset, gpsAccuracyM:p.acc, manuallyAdjusted:p.adjusted, headingDeg:p.heading==null?null:+p.heading.toFixed(1)}
     }))};
     sketches.forEach(sk=> gj.features.push({
       type:'Feature',
@@ -2485,6 +2490,9 @@
       uuid:p.id, sessionId:s.id, id:p.seq, photo:p.url,
       offset:p.offset_ms, lat:p.lat, lng:p.lng, acc:p.gps_accuracy_m,
       time:p.taken_at, note:p.note||'', adjusted:!!p.manually_adjusted,
+      heading:p.heading_deg==null?null:+p.heading_deg,
+      headingAcc:p.heading_acc_deg==null?null:+p.heading_acc_deg,
+      hasDrawing:!!p.has_drawing,
       marker:null, remoteId:p.id
     }));
     pinSeq=pins.reduce((m,p)=>Math.max(m, p.id||0), 0);
@@ -3519,6 +3527,8 @@
         '<div class="pi-group">Position</div>'
       + piRow('Coordinates', piCoords(pin) || '<span class="warn">no GPS fix</span>')
       + piRow('GPS accuracy', acc)
+      + piRow('Facing', pin.heading==null ? null
+          : pin.heading.toFixed(0)+'\u00b0 '+compassPoint(pin.heading))
       + piRow('Placement', pin.adjusted ? 'moved by hand' : 'as captured')
       + '<div class="pi-group">Capture</div>'
       + piRow('Taken', when)
@@ -3667,6 +3677,7 @@
       if(pin.marker && pin.marker._icon)
         pin.marker._icon.classList.toggle('pin-sel', pin.id===selectedPinId);
     });
+    conesDraw();
   }
 
   function scrollThumbIntoView(){
@@ -4405,6 +4416,50 @@
   function movedFromPark(pt){
     if(!pt || !pt.parkedAt) return true;        // no park recorded: nothing to prove
     return metresBetween(pt.parkedAt, pt) > PARK_MOVED_M;
+  }
+
+  // ---------- view cones on photo pins ----------
+  // A photo pin is a point; with a heading it is a point AND a direction. The
+  // wedge is what turns a yard full of "Pin 7" into something readable at the
+  // desk: it says what the picture is OF, not just where it was taken from.
+  //
+  // Fixed ground distance rather than fixed screen size, so it scales with the
+  // map like everything else, and deliberately short -- a GPS pin is good to
+  // 3-5 m, so a 10 m wedge is about as much precision as it has any business
+  // implying. Faint for every pin, solid for the selected one: the wash reads
+  // as coverage, the solid one answers "what am I looking at".
+  const PHOTO_FOV_DEG=62;      // roughly an iPad rear camera, horizontally
+  const PHOTO_CONE_M=10;
+  let coneLayers=[];
+  function conesClear(){
+    coneLayers.forEach(l=>{ if(map){ try{ map.removeLayer(l); }catch(e){} } });
+    coneLayers=[];
+  }
+  function conesDraw(){
+    conesClear();
+    if(!map) return;
+    pins.forEach(pin=>{
+      if(pin.lat==null || pin.lng==null || pin.heading==null) return;
+      const sel = pin.id===selectedPinId;
+      const half=PHOTO_FOV_DEG/2, step=half/6;
+      const ring=[[pin.lat, pin.lng]];
+      for(let a=-half; a<=half+0.001; a+=step){
+        const ll=offsetLatLng(pin, pin.heading+a, PHOTO_CONE_M);
+        ring.push([ll.lat, ll.lng]);
+      }
+      coneLayers.push(L.polygon(ring, {
+        className:'cone-path', interactive:false,
+        color:'#5b9bd5', weight: sel?1.5:0, opacity: sel?0.9:0,
+        fillColor:'#5b9bd5', fillOpacity: sel?0.32:0.16
+      }).addTo(map));
+    });
+  }
+  // 16-point compass, for saying "facing 47° NE" rather than just a number.
+  const COMPASS_POINTS=['N','NNE','NE','ENE','E','ESE','SE','SSE',
+                        'S','SSW','SW','WSW','W','WNW','NW','NNW'];
+  function compassPoint(deg){
+    if(deg==null) return null;
+    return COMPASS_POINTS[Math.round(((deg%360)+360)%360/22.5)%16];
   }
 
   // ---------- sight lines ----------
