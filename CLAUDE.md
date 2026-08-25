@@ -812,6 +812,46 @@ the compass.** Distance comes from where the pins sit, angle from the tilt
 sensor. A recorded heading buys two things the maths cannot give you on its
 own, and a bad compass makes both worse without making any measurement wrong.
 
+**Which way the camera is pointing is NOT `webkitCompassHeading`, and reading
+it as though it were is the bug this section shipped with.** That value is the
+alpha-equivalent: the compass direction of rotation about the device's *own* z
+axis, the one normal to the screen. Lie the iPad flat and z points at the sky,
+so it correctly describes which way the top edge faces — which is what a
+compass app wants. But grade sighting is done with the iPad held **up**, screen
+vertical, camera aimed at the target; z is then horizontal, pointing back out
+of the screen at your face, and the reading stops being an azimuth at all.
+Measured against the real geometry:
+
+| how you were holding it | error in the recorded bearing |
+| --- | --- |
+| portrait, held plumb | none — which is why it ever looked right |
+| portrait, rolled 20° in the hand | 20°: the roll leaks straight in |
+| **landscape** | **90°**, sign depending on which way up |
+
+Note what that did to the bearing cross-check below. Hold the iPad the same way
+all set and the set's median offset quietly *absorbs* the error; change your
+grip for one shot and that point alone disagrees with its set — which is
+exactly the signature the check attributes to **a pin in the wrong place**. It
+would have blamed the pin.
+
+`cameraBearing()` takes the camera axis (−z in device coordinates, whatever the
+grip) through the full orientation matrix instead. W3C has `R = Rz(a)Rx(b)Ry(g)`
+mapping device to earth (X east, Y north, Z up), so the third column is z in
+earth coords, the camera is its negation, and the azimuth is that vector
+flattened onto the ground. **Roll falls out of it by construction** — which is
+the same property `tilt` already had (`cos β · cos γ` is the z axis against
+vertical), so the angle was always roll-invariant and only the bearing was not.
+
+Aimed within ~5° of vertical there is no horizontal component left to take a
+bearing from, and `cameraBearing()` returns null rather than inventing one. The
+stance shot is aimed at your own feet, so `lastHeading` keeps the last good
+value for the pin it parks while the live reading goes null.
+
+On iOS `alpha` is referenced to an arbitrary start, so true north comes from
+`webkitCompassHeading` via `heading = 360 − alpha`, and that alpha is what the
+matrix is fed. iOS also reports **−1** for a heading it does not trust; stored
+raw that became an accuracy of −1°, which reads as better than perfect.
+
 **The parking spot.** Stand at a known height above flat ground, sight
 something *on* that ground at a depression angle, and the horizontal distance
 falls out: `d = h / tan|θ|`. With the compass giving the bearing, that is a
@@ -862,6 +902,28 @@ Error grows as `2Δθ / sin 2θ`: about ±10% at 26 ft, ±20% at 51 ft, ±33% at
 and ±50% at 129 ft for one degree of angle noise — good close in, poor far out.
 Because the bearing is separately known, what is left is an error *along* the
 ray, which is a one-dimensional drag to correct.
+
+**The compass on screen while shooting grade.** A dial in the sighting HUD:
+white index fixed at the top for where you are aiming, red-north needle turning
+under it, and `312° NW ±8°`. Two things make it worth the space, and neither is
+the dial itself.
+
+It reads the **camera** bearing — the number that actually gets recorded — so
+what is on screen is the thing being verified, not a second opinion from the
+same sensor. And it carries `webkitCompassAccuracy`, which is iOS's own
+self-report and the only honest signal about whether the heading can be trusted
+at all; past `HEADING_ACC_BAD` (20°) it is worse than the 15° the cross-check
+flags at, so the check would be reading noise. A bad or unknown figure turns red
+and says *figure-8 to calibrate*.
+
+Be clear about what it can and cannot do, because it is easy to over-trust: a
+miscalibrated compass reads **confidently wrong**, so a dial alone proves
+nothing. What catches that is the cardinal against something you already know —
+the street, the front of the house, the sun — plus the accuracy figure. The
+needle makes both possible at a glance; it does not make either automatic.
+
+A needle rather than a lettered rose: at 44px a letter and its tick land on top
+of each other and read as one red smudge.
 
 **View cones on photo pins.** A photo pin is a point; with a heading it is a
 point *and* a direction. `upright_photos.heading_deg` records which way the
@@ -1250,10 +1312,16 @@ not just abandoned starts.
   close enough to be worth having at yard distances, and whether a plausible
   parking spot tempts anyone into leaving pins where they fell despite the
   sight line and the *barely moved* label.
-- The bearing cross-check against a real compass: whether iOS's heading is
-  steady enough for `HEADING_FLAG_DEG` (15°) to catch real mistakes without
-  crying wolf, and whether a set's median offset really is as consistent as the
-  method assumes once you have walked around a yard with a metal-cased iPad.
+- The bearing cross-check against a real compass, now that the heading is the
+  camera's rather than the screen normal's: whether iOS's heading is steady
+  enough for `HEADING_FLAG_DEG` (15°) to catch real mistakes without crying
+  wolf, and whether a set's median offset really is as consistent as the method
+  assumes once you have walked around a yard with a metal-cased iPad. Sets shot
+  before this fix are not worth reading back — a change of grip mid-set put 90°
+  into a single point's bearing.
+- The on-screen compass against a known direction: whether the accuracy figure
+  iOS reports actually tracks how wrong the heading is, and whether `±20°` is
+  the right line to call it bad at.
 - Plan persistence against a real plan photo on the iPad: whether the upload
   size is sensible over cellular, and whether a restored plan lands exactly
   where it was left.

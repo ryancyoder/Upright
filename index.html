@@ -399,6 +399,25 @@
     font-size:26px; font-weight:700; letter-spacing:0.02em;
     font-variant-numeric:tabular-nums; color:var(--live);
   }
+  /* The compass. It reads the bearing the CAMERA is pointing at -- the number
+     that actually gets recorded -- so what is on screen is the thing being
+     verified, not a second opinion from the same sensor. The index at the top
+     is where you are aiming; the rose turns under it. */
+  .sight-compass{
+    display:flex; align-items:center; gap:9px;
+    padding-top:2px;
+  }
+  .sc-rose{width:44px; height:44px; display:block; flex:none;}
+  .sc-read{display:flex; flex-direction:column; align-items:flex-start; line-height:1.15;}
+  .sc-read b{
+    font-size:17px; font-weight:700; font-variant-numeric:tabular-nums;
+    letter-spacing:0.01em;
+  }
+  .sc-read i{font-style:normal; font-size:11px; color:var(--dim);}
+  /* Accuracy is iOS's own self-report and the only honest signal about whether
+     the reading can be trusted at all; a bad one has to look bad. */
+  .sight-compass.warn .sc-read i{color:var(--live); font-weight:700;}
+  .sight-compass.off{opacity:0.55;}
   .sight-actions{
     margin-bottom:calc(env(safe-area-inset-bottom,0px) + 28px);
     display:flex; gap:12px;
@@ -982,6 +1001,16 @@
         <div class="sight-msg" id="sightMsg"></div>
         <div class="sight-angle" id="sightAngle">—</div>
         <div class="sight-steady" id="sightSteady">HOLD STEADY</div>
+        <!-- The compass, shown while sighting so the bearing can be checked
+             against something known before it is recorded. -->
+        <div class="sight-compass" id="sightCompass">
+          <svg class="sc-rose" viewBox="0 0 44 44" aria-hidden="true">
+            <circle cx="22" cy="22" r="19" fill="none" stroke="rgba(255,255,255,0.28)" stroke-width="1.5"/>
+            <g id="scRose"></g>
+            <path d="M22 1.5 L26 7.5 L18 7.5 Z" fill="#fff"/>
+          </svg>
+          <span class="sc-read"><b id="scBearing">&mdash;</b><i id="scAcc"></i></span>
+        </div>
       </div>
       <div class="sight-dwell"><i id="sightDwellFill"></i></div>
 
@@ -1326,6 +1355,8 @@
         evOpacity=$('evOpacity'),
         evFile=$('evFile'), evXray=$('evXray'), evLevels=$('evLevels'),
         sightOverlay=$('sightOverlay'), sightMsg=$('sightMsg'), sightAngle=$('sightAngle'),
+        sightCompass=$('sightCompass'), scRose=$('scRose'),
+        scBearing=$('scBearing'), scAcc=$('scAcc'),
         sightSteady=$('sightSteady'), gradeBtn=$('gradeBtn'),
         sightDwell=$('sightDwellFill'), sightCross=$('sightCross'), sightCrossGlyph=$('sightCrossGlyph'),
         elevBar=$('elevBar'), elevStatus=$('elevStatus'),
@@ -4188,6 +4219,9 @@
   // heading (it applies declination itself) and an accuracy in degrees, which
   // goes negative when the device considers the compass unusable.
   let lastHeading=null, lastHeadingAcc=null;
+  // The bearing as it is RIGHT NOW, null when the camera is too near vertical
+  // for one. lastHeading holds the last good value; the compass must not.
+  let headingLive=null;
   let gradeResuming=false, gradeReshootId=null, gradeAnchorBaseline=null, gradeNote='', lastShotAngle=null;
   let elevSlopes=[], slopeArming=false, slopeFirstId=null;
   // How far a resumed set's fresh anchor shot may differ from the one already
@@ -4824,6 +4858,9 @@
     gradeBtn.innerHTML = on ? 'END<br>GRADE' : 'SHOOT<br>GRADE';
     sightOverlay.classList.toggle('show', on);
     if(on){
+      // Paint the compass now rather than waiting on the next orientation
+      // event, same reason the steadiness gate runs on open.
+      compassRefresh();
       geoOneShot();          // seed an observation even with the locator off
       if(resumeObsId && elevPoint(resumeObsId)){
         gradeObsId=resumeObsId;
@@ -5138,9 +5175,71 @@
                 + (driftNote ? '<br>'+driftNote : ' — move to the next point'));
   }
 
+  // ---------- the compass, on screen ----------
+  // Built once; only the rotation and the readout change after that.
+  const CARDINALS=['N','NE','E','SE','S','SW','W','NW'];
+  function cardinalOf(deg){ return CARDINALS[Math.round(((deg%360)+360)%360/45)%8]; }
+  // Bad above this, on iOS's own figure. Anything past ~20 deg is worse than
+  // the 15 deg the bearing cross-check flags at, so the check would be reading
+  // noise.
+  const HEADING_ACC_BAD=20;
+  // A NEEDLE, not a lettered rose. At the size this has to be, a letter and a
+  // tick land on top of each other and read as one red smudge; the red-north
+  // needle is unmistakable at a glance and needs no legend.
+  function roseBuild(){
+    const g=scRose; if(!g || g.childNodes.length) return;
+    const ns='http://www.w3.org/2000/svg';
+    for(let a=45; a<360; a+=45){
+      if(a%90===0 && a===180) continue;         // the needle's tail marks south
+      const rd=a*Math.PI/180;
+      const el=document.createElementNS(ns,'line');
+      el.setAttribute('x1', (22+14.5*Math.sin(rd)).toFixed(2));
+      el.setAttribute('y1', (22-14.5*Math.cos(rd)).toFixed(2));
+      el.setAttribute('x2', (22+17.5*Math.sin(rd)).toFixed(2));
+      el.setAttribute('y2', (22-17.5*Math.cos(rd)).toFixed(2));
+      el.setAttribute('stroke','rgba(255,255,255,0.45)');
+      el.setAttribute('stroke-width', a%90===0 ? 1.6 : 1);
+      g.appendChild(el);
+    }
+    const north=document.createElementNS(ns,'path');
+    north.setAttribute('d','M22 6 L26 22 L18 22 Z');
+    north.setAttribute('fill','#c4432b');
+    g.appendChild(north);
+    const south=document.createElementNS(ns,'path');
+    south.setAttribute('d','M22 38 L26 22 L18 22 Z');
+    south.setAttribute('fill','rgba(255,255,255,0.45)');
+    g.appendChild(south);
+  }
+  function compassRefresh(){
+    roseBuild();
+    const g=scRose;
+    // The index is fixed at the top (where the camera looks) and the rose turns
+    // beneath it, so N on screen really points north.
+    const shown = (headingLive!=null) ? headingLive : lastHeading;
+    if(g) g.setAttribute('transform', shown==null ? '' :
+      'rotate('+(-shown).toFixed(1)+' 22 22)');
+    const acc=lastHeadingAcc;
+    let note;
+    if(shown==null) note='no compass';
+    else if(acc==null) note='accuracy unknown';
+    else note='\u00b1'+Math.round(acc)+'\u00b0';
+    // Aimed too near vertical to have a bearing at all -- say so rather than
+    // leaving the last one on screen looking live.
+    if(shown!=null && headingLive==null) note='aimed too steep \u2014 last bearing';
+    else if(shown!=null && (acc==null || acc>HEADING_ACC_BAD))
+      note+=' \u2014 figure-8 to calibrate';
+    scBearing.textContent = shown==null ? '\u2014'
+      : Math.round(shown)+'\u00b0 '+cardinalOf(shown);
+    scAcc.textContent=note;
+    sightCompass.classList.toggle('warn',
+      shown!=null && (acc==null || acc>HEADING_ACC_BAD));
+    sightCompass.classList.toggle('off', shown==null || headingLive==null);
+  }
+
   // Called from handleOrientation. Runs the steadiness gate and the dwell
   // timer; the shot fires by itself when the crosshair has been held.
   function sightRefresh(){
+    compassRefresh();
     const a=sightAngleNow(), sp=sightSpreadNow();
     sightAngle.textContent = (a===null) ? '\u2014' : ((a>=0?'+':'')+a.toFixed(1)+'\u00b0');
     const steady=(a!==null && sp<=STEADY_DEG);
@@ -7110,20 +7209,81 @@
 
 
   // ---------- orientation ----------
+  // WHICH WAY THE CAMERA IS POINTING IS NOT `webkitCompassHeading`.
+  //
+  // That reading is the alpha-equivalent: the compass direction of rotation
+  // about the device's OWN z axis, the one normal to the screen. Lie the iPad
+  // flat and z points at the sky, so it correctly describes which way the top
+  // edge faces -- which is what a compass app wants. But grade sighting is done
+  // with the iPad held UP, screen vertical, camera aimed at the target. z is
+  // then horizontal, pointing back out of the screen at your face, and the
+  // reading stops being an azimuth at all.
+  //
+  // Measured against the real geometry, what it costs you is:
+  //
+  //   portrait, held plumb ....... exact -- which is why this ever looked right
+  //   portrait, rolled 20 deg .... 20 deg out; the roll leaks straight in
+  //   LANDSCAPE .................. 90 deg out, sign depending on which way up
+  //
+  // So the recorded bearing was the aimed bearing only when the iPad happened
+  // to be held perfectly upright in portrait. Worse for the bearing
+  // cross-check: hold it one way all set and the set's median offset quietly
+  // absorbs the error, but change your grip for one shot and that point alone
+  // disagrees with its set -- exactly the signature the check reads as A PIN IN
+  // THE WRONG PLACE. It would blame the pin.
+  //
+  // The camera axis is -z in device coordinates whatever the grip, so take it
+  // through the full orientation matrix instead. W3C has R = Rz(a)Rx(b)Ry(g)
+  // mapping device to earth (X east, Y north, Z up); the third column is z in
+  // earth coords, the camera is its negation, and the azimuth is that vector
+  // flattened onto the ground. Roll falls out of it by construction.
+  const CAM_MIN_HORIZ=0.087;         // within ~5 deg of vertical: no azimuth
+  function cameraBearing(A, B, G){
+    if(A==null || B==null || G==null) return null;
+    const r=Math.PI/180;
+    const cA=Math.cos(A*r), sA=Math.sin(A*r);
+    const cB=Math.cos(B*r), sB=Math.sin(B*r);
+    const cG=Math.cos(G*r), sG=Math.sin(G*r);
+    const camE=-(cA*sG + cG*sA*sB);          // east component
+    const camN=-(sA*sG - cA*cG*sB);          // north component
+    // Aimed at your own feet or straight up: the axis has no horizontal part
+    // left to take a bearing from, and any number here would be invented.
+    if(Math.hypot(camE, camN) < CAM_MIN_HORIZ) return null;
+    return ((Math.atan2(camE, camN)/r % 360) + 360) % 360;
+  }
   function handleOrientation(evt){
     if(evt.beta===null || evt.beta===undefined) return;
     const b=(evt.beta||0)*Math.PI/180, g=(evt.gamma||0)*Math.PI/180;
     const cosTilt=Math.max(-1,Math.min(1,Math.cos(b)*Math.cos(g)));
     const tilt=Math.acos(cosTilt)*180/Math.PI;
     tiltReadout.textContent='tilt '+Math.round(tilt)+'°';
-    // Heading is a PLACEMENT HINT ONLY -- it parks a just-shot pin roughly the
-    // right way round to shorten the drag. It never enters the elevation maths,
-    // so iOS compass calibration cannot corrupt a measurement.
-    if(typeof evt.webkitCompassHeading==='number' && !isNaN(evt.webkitCompassHeading)){
-      lastHeading=evt.webkitCompassHeading;
-      lastHeadingAcc = (typeof evt.webkitCompassAccuracy==='number') ? evt.webkitCompassAccuracy : null;
+    // Heading is a PLACEMENT HINT AND A CROSS-CHECK ONLY -- it parks a just-shot
+    // pin roughly the right way round to shorten the drag, and it is compared
+    // with where the pin ends up. It never enters the elevation maths, so iOS
+    // compass calibration cannot corrupt a measurement.
+    //
+    // iOS's alpha is referenced to an arbitrary start, so true north comes from
+    // webkitCompassHeading; the equivalence is heading = 360 - alpha, and that
+    // alpha is what the matrix wants. Elsewhere an absolute alpha is already
+    // earth-referenced.
+    let alphaTrue=null;
+    if(typeof evt.webkitCompassHeading==='number' && !isNaN(evt.webkitCompassHeading)
+       && evt.webkitCompassHeading>=0){
+      alphaTrue=(360-evt.webkitCompassHeading)%360;
+      // iOS reports -1 for a heading it does not trust. Stored raw, that would
+      // become an accuracy of -1 degrees, which reads as better than perfect.
+      const acc=evt.webkitCompassAccuracy;
+      lastHeadingAcc = (typeof acc==='number' && acc>=0) ? acc : null;
     }
-    else if(typeof evt.alpha==='number' && evt.absolute) lastHeading=(360-evt.alpha)%360;
+    else if(typeof evt.alpha==='number' && evt.absolute) alphaTrue=evt.alpha;
+    if(alphaTrue!=null){
+      const bearing=cameraBearing(alphaTrue, evt.beta||0, evt.gamma||0);
+      // Hold the last good bearing through a near-vertical sweep rather than
+      // dropping to null: the stance shot is aimed at your own feet, and the
+      // pin it parks still wants a direction.
+      if(bearing!=null) lastHeading=bearing;
+      headingLive=bearing;
+    } else { headingLive=null; }
     tiltSamples.push({t:Date.now(), angle:tilt-90});
     if(tiltSamples.length>240) tiltSamples.splice(0, tiltSamples.length-240);
     if(sightOverlay.classList.contains('show')) sightRefresh();
