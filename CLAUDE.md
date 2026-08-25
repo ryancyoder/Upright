@@ -392,6 +392,7 @@ preferences only show their effect from inside a view.
 
 - **Vertical exaggeration** — off holds every section at ×1.
 - **Fold drawings between views** — see *Folds* below.
+- **Ground line in sections** — see *The ground line* below.
 - **Preview column** — the pin inspector, on the map and in every elevation view.
 - **Filmstrip** — likewise.
 - **Split screen in portrait** — see *Split screen: section over plan*.
@@ -474,6 +475,47 @@ never sees a descendant's — but a capture-phase one does, and the pointer
 leaving the path it had *just drawn* ended every stroke on its second move.
 The phase buys nothing anyway: Leaflet drags off `mousedown`/`touchstart`, and
 `pointerdown` precedes both by event type whatever the phase.
+
+## The ground line
+
+Connect the points you actually shot, in order along the cut. That is all it is
+— 1D interpolation along one line — and the split between measured and assumed
+is the whole point of it:
+
+- **The vertices are measurements.** Each is a point you sighted, at the height
+  `elevationOf()` derives live.
+- **The segments are assumptions.** Between two shots the ground is drawn as a
+  straight ramp, so a swale or a mound in the gap does not show at all.
+
+**It is never extrapolated.** The line starts at the first point and stops at
+the last; past them the app has nothing to say and does not say it anyway.
+
+**The honesty problem it has to carry:** a section shows points *near* its cut,
+not on it, so two points 30 ft either side both project onto the line and
+joining them draws ground neither of them stands on. `beyond` is already the
+perpendicular distance from the cut, so a segment whose ends are further than
+`GROUND_NEAR_FT` (20 ft) off it is **dashed**, and the note reports the worst
+offender (`ground from 4 points · up to 61' off the cut`). Under four points it
+says `thin`.
+
+A faint fill under the line is what turns a scatter of dots into a hillside at a
+glance; it is drawn under the datum so that stays crisp. One preference,
+`prefs.ground`, with a **Ground** button in the elevation bar.
+
+**What it unlocks immediately: folded plan strokes ride the ground.** The datum
+was only ever the right answer while there was no ground to put them on — a bed
+edge or a patio edge really is on the ground. `groundRun()` returns the ends
+*plus every ground vertex between them*, because a span drawn as one straight
+line cuts the corner wherever the ground bends inside it, which had the beads
+floating over the very ground they were supposed to be lying on. Outside the
+measured span there is still no ground, so those stretches fall back to the
+datum and the label says which of the three cases you are looking at.
+
+Next step, when it is wanted: a **triangulated surface** over all the placed
+points rather than one line at a time. That is what unlocks contours, drainage
+and cut/fill together — but it is gated on fieldwork, not code. Eight points
+gives eight big flat triangles and a mesh that is mostly invention; it needs a
+yard shot densely before it means anything.
 
 ## Folds: each drawing shown on the other view
 
@@ -1496,6 +1538,12 @@ sketch, so this is the fire-and-forget write model showing up in real data,
 not just abandoned starts.
 
 **Not yet built**
+- A triangulated surface over the survey points (the ground line is the 1D case
+  of it). Everything downstream — contours, drainage zones, cut/fill, a 3D view
+  — falls out of that one thing. Two known traps: it only covers the area inside
+  the outermost points, and plain Delaunay will triangulate straight across a
+  retaining wall and smooth away the feature you went out to measure, which is
+  what breaklines exist to prevent.
 - More of the compass ideas: auto-selecting the section you are standing in
   front of, and squaring the cuts to a wall by pointing at it. (A heading-up
   map is built — see *My location*.)

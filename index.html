@@ -15,6 +15,7 @@
     --obs-sight:#4fd07a;      /* and GREEN while it is documenting where you stand */
     --slope:#63b3e8;          /* slope runs -- a relationship, not a survey point */
     --cut:#c9a227;            /* section cuts: a frame of reference, not a measurement */
+    --ground:#8b8f7a;         /* the ground line -- neutral, so it never reads as a measurement colour */
   }
   *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
   /* THE WINDOW ITSELF NEVER ZOOMS OR SCROLLS.
@@ -679,6 +680,7 @@
   /* Folds -- a projection, never a drawing. Beads rather than a line, and the
      legibility comes from a shadow rather than from weight. */
   .ev-svg .fold-bead{filter:drop-shadow(0 1px 2px rgba(0,0,0,0.85));}
+  .ev-svg .ev-ground{filter:drop-shadow(0 1px 2px rgba(0,0,0,0.7));}
   .ev-corner{
     position:absolute; width:26px; height:26px; margin:-13px 0 0 -13px;
     border-radius:50%; border:2px solid #fff; background:rgba(99,179,232,0.9);
@@ -1220,6 +1222,7 @@
         <button class="mt-btn" id="evPhotoBtn">Photo</button>
         <button class="mt-btn" id="evGridBtn">Grid</button>
         <button class="mt-btn" id="evSketchBtn">Sketch</button>
+        <button class="mt-btn" id="evGroundBtn">Ground</button>
         <button class="mt-btn" id="evLevels">Level lines</button>
         <button class="mt-btn" id="foldEvBtn">Fold</button>
         <button class="mt-btn" id="evXray">X-ray</button>
@@ -1389,6 +1392,18 @@
         </div>
         <div class="pref-row">
           <div class="pref-main">
+            <div class="pref-title">Ground line in sections</div>
+            <div class="pref-sub">Join the survey points along each cut, in order, so a section
+              reads as ground rather than as scattered dots. The <b>points are measurements</b>;
+              the <b>line between them is an assumption</b> &mdash; straight, so a dip between two
+              shots does not show. It is never drawn past the outermost point. A run joining
+              points well off to the side of that cut is dashed, since it describes ground
+              neither of them stands on.</div>
+          </div>
+          <button class="pref-switch" id="prefGround" role="switch"><i></i></button>
+        </div>
+        <div class="pref-row">
+          <div class="pref-main">
             <div class="pref-title">Eye height when shooting grade</div>
             <div class="pref-sub">How high off the ground you hold the iPad. A shot pointed at
               the ground gives its own distance from this &mdash;
@@ -1491,6 +1506,7 @@
         evTiltV=$('evTiltV'), evTiltH=$('evTiltH'), evStraighten=$('evStraighten'),
         evOpacity=$('evOpacity'),
         evFile=$('evFile'), evXray=$('evXray'), evLevels=$('evLevels'),
+        evGroundBtn=$('evGroundBtn'),
         sightOverlay=$('sightOverlay'), sightMsg=$('sightMsg'), sightAngle=$('sightAngle'),
         sightCompass=$('sightCompass'), scRose=$('scRose'),
         scBearing=$('scBearing'), scAcc=$('scAcc'),
@@ -1524,7 +1540,8 @@
         settingsClose=$('settingsClose'), evSettingsBtn=$('evSettingsBtn'),
         evExagLabel=$('evExagLabel'), prefVertExag=$('prefVertExag'),
         prefInspector=$('prefInspector'), prefFilmstrip=$('prefFilmstrip'),
-        prefSplit=$('prefSplit'), prefFolds=$('prefFolds'), prefEyeHeight=$('prefEyeHeight'),
+        prefSplit=$('prefSplit'), prefFolds=$('prefFolds'), prefGround=$('prefGround'),
+        prefEyeHeight=$('prefEyeHeight'),
         panelsMapBtn=$('panelsMapBtn'), stripMapBtn=$('stripMapBtn'),
         panelsEvBtn=$('panelsEvBtn'), stripEvBtn=$('stripEvBtn'),
         settingsMapBtn=$('settingsMapBtn'), splitBtn=$('splitBtn'), stage=$('stage'),
@@ -1542,7 +1559,7 @@
   // able to stop a session starting.
   const PREFS_KEY='upright.prefs';
   const PREF_DEFAULTS={vertExag:true, inspector:true, filmstrip:true, splitPortrait:true,
-                       folds:true, eyeHeightFt:4.5};
+                       folds:true, ground:true, eyeHeightFt:4.5};
   const prefs=Object.assign({}, PREF_DEFAULTS);
   try{
     const raw=localStorage.getItem(PREFS_KEY);
@@ -1554,7 +1571,7 @@
   }
   function renderPrefs(){
     [[prefVertExag,'vertExag'],[prefInspector,'inspector'],[prefFilmstrip,'filmstrip'],
-      [prefSplit,'splitPortrait'],[prefFolds,'folds']]
+      [prefSplit,'splitPortrait'],[prefFolds,'folds'],[prefGround,'ground']]
       .forEach(([el,key])=>{
         const on = prefs[key]!==false;
         el.classList.toggle('on', on);
@@ -1575,6 +1592,7 @@
       syncFoldBtns();
       syncSplitBar();
       foldsDraw();
+      evSyncTabs();          // the elevation bar's own buttons read preferences too
       if(evActive) evRender();
     }catch(err){ console.warn('prefs apply failed', err); }
   }
@@ -3940,6 +3958,7 @@
   }
   sbSketch.addEventListener('click', ()=>splitSketchSet(!splitSketchOn()));
   sbFold.addEventListener('click', ()=>prefToggle('folds'));
+  prefGround.addEventListener('click', ()=>prefToggle('ground'));
   foldMapBtn.addEventListener('click', ()=>prefToggle('folds'));
   foldEvBtn.addEventListener('click', ()=>prefToggle('folds'));
   prefFolds.addEventListener('click', ()=>prefToggle('folds'));
@@ -6169,6 +6188,61 @@
     return out;
   }
 
+  // ---------- the ground line ----------
+  // Connect the points you actually shot, in order along the cut. That is all
+  // it is -- 1D interpolation along one line -- and it is worth being exact
+  // about which half is measured and which half is assumed:
+  //
+  //   the VERTICES are measurements. Each is a point you sighted, at the height
+  //   elevationOf() derives for it.
+  //   the SEGMENTS are assumptions. Between two shots the ground is drawn as a
+  //   straight ramp, so a swale or a mound in the gap is invisible.
+  //
+  // It is also never extrapolated: the line starts at the first point and stops
+  // at the last. Past them the app has nothing to say, and saying it anyway is
+  // the one thing this app does not do.
+  //
+  // The honesty problem this has to carry: a section shows points NEAR its cut,
+  // not on it, so two points 30 ft either side both project onto the line and
+  // joining them draws ground neither of them sits on. `beyond` is already the
+  // perpendicular distance from the cut, so a segment whose ends are far off it
+  // is drawn dashed and the note reports the worst offender.
+  const GROUND_NEAR_FT=20;
+  function groundProfile(side){
+    if(prefs.ground===false) return [];
+    return evProject(side)
+      .filter(q=>q.shown && typeof q.ft==='number' && isFinite(q.ft))
+      .map(q=>({x:q.x, ft:q.ft, off:Math.abs(q.beyond)}))
+      .sort((a,b)=>a.x-b.x);
+  }
+  // The ground height at a distance along the cut -- null outside the measured
+  // span, which is what stops a folded plan stroke riding an invented ground.
+  function groundOn(g, xFt){
+    if(!g || g.length<2) return null;
+    if(xFt < g[0].x || xFt > g[g.length-1].x) return null;
+    for(let i=1;i<g.length;i++){
+      if(xFt<=g[i].x){
+        const a=g[i-1], b=g[i], span=b.x-a.x;
+        if(span<=0.0001) return b.ft;
+        return a.ft + (b.ft-a.ft)*(xFt-a.x)/span;
+      }
+    }
+    return g[g.length-1].ft;
+  }
+  function groundAt(side, xFt){ return groundOn(groundProfile(side), xFt); }
+  // The ground between two x, as a run of (x, ft) -- the ends plus every vertex
+  // in between. A span drawn as ONE straight line cuts the corner wherever the
+  // ground bends inside it, which had the beads floating over the very ground
+  // they are supposed to be lying on.
+  function groundRun(g, x0, x1){
+    const a=groundOn(g,x0), b=groundOn(g,x1);
+    if(a==null || b==null) return null;
+    const out=[{x:x0, ft:a}];
+    g.forEach(q=>{ if(q.x>x0 && q.x<x1) out.push({x:q.x, ft:q.ft}); });
+    out.push({x:x1, ft:b});
+    return out;
+  }
+
   // Vertical exaggeration is CONTINUOUS. The stepped cycle jumped the whole
   // drawing every tap; a log-spaced slider moves it smoothly and still spans
   // the useful range. The snap list survives only as a starting guess.
@@ -6360,6 +6434,31 @@
         text(x, 14, d.toFixed(0)+"'", '#8b887f', 10, 'middle');
       }
     }
+    // ---- the ground ----
+    // Under the datum line so that stays crisp, over the grid and any imported
+    // image. The faint fill is what turns a scatter of dots into a hillside at
+    // a glance; the line itself is the reading.
+    const gp=groundProfile(side);
+    if(gp.length>=2){
+      const px=gp.map(q=>({x:G.toX(q.x), y:G.toY(q.ft), off:q.off}));
+      const fill=ns('polygon');
+      fill.setAttribute('points',
+        px.map(q=>q.x+','+q.y).join(' ')
+        + ' ' + px[px.length-1].x + ',' + G.H + ' ' + px[0].x + ',' + G.H);
+      fill.setAttribute('fill','var(--ground)');
+      fill.setAttribute('opacity','0.07');
+      evSvg.appendChild(fill);
+      // One segment at a time: a run joining two points that are far off this
+      // cut is drawn dashed, because it is describing ground neither of them
+      // stands on.
+      for(let i=1;i<px.length;i++){
+        const far = Math.max(px[i-1].off, px[i].off) > GROUND_NEAR_FT;
+        const l=line(px[i-1].x, px[i-1].y, px[i].x, px[i].y,
+                     'var(--ground)', 2.5, far?'7 5':null, far?0.5:0.9);
+        l.setAttribute('class','ev-ground');
+      }
+    }
+
     // the datum: the anchor, 0.00', one third up from the bottom
     line(0,G.datumY,G.W,G.datumY,'#e8c33a',2,null,0.95);
     text(6,G.datumY-5,"0.00' anchor",'#e8c33a',11,'start');
@@ -6370,17 +6469,38 @@
     // Sitting below it, in a different stroke language and at a third the
     // weight, it reads as what it is -- the plan seen edge-on, telling you where
     // something is along the section and nothing whatever about how high.
+    // With a ground line the beads RIDE THE GROUND instead, which is their
+    // honest home: a bed edge or a patio edge really is on the ground, and the
+    // datum was only ever the right answer while there was no ground to put
+    // them on. Outside the measured span there is still no ground, so those
+    // stretches fall back to the datum and the label says which.
     const folded=foldPlanSpans(side);
     if(folded.length){
       const fy=G.datumY+10;
+      let anyGround=false, anyDatum=false;
       folded.forEach(f=>{
         const a=G.toX(f.x0), b=G.toX(f.x1);
         if(b<-40 || a>G.W+40) return;
-        const l=line(a, fy, b, fy, f.colour, 8, '1 10', f.strict ? 0.6 : 0.3);
-        l.setAttribute('stroke-linecap','round');
-        l.setAttribute('class','fold-bead');
+        const run=groundRun(gp, f.x0, f.x1);
+        if(run) anyGround=true; else anyDatum=true;
+        const el=ns('polyline');
+        el.setAttribute('points', run
+          ? run.map(q=>G.toX(q.x)+','+(G.toY(q.ft)-4)).join(' ')
+          : (a+','+fy+' '+b+','+fy));
+        el.setAttribute('fill','none');
+        el.setAttribute('stroke', f.colour);
+        el.setAttribute('stroke-width', 8);
+        el.setAttribute('stroke-dasharray', '1 10');
+        el.setAttribute('stroke-linecap','round');
+        el.setAttribute('opacity', f.strict ? 0.6 : 0.3);
+        el.setAttribute('class','fold-bead');
+        evSvg.appendChild(el);
       });
-      text(6, fy+14, 'plan, folded down', '#8b887f', 10, 'start');
+      const lbl = anyGround && anyDatum ? 'plan, folded down \u2014 on the ground where there is one'
+                : anyGround ? 'plan, folded on to the ground'
+                : 'plan, folded down \u2014 no ground line here';
+      if(anyDatum) text(6, fy+14, lbl, '#8b887f', 10, 'start');
+      else text(6, G.datumY+24, lbl, '#8b887f', 10, 'start');
     }
 
     // ---- sketch strokes, in view feet ----
@@ -6481,6 +6601,18 @@
         + 'house itself blocks — or to <b>X-ray</b>, which plots everything.'
       : 'Nothing to draw on this section yet.<br><br>Shoot grade and place the pins on the map, '
         + 'and every point appears here at its elevation.');
+    // What the ground line is actually built from, since the line itself cannot
+    // say. Two points is a ramp, not a survey, and the worst off-cut distance is
+    // how far from this section the ground it draws really lies.
+    const gpN=groundProfile(side);
+    let groundNote='';
+    if(gpN.length>=2){
+      const worst=Math.max.apply(null, gpN.map(q=>q.off));
+      groundNote=' \u00b7 ground from '+gpN.length+' points'
+        + (gpN.length<4 ? ' <span class="ev-warn">(thin)</span>' : '')
+        + (worst>GROUND_NEAR_FT ? ' <span class="ev-warn">up to '+worst.toFixed(0)
+            + "' off the cut</span>" : '');
+    }
     evNote.innerHTML = '<b>'+side.toUpperCase()+'</b> — looking '
       + ({north:'south',south:'north',east:'west',west:'east'}[side])
       + ' · ' + visible + ' of ' + total + ' point'+(total===1?'':'s')
@@ -6489,7 +6621,8 @@
       + (G.splitLock ? ' · <span class="ev-warn">scale locked to the plan</span>'
          : (Math.abs(G.zoom-1)>0.01 ? ' · zoom '+(G.zoom<1?G.zoom.toFixed(2):G.zoom.toFixed(1))+'×' : ''))
       + (Math.abs(G.exag-1)>0.01 ? ' · <span class="ev-warn">vertical ×'+fmtExag(G.exag)+'</span>'
-                                  : ' · true proportion');
+                                  : ' · true proportion')
+      + groundNote;
     evExagVal.innerHTML = fmtExag(G.exag)+'&times;';
     if(document.activeElement!==evExagSlider) evExagSlider.value = sliderFromExag(G.exag);
   }
@@ -7114,6 +7247,9 @@
         : 'Pinch to zoom, drag to pan — the vertical drag moves the anchor line');
     evLevels.classList.toggle('active', evLevelsOn);
     evGridBtn.classList.toggle('active', evGridOn);
+    evGroundBtn.classList.toggle('active', prefs.ground!==false);
+    evGroundBtn.title='Join the survey points along this cut. The points are measured; '
+                    + 'the line between them is a straight-ramp assumption.';
     evSketchBtn.classList.toggle('active', evSketchOn);
     evSketchBar.classList.toggle('show', evSketchOn);
     evAlignBtn.classList.toggle('active', evAlignOn && evGridOn);
@@ -7157,6 +7293,7 @@
   });
   evPlanBtn.addEventListener('click', ()=>{ evSlot='plan';  evSyncTabs(); evFile.click(); });
   evPhotoBtn.addEventListener('click', ()=>{ evSlot='photo'; evSyncTabs(); evFile.click(); });
+  evGroundBtn.addEventListener('click', ()=>prefToggle('ground'));
   evLevels.addEventListener('click', ()=>{ evLevelsOn=!evLevelsOn; evSyncTabs(); evRender(); });
   evGridBtn.addEventListener('click', ()=>{ evGridOn=!evGridOn; evSyncTabs(); evRender(); });
   evSketchBtn.addEventListener('click', ()=>{
