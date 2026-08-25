@@ -73,7 +73,24 @@
      two overrides and a rule. */
   .stage.split .elev-panel{bottom:50%; border-bottom:2px solid var(--line);}
   .stage.split .mapwrap{top:50%;}
-  .stage.split .film-strip{max-height:120px;}
+  /* Split screen: the strip is SHRUNK, not clipped. A max-height alone left the
+     172x128 tiles running out of the bottom of a 120px strip with overflow-y
+     hidden, so a set's frames were cut in half and the group's controls were
+     simply gone. Half a portrait screen is already a short map, so everything
+     scales together -- tile, badge, buttons, group box -- and the strip is then
+     exactly as tall as what is in it. */
+  .stage.split .film-thumb{width:104px; height:78px; border-width:2px; border-radius:8px;}
+  .stage.split .film-strip{gap:5px; padding:5px 7px;}
+  .stage.split .film-thumb .fnum{font-size:10px; padding:1px 6px; left:2px; bottom:2px;}
+  .stage.split .film-set{padding:4px 5px; gap:4px; border-radius:9px;}
+  .stage.split .film-set-row{gap:5px;}
+  .stage.split .film-set-name{font-size:9px; letter-spacing:0.06em;}
+  .stage.split .film-set .ico-btn,
+  .stage.split .film-thumb .thumb-ctl{width:22px; height:22px;}
+  /* The glyphs carry width/height attributes (15px), so the CSS has to override
+     them or a 22px button keeps a 15px icon and looks crowded. */
+  .stage.split .film-set .ico-btn svg,
+  .stage.split .film-thumb .thumb-ctl svg{width:12px; height:12px;}
   .stage.split .elev-panel .ev-note{font-size:10px;}
   video{width:100%; height:100%; object-fit:cover; display:block;}
 

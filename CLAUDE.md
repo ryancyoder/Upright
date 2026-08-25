@@ -229,6 +229,14 @@ straight back when the iPad is turned flat again; the **Preview** button goes
 away for the duration rather than sitting there doing nothing. The filmstrip
 stays — it is a row, not a column, and it is what you use to find a frame.
 
+**But the filmstrip is shrunk, not clipped.** A `max-height` on its own left the
+172×128 tiles running out of the bottom of a 120px strip with `overflow-y:hidden`
+— a set's frames were cut in half and the group's controls were simply gone, so
+half the strip's function went with them. Everything scales together instead
+(tile, badge, buttons, the group box) and the strip is then exactly as tall as
+what is in it: **195px → 127px**, about a third of the height back to the map,
+with nothing hidden.
+
 ### The plan turns to face the section
 
 `mapRotFor(side)` turns the map so that **right on screen is the direction the
@@ -1504,7 +1512,8 @@ not just abandoned starts.
 - 58px sidebar buttons with a gloved thumb; marker base size (30% of screen); yellow marker visibility on sunny turf; stroke weight at 3× zoom.
 - Extent-lock button reachability; whether the filmstrip eats too much map
   height in landscape — the answer now has a switch either way, so the question
-  is whether people find it.
+  is whether people find it. In split it is deliberately small (104×78 tiles):
+  whether that is still enough picture to recognise a frame at arm's length.
 - Audio level in real field conditions.
 - Elevation accuracy against a known drop (a step, a wall course, a kerb).
   The maths is verified against an independent calculation; what is unproven
