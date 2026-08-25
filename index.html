@@ -3787,7 +3787,7 @@
   let sketches=[], measures=[];
   let mapMode=null;                 // null | 'sketch' | 'measure'
   let pinDragging=false;            // true mid-drag, so auto-centring holds off
-  let sketchLine=null, sketchPts=[], sketching=false;
+  let sketchLine=null, sketchPts=[], sketching=false, sketchPointerId=null;
   let measurePts=[], measureLayer=null, measureAnchorPin=null;
 
   const M_PER_FT=0.3048, SQFT_PER_ACRE=43560;
@@ -3836,7 +3836,9 @@
   function setMapMode(mode){
     // Leaving sketch mid-stroke must not leave a run anchored to a corner that
     // is no longer being drawn.
-    if(mapMode==='sketch' && mode!=='sketch'){ sketching=false; alignReset(); }
+    if(mapMode==='sketch' && mode!=='sketch'){
+      sketching=false; sketchPointerId=null; holdMapDrag(false); alignReset();
+    }
     mapMode=mode;
     sketchBtn.classList.toggle('active', mode==='sketch');
     measureBtn.classList.toggle('active', mode==='measure');
@@ -3850,8 +3852,11 @@
     refreshScaleUI();
     if(!map) return;
     if(mode==='sketch'){
-      map.dragging.disable();
-      modeMsg.innerHTML='<b>Sketch</b> \u2014 drag to draw';
+      // Dragging stays ENABLED now. Fingers pan and pinch the map exactly as
+      // they do outside sketch mode; only a drawing input is held still, and
+      // only for the length of its stroke (see isDrawInput).
+      map.dragging.enable();
+      modeMsg.innerHTML='<b>Sketch</b> \u2014 draw with the pencil; fingers pan and zoom';
     } else if(mode==='measure'){
       map.dragging.enable();
       modeMsg.innerHTML='<b>Measure</b> \u2014 tap to add corners';
@@ -4186,7 +4191,9 @@
     // follow every frame of a pan or a zoom, not just where they come to rest.
     map.on('move zoom', ()=>{ if(splitOn && evActive) evRenderSoon(); });
     c.addEventListener('pointerdown', e=>{
-      if(mapMode!=='sketch') return;
+      if(mapMode!=='sketch' || !isDrawInput(e)) return;
+      holdMapDrag(true);
+      sketchPointerId=e.pointerId;
       sketching=true; sketchPts=[]; alignReset();
       const ll=map.containerPointToLatLng(containerPt(e));
       sketchPts.push(ll);
@@ -4196,7 +4203,9 @@
       sketchLine=L.polyline([ll],{color:annoColor(), weight:4, opacity:0.95}).addTo(map);
     });
     c.addEventListener('pointermove', e=>{
-      if(!sketching || mapMode!=='sketch') return;
+      // Only the pointer that started the stroke feeds it; a finger landing
+      // mid-stroke is a pan, not a continuation of the line.
+      if(!sketching || mapMode!=='sketch' || e.pointerId!==sketchPointerId) return;
       e.preventDefault();
       const cp=containerPt(e);
       if(aligningNow() && alignAnchor && alignAxes){
@@ -4207,8 +4216,16 @@
       if(prev && metresBetween(prev,ll) < 0.25) return;   // thin out jitter
       sketchPts.push(ll); sketchLine.setLatLngs(sketchPts);
     });
+    // BUBBLE phase, deliberately. pointerleave does not bubble, so a listener
+    // here never sees a descendant's -- and in capture it does: the pointer
+    // leaving the path it had just drawn ended the stroke on its second move.
+    // Ordering against Leaflet needs no phase trick anyway, since Leaflet drags
+    // off mousedown/touchstart and pointerdown precedes both by type.
     ['pointerup','pointercancel','pointerleave'].forEach(ev=>
-      c.addEventListener(ev, ()=>{ if(sketching){ sketching=false; commitSketch(); } }));
+      c.addEventListener(ev, e=>{
+        if(!sketching || e.pointerId!==sketchPointerId) return;
+        sketching=false; sketchPointerId=null; holdMapDrag(false); commitSketch();
+      }));
 
     map.on('click', e=>{
       if(mapMode==='planscale'){
@@ -4605,6 +4622,31 @@
         }).addTo(map));
       }
     }
+  }
+
+  // ---------- who draws ----------
+  // A pinch used to lay down a stroke with EACH finger while it zoomed, because
+  // any pointer drew. Touch is therefore never a drawing input any more: it
+  // pans and pinches, the same as it does outside sketch mode.
+  //
+  // The pencil draws. So does a mouse, because there is no pencil at a desk and
+  // no pinch there to confuse it with -- and on the iPad, which is what this is
+  // for, no mouse events are generated at all, so allowing it changes nothing
+  // in the yard.
+  function isDrawInput(e){ return e.pointerType==='pen' || e.pointerType==='mouse'; }
+
+  // Leaflet drags off `touchstart mousedown`, never pointerdown -- and on iOS
+  // the Apple Pencil fires touch events as well as pen ones, so a pencil stroke
+  // would pan the map underneath itself. Pointer Events dispatches pointerdown
+  // BEFORE the compatibility touchstart/mousedown, so standing dragging down
+  // here lands in time for Leaflet's handler to see it already disabled. That
+  // ordering is the load-bearing part; it is why this is not simply a flag
+  // checked later.
+  let mapDragHeld=false;
+  function holdMapDrag(on){
+    if(!map || !map.dragging) return;
+    if(on && !mapDragHeld){ mapDragHeld=true; map.dragging.disable(); }
+    else if(!on && mapDragHeld){ mapDragHeld=false; map.dragging.enable(); }
   }
 
   // ---------- align to grid, on the plan ----------
@@ -6107,7 +6149,11 @@
     return {n:2, cx:(t[0].x+t[1].x)/2, cy:(t[0].y+t[1].y)/2,
             dist:Math.hypot(dx,dy)||1, ang:Math.atan2(dy,dx)*180/Math.PI};
   }
-  function evGestArmed(){ return !!evActive && !evSketchOn && (evTool==='uniform' || !evViewLocked); }
+  // Sketching no longer stands the gestures down. It used to have to: a finger
+  // both drew and panned, so one of them had to go. Now a stroke is a pencil
+  // and a pan is a finger, and they cannot be mistaken for each other -- so an
+  // unlocked view can still be pinched about while the pen is drawing on it.
+  function evGestArmed(){ return !!evActive && (evTool==='uniform' || !evViewLocked); }
   function evGestStart(info){
     if(!evGestArmed()) return;
     if(evTool==='uniform'){
@@ -6181,19 +6227,22 @@
   }));
   // Mouse: drag to pan, wheel to scale about the pointer. The iPad never sees
   // this, but it keeps the tool usable at a desk.
+  // A drawing input belongs to the sketch while sketching is on, so a mouse at
+  // a desk does not pan and draw at once.
+  function evGestPointer(e){ return e.pointerType!=='touch' && !(evSketchOn && isDrawInput(e)); }
   evStage.addEventListener('pointerdown', e=>{
-    if(!evGestArmed() || e.pointerType==='touch') return;
+    if(!evGestArmed() || !evGestPointer(e)) return;
     e.preventDefault(); evStage.setPointerCapture(e.pointerId);
     const r=evStage.getBoundingClientRect();
     evGestStart({n:1, cx:e.clientX-r.left, cy:e.clientY-r.top, dist:1, ang:0});
   });
   evStage.addEventListener('pointermove', e=>{
-    if(!evGest || e.pointerType==='touch') return;
+    if(!evGest || !evGestPointer(e)) return;
     const r=evStage.getBoundingClientRect();
     evGestMove({n:1, cx:e.clientX-r.left, cy:e.clientY-r.top, dist:1, ang:0});
   });
   ['pointerup','pointercancel'].forEach(ev=>evStage.addEventListener(ev, e=>{
-    if(e.pointerType==='touch') return;
+    if(!evGestPointer(e)) return;
     evGestEnd();
   }));
   evStage.addEventListener('wheel', e=>{
@@ -6327,36 +6376,26 @@
   }
   // Sketching owns the stage while it is on, the same way a tool does: the
   // gesture handlers stand down (evGestArmed) so a stroke is never also a pan.
+  // The section draws from the same input the plan does, and from nothing else.
+  // There used to be a parallel set of touch handlers here that drew from a
+  // single finger; they are gone, which is what stops a pinch drawing.
+  let evSketchPointerId=null;
   evStage.addEventListener('pointerdown', e=>{
-    if(!evSketchOn || !evActive || e.pointerType==='touch') return;
+    if(!evSketchOn || !evActive || !isDrawInput(e)) return;
     e.preventDefault(); e.stopPropagation();
     try{ evStage.setPointerCapture(e.pointerId); }catch(_e){}
+    evSketchPointerId=e.pointerId;
     evDrawing=true; evDraft=[]; evAlignReset();
     evSketchPush(e.clientX, e.clientY);
   }, true);
   evStage.addEventListener('pointermove', e=>{
-    if(!evDrawing || e.pointerType==='touch') return;
+    if(!evDrawing || e.pointerId!==evSketchPointerId) return;
     e.preventDefault(); evSketchPush(e.clientX, e.clientY);
   }, true);
   ['pointerup','pointercancel'].forEach(ev=>evStage.addEventListener(ev, e=>{
-    if(!evDrawing || e.pointerType==='touch') return;
-    evSketchCommit();
+    if(!evDrawing || e.pointerId!==evSketchPointerId) return;
+    evSketchPointerId=null; evSketchCommit();
   }, true));
-  evStage.addEventListener('touchstart', e=>{
-    if(!evSketchOn || !evActive || e.touches.length!==1) return;
-    e.preventDefault(); e.stopPropagation();
-    evDrawing=true; evDraft=[]; evAlignReset();
-    evSketchPush(e.touches[0].clientX, e.touches[0].clientY);
-  }, {passive:false, capture:true});
-  evStage.addEventListener('touchmove', e=>{
-    if(!evDrawing || e.touches.length!==1) return;
-    e.preventDefault(); evSketchPush(e.touches[0].clientX, e.touches[0].clientY);
-  }, {passive:false, capture:true});
-  ['touchend','touchcancel'].forEach(ev=>evStage.addEventListener(ev, e=>{
-    if(!evDrawing) return;
-    if(e.touches && e.touches.length) return;
-    evSketchCommit();
-  }, {capture:true}));
 
   // ---------- dragging the image corners ----------
   function evCornersOf(side, slot){

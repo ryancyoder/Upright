@@ -314,6 +314,48 @@ preferences only show their effect from inside a view.
 - **Eye height when shooting grade** — the `h` in `d = h / tan|θ|`, used only to
   park a just-shot pin. The one preference here that is a number, not a switch.
 
+## Only the pencil draws
+
+**A pinch used to lay down a stroke with each finger while it zoomed.** Any
+pointer drew, so two fingers spreading across the map wrote two lines and
+uploaded both — measured against the old build, one pinch plus one finger-pan
+left three strokes on the plan and a fourth in the section.
+
+The rule now: **touch is never a drawing input.** Fingers pan and pinch exactly
+as they do outside sketch mode. `isDrawInput()` is the single gate and it admits
+`pen` and `mouse` — the pencil in the yard, and a mouse at a desk, where there
+is no pencil and no pinch to confuse it with. On the iPad no mouse events are
+generated at all, so admitting it changes nothing in the field.
+
+That freed the constraint the section was working under. Sketching used to have
+to hold the whole stage (`evGestArmed()` returned false) because a finger both
+drew and panned and one of them had to go; a stroke is a pencil and a pan is a
+finger now, so an unlocked section can be pinched about while the pen is
+drawing on it. A drawing input still belongs to the sketch rather than the
+gesture, or a mouse at a desk would pan and draw at once.
+
+**The map's dragging is enabled during sketch mode now**, and stood down only
+for the length of a stroke. That ordering is the load-bearing part:
+
+- Leaflet drags off `touchstart mousedown`, **never `pointerdown`** — and on iOS
+  the Apple Pencil fires touch events as well as pen ones, so a pencil stroke
+  would otherwise pan the map underneath itself.
+- Pointer Events dispatches `pointerdown` **before** the compatibility
+  `touchstart`/`mousedown`, so `holdMapDrag(true)` inside the pointerdown
+  handler lands in time for Leaflet's own handler to find dragging already
+  disabled. This is why it is not simply a flag checked later.
+
+Both surfaces also pin the stroke to the `pointerId` that started it, so a
+finger landing mid-stroke is a pan rather than a continuation of the line.
+
+One trap on the way, worth keeping: the map's sketch listeners were briefly
+moved to the **capture** phase to get ahead of Leaflet. They must not be.
+`pointerleave` does not bubble, so a bubble-phase listener on the container
+never sees a descendant's — but a capture-phase one does, and the pointer
+leaving the path it had *just drawn* ended every stroke on its second move.
+The phase buys nothing anyway: Leaflet drags off `mousedown`/`touchstart`, and
+`pointerdown` precedes both by event type whatever the phase.
+
 ## Data durability — important
 
 All Supabase writes are **fire-and-forget**. Failures are `console.warn`'d,
@@ -1140,9 +1182,9 @@ is stretched.
 With it off, the stroke is thinned by pixel distance instead, exactly as the
 map's sketch is.
 
-Sketching **owns the stage while it is on**: `evGestArmed()` returns false, so a
-stroke is never also a pan, and picking the tool drops any image tool and
-re-locks the view — the same rule the image tools apply to each other.
+Picking the Sketch tool drops any image tool and re-locks the view — the same
+rule the image tools apply to each other. It no longer stands the **gestures**
+down, though; see below for why it used to have to.
 
 **The plan gets the same grid, squared to the cuts.** This is the one place
 where "aligned" is a real choice, and north is usually the wrong answer: a yard
@@ -1319,6 +1361,12 @@ not just abandoned starts.
   match a pin to a place at arm's length, and whether losing that much map
   while dragging is a fair trade for never having a bubble over the pin.
 - Sketch/Measure accuracy against known dimensions.
+- **The pencil against a real iPad.** The pointerdown-before-touchstart ordering
+  that keeps the map still under a stroke is per spec and holds in Chromium, but
+  it has only been exercised with synthetic pen events; what needs confirming on
+  device is that a pencil stroke never pans the map, that palm rejection leaves
+  a resting hand out of it, and that a finger pan mid-stroke does not break the
+  line.
 - 58px sidebar buttons with a gloved thumb; marker base size (30% of screen); yellow marker visibility on sunny turf; stroke weight at 3× zoom.
 - Extent-lock button reachability; whether the filmstrip eats too much map
   height in landscape — the answer now has a switch either way, so the question
