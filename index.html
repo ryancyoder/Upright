@@ -71,8 +71,38 @@
      other because that is the way a section and its plan are read on paper.
      Both panels are already `position:absolute; inset:0`, so splitting them is
      two overrides and a rule. */
-  .stage.split .elev-panel{bottom:50%; border-bottom:2px solid var(--line);}
-  .stage.split .mapwrap{top:50%;}
+  /* The two halves back off to leave the shared bar its own room rather than
+     having it float over either of them -- half a portrait screen is short
+     enough already without a bar sitting on top of it. */
+  .split-bar{
+    display:none; position:absolute; left:0; right:0; top:50%;
+    transform:translateY(-50%); height:var(--split-bar-h); z-index:32;
+    align-items:center; gap:8px; padding:0 10px;
+    background:var(--bg2);
+    border-top:1px solid var(--line); border-bottom:1px solid var(--line);
+    overflow-x:auto; -webkit-overflow-scrolling:touch;
+  }
+  .sb-slot{display:flex; align-items:center; flex:0 0 auto;}
+  .stage.split{--split-bar-h:44px;}
+  .stage.split .split-bar{display:flex;}
+  .stage.split .elev-panel{bottom:calc(50% + var(--split-bar-h)/2); border-bottom:0;}
+  .stage.split .mapwrap{top:calc(50% + var(--split-bar-h)/2);}
+  /* In the shared bar the switch is a plain row, not a floating pill. */
+  .split-bar .view-switch{
+    position:static; display:flex; padding:0; gap:6px;
+    background:none; border:0; backdrop-filter:none; -webkit-backdrop-filter:none;
+  }
+  .split-bar .ev-tab{padding:6px 12px; font-size:12px;}
+  /* One of each control on screen: the halves' own copies stand down. The
+     sketch bars go with them -- in split, Sketch is a toggle and nothing more,
+     so there is no panel of Undo/Finish/Cancel to put anywhere. */
+  .stage.split .ev-tabs,
+  .stage.split .mode-bar,
+  .stage.split .ev-sketchbar,
+  .stage.split #evSketchBtn,
+  .stage.split #foldEvBtn,
+  .stage.split #sketchBtn,
+  .stage.split #foldMapBtn{display:none !important;}
   /* Split screen: the strip is SHRUNK, not clipped. A max-height alone left the
      172x128 tiles running out of the bottom of a 120px strip with overflow-y
      hidden, so a set's frames were cut in half and the group's controls were
@@ -608,6 +638,7 @@
     padding:8px 12px; background:var(--bg2); border-bottom:1px solid var(--line);
     overflow-x:auto; -webkit-overflow-scrolling:touch;
   }
+  .ev-tabs{display:flex; align-items:center; gap:8px; flex:0 0 auto;}
   .ev-tab{
     padding:8px 14px; border-radius:100px; white-space:nowrap;
     border:1px solid var(--line); background:transparent; color:var(--dim);
@@ -1155,14 +1186,30 @@
       </div>
     </div>
 
+    <!-- SPLIT SCREEN'S SHARED BAR. One row on the divider, owning everything
+         that belongs to both halves at once: which section is on top, and
+         whether you are drawing. Neither half carries its own copy while it is
+         up, so there is one of each control on screen and no doubt about which
+         surface a tap lands on. -->
+    <div class="split-bar" id="splitBar">
+      <div class="sb-slot" id="sbSlot"></div>
+      <div class="ev-sep"></div>
+      <button class="mt-btn" id="sbSketch">Sketch</button>
+      <button class="mt-btn" id="sbFold">Fold</button>
+    </div>
+
     <div class="elev-panel" id="elevPanel">
       <div class="ev-bar">
-        <button class="ev-tab" id="evTabTop">Top</button>
-        <div class="ev-sep"></div>
-        <button class="ev-tab" data-side="north">North</button>
-        <button class="ev-tab" data-side="south">South</button>
-        <button class="ev-tab" data-side="east">East</button>
-        <button class="ev-tab" data-side="west">West</button>
+        <!-- Wrapped so split screen can hide the whole five-way switch at once:
+             in split it lives in the shared bar between the two halves. -->
+        <div class="ev-tabs" id="evTabs">
+          <button class="ev-tab" id="evTabTop">Top</button>
+          <div class="ev-sep"></div>
+          <button class="ev-tab" data-side="north">North</button>
+          <button class="ev-tab" data-side="south">South</button>
+          <button class="ev-tab" data-side="east">East</button>
+          <button class="ev-tab" data-side="west">West</button>
+        </div>
         <div class="ev-sep"></div>
         <button class="mt-btn ev-lock" id="evLockBtn"></button>
         <button class="mt-btn" id="evFitBtn">Fit</button>
@@ -1482,7 +1529,8 @@
         panelsEvBtn=$('panelsEvBtn'), stripEvBtn=$('stripEvBtn'),
         settingsMapBtn=$('settingsMapBtn'), splitBtn=$('splitBtn'), stage=$('stage'),
         mapGridBtn=$('mapGridBtn'), mapAlignBtn=$('mapAlignBtn'),
-        foldMapBtn=$('foldMapBtn'), foldEvBtn=$('foldEvBtn');
+        foldMapBtn=$('foldMapBtn'), foldEvBtn=$('foldEvBtn'),
+        splitBar=$('splitBar'), sbSlot=$('sbSlot'), sbSketch=$('sbSketch'), sbFold=$('sbFold');
 
   const UPRIGHT_ON=55, UPRIGHT_OFF=35, HOLD_MS=350;
 
@@ -1525,6 +1573,7 @@
       panelsSync();
       renderStrip();
       syncFoldBtns();
+      syncSplitBar();
       foldsDraw();
       if(evActive) evRender();
     }catch(err){ console.warn('prefs apply failed', err); }
@@ -3539,6 +3588,38 @@
   // plain DOM -- no Leaflet, no <video> -- so re-parenting them is free, which
   // is exactly why the map itself gets moved into review the same way.
   let panelHome=null;
+  // ---------- split screen's shared bar ----------
+  // While split, SKETCH IS ONE STATE, not two. The two surfaces are one drawing
+  // job seen from two angles: a wall goes on the plan and its height goes in
+  // the section, and having to arm each half separately means half your strokes
+  // land on a surface that was not listening. So both are in sketch mode or
+  // neither is.
+  //
+  // It is also just a toggle. Outside split each surface carries a bar of
+  // Undo/Finish/Cancel; in half a portrait screen that is a panel sitting on
+  // the drawing, and there is no "finish" to press when the mode is a switch.
+  function splitSketchOn(){ return mapMode==='sketch' && evSketchOn; }
+  function splitSketchSet(on){
+    on=!!on;
+    if(on){
+      if(mapMode!=='sketch') setMapMode('sketch');
+      evSketchOn=true; evTool=null; evViewLocked=true;   // one thing owns the stage
+    } else {
+      if(mapMode==='sketch') setMapMode(null);
+      evSketchOn=false; evDrawing=false; evDraft=null; evAlignReset();
+    }
+    evSyncTabs();
+    if(evActive) evRender();
+    syncSplitBar();
+  }
+  function syncSplitBar(){
+    if(!splitBar) return;
+    sbSketch.classList.toggle('active', splitOn && splitSketchOn());
+    sbFold.classList.toggle('active', prefs.folds!==false);
+    sbSketch.title='Draw on both halves at once \u2014 the pencil draws, fingers pan and zoom';
+    sbFold.title='Show each drawing on the other half';
+  }
+
   function panelsSync(){
     if(!panelHome){
       panelHome={inspNext:pinInspector.nextSibling, inspParent:pinInspector.parentNode,
@@ -3547,6 +3628,14 @@
     const inEv = !!evActive && !splitOn;   // split keeps them with the map half
     const inspHost = inEv ? evRow : panelHome.inspParent;
     const stripHost = inEv ? evStripSlot : panelHome.stripParent;
+    // There is exactly ONE five-way switch; split moves it to the shared bar
+    // rather than growing a second copy. Plain DOM, so re-parenting is free.
+    if(!panelHome.switchNext){
+      panelHome.switchNext=viewSwitch.nextSibling; panelHome.switchParent=viewSwitch.parentNode;
+    }
+    const swHost = splitOn ? sbSlot : panelHome.switchParent;
+    if(viewSwitch.parentNode!==swHost)
+      swHost.insertBefore(viewSwitch, splitOn ? null : panelHome.switchNext);
     // The column sits BEFORE the drawing in both hosts; the strip sits after.
     if(pinInspector.parentNode!==inspHost || (!inEv && pinInspector.nextSibling!==panelHome.inspNext))
       inspHost.insertBefore(pinInspector, inEv ? evStage : panelHome.inspNext);
@@ -3849,6 +3938,8 @@
                    + 'the plan folded down under the anchor.';
     foldMapBtn.title=t; foldEvBtn.title=t;
   }
+  sbSketch.addEventListener('click', ()=>splitSketchSet(!splitSketchOn()));
+  sbFold.addEventListener('click', ()=>prefToggle('folds'));
   foldMapBtn.addEventListener('click', ()=>prefToggle('folds'));
   foldEvBtn.addEventListener('click', ()=>prefToggle('folds'));
   prefFolds.addEventListener('click', ()=>prefToggle('folds'));
@@ -4302,6 +4393,10 @@
       evEnsurePivot();
       if(!evActive) evOpen(splitSide());
       mapRotApply(mapRotFor(evActive));
+      // Sketch is one state in here, so the two halves have to agree the moment
+      // the split opens. If you were already drawing on the map when the iPad
+      // was turned, you meant to keep drawing -- so either armed arms both.
+      if(mapMode==='sketch' || evSketchOn) splitSketchSet(true);
     } else {
       // Not mapRotApply(0): heading-up may have been waiting for the split to
       // finish with the rotation, and it should get it straight back.
@@ -4309,6 +4404,9 @@
       if(evActive) evClose();
     }
     panelsSync();
+    // Leaving split hands each half its own controls back; the linked sketch
+    // state is left alone, since both surfaces being armed is still coherent.
+    syncSplitBar();
     if(splitBtn) splitBtn.classList.toggle('active', on);
     if(map) requestAnimationFrame(()=>{ try{ map.invalidateSize({pan:false}); }catch(e){} });
     if(evActive) evRenderSoon();
@@ -6979,7 +7077,13 @@
       const b=document.createElement('button');
       b.className='ev-tab'; b.textContent=label;
       if(side) b.dataset.side=side;
-      b.addEventListener('click', ()=> side ? evOpen(side) : evClose());
+      b.addEventListener('click', ()=>{
+        if(side){ evOpen(side); return; }
+        // Top = the plan on its own. In split that is the split closing, and
+        // splitManual has to say so or the portrait gesture reopens it at once.
+        if(splitOn){ splitManual=false; setSplit(false); return; }
+        evClose();
+      });
       viewSwitch.appendChild(b);
       return b;
     };
@@ -6988,7 +7092,9 @@
   }
   function evSyncTabs(){
     buildViewSwitch();
-    viewSwitch.classList.toggle('show', cutsOn && !evActive);
+    // In the shared bar it is the only way to change section, so it always
+    // shows there; over the map it is still the cuts' own control.
+    viewSwitch.classList.toggle('show', splitOn || (cutsOn && !evActive));
     [...viewSwitch.children].forEach(b=>
       b.classList.toggle('on', (b.dataset.side||null)===evActive));
     evTabTop.classList.toggle('on', !evActive);

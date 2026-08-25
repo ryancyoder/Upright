@@ -197,6 +197,37 @@ duplicated: it is the one map and the one elevation panel, both already
 Sliding a pin down on the plan moves it in the section as you drag, not on the
 drop — the section is right there above your thumb.
 
+### One shared bar on the divider
+
+Everything that belongs to **both** halves at once lives in a single row sitting
+on the split line: the five-way switch (Top / North / South / East / West),
+**Sketch**, and **Fold**. Neither half keeps its own copy while the split is up,
+so there is one of each control on screen and no doubt about which surface a tap
+lands on — the elevation bar's tab row, the map toolbar's Sketch and Fold, and
+the elevation bar's Sketch and Fold are all stood down.
+
+There is exactly ONE five-way switch; `panelsSync()` moves `#viewSwitch` into the
+bar and back, the same trick the inspector and the filmstrip use, and for the
+same reason: it is plain DOM, so re-parenting is free. The two halves back off
+by half the bar's height each rather than letting it float over them — half a
+portrait screen is short enough already.
+
+**Top means the plan on its own**, which in split is the split closing. It sets
+`splitManual=false` first, or the portrait gesture reopens it immediately.
+
+**Sketch is ONE state while split, not two.** The two surfaces are one drawing
+job seen from two angles — a wall goes on the plan and its height goes in the
+section — and arming each half separately means half your strokes land on a
+surface that was not listening. So both are in sketch mode or neither is, and
+opening the split while either was already armed arms both: if you were drawing
+on the map when the iPad was turned, you meant to keep drawing.
+
+It is also **just a toggle**. Outside split each surface carries its own bar of
+Undo / Finish / Cancel; in half a portrait screen that is a panel sitting on the
+drawing, and there is no "finish" to press when the mode is a switch. Note what
+that costs, since both are reachable again the moment the iPad is turned flat:
+**Undo and the colour swatches are not available while split.**
+
 ### The two halves share one scale
 
 The section's horizontal is not *matched* to the plan's, it is **taken** from
