@@ -1607,9 +1607,66 @@ recent sessions are in that state; one of them has clips, photos and a
 sketch, so this is the fire-and-forget write model showing up in real data,
 not just abandoned starts.
 
+## Object types — designed, not yet built
+
+Every measured thing becomes an **object with a type**, and the model has two
+axes. This settles a live hole: `surfPoints()` currently takes *every* placed
+point, so a shot at the top of a fence silently becomes a ground vertex and
+pulls the mesh up by the height of the fence. There is no way to say "that one
+is not ground" — which is what this fixes.
+
+| | what it is | feeds the mesh? |
+| --- | --- | --- |
+| **Run** | the horizontal geometry — an ordered line of ground points | **yes** |
+| **Stack** | a column of heights plumb above ONE ground point | **never** |
+
+An object is one run plus zero or more stacks on it. A tree is a run of one
+carrying a stack of two. A fence is a run of many (≥2, capture order) carrying
+one stack whose height propagates along it. A house corner is a stack of four —
+foundation, head of door, eaves, ridge — shot from one stance without moving.
+
+**Everything starts on the ground**, so every object contributes at least one
+mesh vertex. That is the quiet win: shooting the trees and posts a crew wants
+on the plan *also* densifies the ground model, which is the standing worry
+about the surface (eight points is mostly invention).
+
+**A stack needs no pin of its own.** Its members are plumb above the base, so
+they inherit its map distance and differ only in angle. Two consequences:
+
+    height above base = d · (tan θ_top − tan θ_base)
+
+The anchor cancels entirely, so **an object's height does not depend on the
+datum** — it is the most trustworthy number in the app, provided both shots come
+from the same stance. Different stances still work but inherit the anchor's
+error. And a stack draws as ONE map symbol with the column listed in the pin
+inspector, which is already built for exactly that; members sort by derived
+elevation, not capture order, since the ridge may be shot before the eaves.
+
+Types carry geometry rules, not just names: `spot elevation` (1 point),
+`tree`/`shrub` (1 point + stack, height above grade, plus a **spread**
+diameter drawn as a ground-scale ring — faint for every pin, solid for the
+selected one, the rule the photo view cones already use), `fence` (run, height
+above grade so the top *rides the ground* rather than being one elevation),
+`wall` (run, level top so the height varies along it), `drain` (1 point, and
+the one type that goes **down** — the invert below the grate is what sets
+whether you can get fall to it).
+
+**Breaklines are deliberately NOT in the first version.** A run of wall or fence
+points is exactly the line the mesh must not cross, and without that the surface
+still smooths a retaining wall away. But it means constrained Delaunay — finding
+every triangle that crosses a required edge, removing them and re-triangulating
+both sides — which is real surgery on a triangulation that is currently verified
+and clean. The object model captures the data breaklines need, so it can be a
+second, self-contained step, tested against real wall runs rather than invented
+fixtures. Note also that a truly vertical face cannot be represented by a
+surface storing one height per ground position; you give the wall its real
+thickness so the face is very steep rather than impossible.
+
 **Not yet built**
 - Breaklines for the surface — telling it "these points are a wall, do not
   triangulate across them". Without them a retaining wall is smoothed away.
+  Deferred on purpose; see *Object types* above for why, and for the capture
+  model that would feed it.
 - Cut/fill, which needs a proposed surface to difference against.
 - A 3D view of the mesh.
 - More of the compass ideas: auto-selecting the section you are standing in
