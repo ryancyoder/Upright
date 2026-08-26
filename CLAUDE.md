@@ -1609,73 +1609,67 @@ not just abandoned starts.
 
 ## Object types — designed, not yet built
 
-Every measured thing becomes an **object with a type**, and the model has two
-axes. This settles a live hole: `surfPoints()` currently takes *every* placed
-point, so a shot at the top of a fence silently becomes a ground vertex and
-pulls the mesh up by the height of the fence. There is no way to say "that one
-is not ground" — which is what this fixes.
+Every measured thing becomes an **object with a type**, and **the type is a
+shoot order, not a label**. Tell the app what you are looking at and it walks
+you through the shots. One rule underneath all of them:
 
-| | what it is | feeds the mesh? |
-| --- | --- | --- |
-| **Run** | the horizontal geometry — an ordered line of ground points | **yes** |
-| **Stack** | a column of heights plumb above ONE ground point | **never** |
+> **origin first, then the height, then whatever ground points the structure
+> needs.**
 
-An object is one run plus zero or more stacks on it. A tree is a run of one
-carrying a stack of two. A fence is a run of many (≥2, capture order) carrying
-one stack whose height propagates along it. A house corner is a stack of four —
-foundation, head of door, eaves, ridge — shot from one stance without moving.
+The origin is a ground point and it is always mandatory — *everything starts on
+the ground*, so every object contributes at least one mesh vertex. **There is
+exactly one height per object**, plumb above the origin; anything else about the
+shape comes from more ground points, never more heights.
 
-**Everything starts on the ground**, so every object contributes at least one
-mesh vertex. That is the quiet win: shooting the trees and posts a crew wants
-on the plan *also* densifies the ground model, which is the standing worry
-about the surface (eight points is mostly invention).
+| type | shots | ground points | height | extra |
+| --- | --- | --- | --- | --- |
+| spot elevation | 1 | origin | — | |
+| tree / shrub | 2 | origin | apex | **spread** diameter, typed |
+| fence / wall | 2 + N | origin, then the path | top of the first post | level top along the whole run |
+| house face | 3 | origin, opposite end | roof line | a rectangle standing on the base line |
+| box / structure | 4 | origin + 2 more corners | top corner | three corners give the fourth |
+| drain | 1 | origin | — | invert depth, typed |
 
-**A stack needs no pin of its own.** Its members are plumb above the base, so
-they inherit its map distance and differ only in angle. Two consequences:
+That table is the whole feature: the prompts, the shot count, the geometry and
+the mesh contribution all fall out of it, so adding a type is a row rather than
+a code path.
 
-    height above base = d · (tan θ_top − tan θ_base)
+**This is what closes a live hole.** `surfPoints()` currently takes *every*
+placed point, so a shot at the top of a fence silently becomes a ground vertex
+and pulls the mesh up by the height of the fence. Typing the shots is what lets
+the app tell ground from not-ground. And the quiet win: shooting the trees and
+posts a crew wants on the plan *also* densifies the ground model, which is the
+standing worry about the surface — eight points is mostly invention.
 
-The anchor cancels entirely, so **an object's height does not depend on the
-datum** — it is the most trustworthy number in the app, provided both shots come
-from the same stance. Different stances still work but inherit the anchor's
-error. And a stack draws as ONE map symbol with the column listed in the pin
-inspector, which is already built for exactly that; members sort by derived
-elevation, not capture order, since the ridge may be shot before the eaves.
+**A height point needs no pin of its own.** It is plumb above the origin, so it
+inherits that pin's map distance and differs only in angle:
 
-Types carry geometry rules, not just names: `spot elevation` (1 point),
-`tree`/`shrub` (1 point + stack, plus a **spread** diameter drawn as a
-ground-scale ring — faint for every pin, solid for the selected one, the rule
-the photo view cones already use), `fence` and `wall` (a run with a level top),
-`drain` (1 point, and the one type that goes **down** — the invert below the
-grate is what sets whether you can get fall to it, and it is typed rather than
-sighted, since `d·tan θ` falls apart standing over the thing).
+    height = d · (tan θ_top − tan θ_base)
 
-**A run's top is LEVEL, and that is the only mode.** Shoot at least one top;
-every ground point in the run then gets a partner plumb above it at that
-elevation, so the run owns a **vertical face** — a ribbon of plumb pairs. A
-stepped fence is modelled as several short level runs rather than as a second
-derivation rule, which means `fence` and `wall` share one geometry and differ
-only cosmetically.
+The anchor cancels, so **an object's height does not depend on the datum** — the
+most trustworthy number in the app, provided both shots come from the same
+stance. Shooting origin and height back to back is what guarantees that, which
+is another reason the order is fixed; if the observation changes between the
+two, say so.
 
-This is also what rescues the vertical face. A surface storing one height per
-ground position cannot express one — but **the face never lives in the mesh**.
-The mesh keeps the ground points and the object carries the face, so nothing
-has to bend.
+**A run's top is level, and that is the only mode.** Every ground point in the
+run gets a partner plumb above it at the height shot at the origin, so the run
+owns a **vertical face** — a ribbon of plumb pairs. A stepped fence is captured
+as several short level runs rather than as a second derivation rule, which is
+why `fence` and `wall` share one geometry and differ only cosmetically.
 
-Tops can be shot for *some* of the run and derived for the rest. More than one
-gets averaged into the level plane, which is the same shape as the repeat-shot
-confidence model already in the app, and it hands back a **spread** for free:
-six tops agreeing within an inch says the run really is level. Two rules follow:
+That also rescues the vertical face. A surface storing one height per ground
+position cannot express one — but **the face never lives in the mesh**. The mesh
+keeps the ground points; the object carries the face, so nothing has to bend.
 
-- **Never silently average tops that genuinely disagree.** The app already knows
-  how steady your hand is (`angle_spread_deg`, the `± repeat` figure), so shot
-  noise and a real step look nothing alike against it. Past that threshold the
-  right response is not a warning but a prompt — *these tops differ by 7"; split
-  this into separate runs?* — which is exactly how a stepped run is meant to be
-  captured anyway.
-- **The top you shot is a measurement; the derived ones are not.** The inspector
-  has to say which is which, the same split as "the vertices are measurements,
-  the segments are assumptions" on the ground line.
+Two display rules, both borrowed from things already built: an object draws as
+**one map symbol** with its detail in the pin inspector, which exists precisely
+to hold that; and a plant's **spread** is a ground-scale ring, faint for every
+pin and solid for the selected one, exactly as the photo view cones behave.
+
+**The origin is the only mandatory shot.** A height that cannot be sighted is
+skipped and the object simply has none. A derived top is never presented as if
+somebody sighted it.
 
 **Breaklines are deliberately NOT in the first version.** A run of wall or fence
 points is exactly the line the mesh must not cross, and without that the surface
@@ -1684,9 +1678,7 @@ every triangle that crosses a required edge, removing them and re-triangulating
 both sides — which is real surgery on a triangulation that is currently verified
 and clean. The object model captures the data breaklines need, so it can be a
 second, self-contained step, tested against real wall runs rather than invented
-fixtures. Note also that a truly vertical face cannot be represented by a
-surface storing one height per ground position; you give the wall its real
-thickness so the face is very steep rather than impossible.
+fixtures.
 
 **Not yet built**
 - Breaklines for the surface — telling it "these points are a wall, do not
