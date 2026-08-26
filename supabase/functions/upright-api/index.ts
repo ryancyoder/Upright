@@ -211,7 +211,7 @@ Deno.serve(async (req) => {
     // GET /sessions/:id
     if (req.method === "GET" && parts.length === 2 && parts[0] === "sessions") {
       const sessionId = parts[1];
-      const [{ data: session, error: sErr }, { data: clips }, { data: photos }, { data: sketches }, { data: measures }, { data: elevPoints }, { data: elevShots }, { data: elevSlopes }, { data: elevViews }, { data: elevSketches }] =
+      const [{ data: session, error: sErr }, { data: clips }, { data: photos }, { data: sketches }, { data: measures }, { data: elevPoints }, { data: elevShots }, { data: elevSlopes }, { data: elevViews }, { data: elevSketches }, { data: objects }] =
         await Promise.all([
           supabase.from("upright_sessions").select("*, properties(id,address,latitude,longitude)").eq("id", sessionId).single(),
           supabase.from("upright_clips").select("*").eq("session_id", sessionId).order("start_offset_ms"),
@@ -223,6 +223,7 @@ Deno.serve(async (req) => {
           supabase.from("upright_elevation_slopes").select("*").eq("session_id", sessionId).order("created_at"),
           supabase.from("upright_elevation_views").select("*").eq("session_id", sessionId),
           supabase.from("upright_elevation_sketches").select("*").eq("session_id", sessionId).order("created_at"),
+          supabase.from("upright_objects").select("*").eq("session_id", sessionId).order("created_at"),
         ]);
       if (sErr || !session) return err("session not found", 404);
       const prop = firstOf<{ id: number; address: string }>((session as Record<string, unknown>).properties);
@@ -242,6 +243,7 @@ Deno.serve(async (req) => {
         elevationShots: elevShots || [],
         elevationSlopes: elevSlopes || [],
         elevationSketches: elevSketches || [],
+        objects: objects || [],
         elevationViews: (elevViews || []).map((v) => ({
           ...v,
           planUrl: v.plan_storage_path ? publicUrl(v.plan_storage_path) : null,
@@ -280,9 +282,61 @@ Deno.serve(async (req) => {
         gps_lat: body.gpsLat ?? null, gps_lng: body.gpsLng ?? null,
         placed: body.placed === undefined ? true : !!body.placed,
         set_observation_id: body.setObservationId ?? null,
+        // Object membership. role is origin|height|ground; a height point is
+        // plumb above its origin and is what the ground mesh must NOT include.
+        object_id: body.objectId ?? null,
+        role: body.role ?? null,
+        seq: body.seq ?? null,
       }).select().single();
       if (error) return err(error.message, 500);
       return json(row);
+    }
+
+    // ---------- objects ----------
+    // The type is a shoot order: origin first, then at most one height plumb
+    // above it, then whatever ground points the structure needs.
+
+    // POST /sessions/:id/objects { type, label, attrs }
+    if (req.method === "POST" && parts.length === 3 && parts[0] === "sessions" && parts[2] === "objects") {
+      const sessionId = parts[1];
+      const body = await req.json();
+      if (!body.type) return err("type required");
+      const { data: row, error } = await supabase.from("upright_objects").insert({
+        session_id: sessionId, type: String(body.type),
+        label: body.label ?? null,
+        attrs: body.attrs && typeof body.attrs === "object" ? body.attrs : {},
+      }).select().single();
+      if (error) return err(error.message, 500);
+      return json(row);
+    }
+
+    // PATCH /objects/:id { label, attrs }  -- attrs is merged, not replaced, so
+    // typing a spread does not wipe a species recorded earlier.
+    if (req.method === "PATCH" && parts.length === 2 && parts[0] === "objects") {
+      const objectId = parts[1];
+      const body = await req.json();
+      const update: Record<string, unknown> = {};
+      if (body.label !== undefined) update.label = body.label;
+      if (body.type !== undefined) update.type = String(body.type);
+      if (body.attrs !== undefined && body.attrs && typeof body.attrs === "object") {
+        const { data: cur } = await supabase
+          .from("upright_objects").select("attrs").eq("id", objectId).single();
+        update.attrs = { ...((cur?.attrs as Record<string, unknown>) || {}), ...body.attrs };
+      }
+      if (!Object.keys(update).length) return err("nothing to update");
+      const { data: row, error } = await supabase
+        .from("upright_objects").update(update).eq("id", objectId).select().single();
+      if (error) return err(error.message, 500);
+      return json(row);
+    }
+
+    // DELETE /objects/:id  -- its points cascade (object_id FK), and their shots
+    // cascade from those, so one call removes the whole thing.
+    if (req.method === "DELETE" && parts.length === 2 && parts[0] === "objects") {
+      const objectId = parts[1];
+      const { error } = await supabase.from("upright_objects").delete().eq("id", objectId);
+      if (error) return err(error.message, 500);
+      return json({ ok: true });
     }
 
     // PATCH /elevation-points/:id { label, lat, lng, placed, hidden, locked }
@@ -297,6 +351,11 @@ Deno.serve(async (req) => {
       if (body.hidden !== undefined) update.hidden = !!body.hidden;
       if (body.locked !== undefined) update.locked = !!body.locked;
       if (body.setObservationId !== undefined) update.set_observation_id = body.setObservationId;
+      // Object membership. The point POST goes out before the object has a
+      // remote id, so the client PATCHes this on once both exist.
+      if (body.objectId !== undefined) update.object_id = body.objectId;
+      if (body.role !== undefined) update.role = body.role;
+      if (body.seq !== undefined) update.seq = body.seq;
       if (!Object.keys(update).length) return err("nothing to update");
       const { data: row, error } = await supabase
         .from("upright_elevation_points").update(update).eq("id", pointId).select().single();

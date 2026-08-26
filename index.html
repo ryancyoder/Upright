@@ -285,6 +285,12 @@
     border-radius:8px; border:1px solid var(--line);
     background:var(--bg); color:var(--ink); padding:7px 8px; resize:vertical;
   }
+  .pi-attr{
+    /* 16px for the same reason .pi-note is -- see there. */
+    width:100%; margin-top:6px; font:inherit; font-size:16px;
+    border-radius:8px; border:1px solid var(--line);
+    background:var(--bg); color:var(--ink); padding:7px 8px;
+  }
   .pi-dl{
     display:inline-block; margin-top:10px; padding:7px 12px; border-radius:8px;
     border:1px solid var(--line); background:transparent; color:var(--ink);
@@ -477,6 +483,16 @@
      that actually gets recorded -- so what is on screen is the thing being
      verified, not a second opinion from the same sensor. The index at the top
      is where you are aiming; the rose turns under it. */
+  .sight-types{
+    display:flex; flex-wrap:wrap; justify-content:center; gap:5px;
+    padding-top:2px; max-width:340px;
+  }
+  .sight-types button{
+    padding:5px 10px; border-radius:100px; font-size:11px; font-weight:700;
+    border:1px solid var(--line); background:rgba(0,0,0,0.5); color:var(--dim);
+  }
+  .sight-types button.on{background:var(--ink); color:var(--bg); border-color:var(--ink);}
+  .sight-types button.done{border-color:var(--flat); color:var(--flat);}
   .sight-compass{
     display:flex; align-items:center; gap:9px;
     padding-top:2px;
@@ -607,6 +623,7 @@
     pointer-events:auto;
   }
   .fold-path{filter:drop-shadow(0 1px 2px rgba(0,0,0,0.9));}
+  .obj-run, .obj-spread{filter:drop-shadow(0 1px 2px rgba(0,0,0,0.9));}
   /* The surface: contours and flow, over bright turf, so legibility comes from
      a shadow rather than from weight -- the same rule the pins follow. */
   .surf-contour, .surf-hull{filter:drop-shadow(0 1px 2px rgba(0,0,0,0.9));}
@@ -1099,6 +1116,9 @@
         <div class="sight-steady" id="sightSteady">HOLD STEADY</div>
         <!-- The compass, shown while sighting so the bearing can be checked
              against something known before it is recorded. -->
+        <!-- The type is picked before the shots, because it decides what they
+             mean. Tapping one starts an object and the prompts walk the order. -->
+        <div class="sight-types" id="sightTypes"></div>
         <div class="sight-compass" id="sightCompass">
           <svg class="sc-rose" viewBox="0 0 44 44" aria-hidden="true">
             <circle cx="22" cy="22" r="19" fill="none" stroke="rgba(255,255,255,0.28)" stroke-width="1.5"/>
@@ -1525,7 +1545,7 @@
         evFile=$('evFile'), evXray=$('evXray'), evLevels=$('evLevels'),
         evGroundBtn=$('evGroundBtn'),
         sightOverlay=$('sightOverlay'), sightMsg=$('sightMsg'), sightAngle=$('sightAngle'),
-        sightCompass=$('sightCompass'), scRose=$('scRose'),
+        sightCompass=$('sightCompass'), sightTypes=$('sightTypes'), scRose=$('scRose'),
         scBearing=$('scBearing'), scAcc=$('scAcc'),
         sightSteady=$('sightSteady'), gradeBtn=$('gradeBtn'),
         sightDwell=$('sightDwellFill'), sightCross=$('sightCross'), sightCrossGlyph=$('sightCrossGlyph'),
@@ -2744,6 +2764,8 @@
       photoUrl:e.photoUrl||null, photoLocal:null, marker:null,
       setObservationId:e.set_observation_id||null, setSent:true,
       hidden:!!e.hidden, locked:!!e.locked,
+      objectId:e.object_id||null, role:e.role||null,
+      seq:e.seq==null?null:+e.seq, plumbOf:null,
       // Rebuild the timeline offset so grade shots interleave with the photos.
       offset: (startedMs && e.created_at) ? (new Date(e.created_at).getTime()-startedMs) : null
     }));
@@ -2759,6 +2781,24 @@
     elevSlopes=(data.elevationSlopes||[]).map(sl=>({
       id:sl.id, remoteId:sl.id, fromId:sl.from_point_id, toId:sl.to_point_id, layers:null
     }));
+    // Objects, rebuilt from the membership their points carry. plumbOf is a
+    // relationship, not a fact about the point, so it is derived here rather
+    // than stored -- the same rule elevation itself follows.
+    objects=(data.objects||[]).map(o=>({
+      id:o.id, remoteId:o.id, type:o.type, label:o.label||null,
+      attrs:o.attrs||{}, originId:null, heightId:null, groundIds:[]
+    }));
+    objDraft=null;
+    objects.forEach(o=>{
+      const mine=elevPoints.filter(q=>q.objectId===o.id);
+      mine.forEach(q=>{
+        if(q.role==='origin') o.originId=q.id;
+        else if(q.role==='height') o.heightId=q.id;
+      });
+      o.groundIds = mine.filter(q=>q.role!=='height')
+        .sort((a,b)=>(a.seq==null?0:a.seq)-(b.seq==null?0:b.seq)).map(q=>q.id);
+      mine.forEach(q=>{ if(q.role==='height') q.plumbOf=o.originId; });
+    });
     cutPivot = (s.elev_cut_lat!=null && s.elev_cut_lng!=null)
       ? L.latLng(s.elev_cut_lat, s.elev_cut_lng) : null;
     cutRot = s.elev_cut_rot_deg || 0;
@@ -3572,7 +3612,7 @@
         shots.forEach(pt=>{
           row.appendChild(makeThumb({
             kind:'elev', id:pt.id, elev:true, photo:pt.photoUrl||pt.photoLocal,
-            local:pt.photoLocal, badge:'T'+(pt.label||'').replace(/[^0-9]/g,''),
+            local:pt.photoLocal, badge:objBadge(pt),
             colour:TARGET_SIGHT, dim:!pt.placed, sel:pt.id===elevSelected,
             onClick:()=>elevSelectFromStrip(pt),
             controls:[
@@ -3591,6 +3631,17 @@
     if(!entries.length || prefs.filmstrip===false){ filmStrip.classList.remove('show'); return; }
     entries.forEach(e=>filmStrip.appendChild(e.build()));
     filmStrip.classList.add('show');
+  }
+
+  // A frame belonging to an object is named for the OBJECT -- calling a picture
+  // of a treetop "Target 5" is how you fail to find it again.
+  function objBadge(pt){
+    const o=pt.objectId ? objOf(pt.objectId) : null;
+    if(!o) return 'T'+(pt.label||'').replace(/[^0-9]/g,'');
+    const code=objTypeOf(o).code||'OB';
+    if(pt.role==='height') return code+'\u2191';
+    if(pt.role==='origin') return code;
+    return code+'\u00b7'+((pt.seq==null?0:pt.seq)+1);
   }
 
   // Tapping a grade photo highlights its elevation marker, the same way a
@@ -3821,8 +3872,11 @@
 
   function inspectRenderElev(pt){
     const isObs = pt.kind==='observation';
-    piTitle.innerHTML = (pt.label||'')
-      + '<span class="pi-kind">'+(PI_KIND[pt.kind]||pt.kind)+'</span>';
+    const obj = pt.objectId ? objOf(pt.objectId) : null;
+    piTitle.innerHTML = (obj ? objLabel(obj) : (pt.label||''))
+      + '<span class="pi-kind">'
+      + (obj ? (OBJ_ROLE[pt.role]||'member') : (PI_KIND[pt.kind]||pt.kind))
+      + '</span>';
     piPhoto(pt.photoUrl || pt.photoLocal, pt.photoLocal,
             isObs ? 'No stance photo' : 'No reference photo');
 
@@ -3886,7 +3940,10 @@
                 ? piFt(metresBetween(pt,anchor)) : null);
     }
 
-    delete piBody.dataset.pin;      // so coming back to a photo pin rebuilds its note
+    // A typed attribute is built ONCE per point and then left alone. The rest of
+    // this panel is rewritten on every frame of a drag, and replacing a focused
+    // field drops what is in it along with the caret -- the same rule the photo
+    // pin's note follows.
     // The bearing cross-check. Reported, never acted on: it can say a pin looks
     // wrong, it can never move one, and it never touches the elevation.
     let check='';
@@ -3925,7 +3982,13 @@
       }
     }
 
-    piBody.innerHTML = head + shots + check
+    const key = 'elev:'+pt.id;
+    if(piBody.dataset.pin !== key){
+      piBody.dataset.pin = key;
+      piBody.innerHTML = '<div id="piElevRows"></div>' + objEditorHtml(obj);
+      objEditorWire(obj);
+    }
+    $('piElevRows').innerHTML = head + objBlock(pt, obj) + shots + check
       + '<div class="pi-group">Position</div>'
       + piRow('Coordinates', piCoords(pt))
       + piRow('Pin', !pt.placed
@@ -4671,6 +4734,32 @@
          + '</svg>';
   }
 
+  // One symbol per object, at the origin -- the point the whole thing hangs
+  // off. Minimal by the same rule the survey pins follow: glyph only, no fill,
+  // no box, legibility over bright turf from the drop-shadow in CSS.
+  function objGlyph(type, colour){
+    const o='fill="none" stroke="'+colour+'" stroke-width="2.5" '
+          + 'stroke-linecap="round" stroke-linejoin="round"';
+    const wrap=b=>'<svg viewBox="0 0 32 32" width="32" height="32">'+b+'</svg>';
+    switch(type){
+      case 'tree':  return wrap('<path d="M16 30 L16 19" '+o+'/>'
+                              + '<circle cx="16" cy="12" r="8" '+o+'/>');
+      case 'shrub': return wrap('<path d="M16 30 L16 24" '+o+'/>'
+                              + '<path d="M5 24 A11 11 0 0 1 27 24 Z" '+o+'/>');
+      case 'fence': return wrap('<path d="M8 6 L8 28 M16 6 L16 28 M24 6 L24 28" '+o+'/>'
+                              + '<path d="M4 12 L28 12 M4 20 L28 20" '+o+'/>');
+      case 'wall':  return wrap('<path d="M4 9 L28 9 L28 25 L4 25 Z" '+o+'/>'
+                              + '<path d="M4 17 L28 17 M16 9 L16 17 M10 17 L10 25 M22 17 L22 25" '+o+'/>');
+      case 'face':  return wrap('<path d="M4 15 L16 5 L28 15" '+o+'/>'
+                              + '<path d="M7 15 L7 28 L25 28 L25 15" '+o+'/>');
+      case 'box':   return wrap('<path d="M6 12 L16 6 L26 12 L26 24 L16 30 L6 24 Z" '+o+'/>'
+                              + '<path d="M6 12 L16 18 L26 12 M16 18 L16 30" '+o+'/>');
+      case 'drain': return wrap('<circle cx="16" cy="16" r="10" '+o+'/>'
+                              + '<path d="M11 9 L11 23 M16 7 L16 25 M21 9 L21 23" '+o+'/>');
+      default:      return elevGlyph('target', colour);
+    }
+  }
+
   // ---------- the compass, as evidence ----------
   // Settled rule, unchanged: no elevation is EVER computed from the compass.
   // Distance comes from where the pins sit and angle from the tilt sensor, and
@@ -4978,6 +5067,10 @@
   function surfPoints(){
     const seen={}, out=[];
     elevPoints.forEach(pt=>{
+      // A HEIGHT POINT IS NOT GROUND. Before object types there was no way to
+      // say so, and a shot at the top of a fence became a mesh vertex that
+      // pulled the whole surface up by the height of the fence.
+      if(pt.role==='height') return;
       if(!pt.placed || isHidden(pt) || pt.kind==='observation') return;
       const e=elevationOf(pt.id);
       if(!e || e.needsPlacing) return;
@@ -5297,6 +5390,8 @@
 
   function elevClearLayers(){
     sightClear();
+    objClear();
+    surfClear();
     elevPoints.forEach(p=>{
       if(p.marker && map){ try{ map.removeLayer(p.marker); }catch(e){} }
       p.marker=null;
@@ -5408,6 +5503,9 @@
     elevClearLayers();
     elevPoints.forEach(pt=>{
       if(isHidden(pt)) return;
+      // A height point rides its origin's pin, so it gets no marker of its own.
+      // Its number shows in the object's entry in the inspector instead.
+      if(pt.role==='height') return;
       const isObs=pt.kind==='observation', isAnchor=pt.kind==='anchor';
       // One colour per kind, shared with the sight you shot it through:
       // green stance, yellow anchor, red target.
@@ -5418,8 +5516,12 @@
       // Name it only while it is unplaced -- that is when you need to match a
       // pin to its photo. Once placed, the number is all that matters.
       const name=(!pt.placed && !isObs) ? '<b>'+(pt.label||'')+'</b>' : '';
+      // An object shows its TYPE at the origin -- one symbol for the stack, with
+      // the rest of it in the inspector column. The run's other ground points
+      // are separate shots with their own elevations, so they stay crosshairs.
+      const objHere = pt.role==='origin' ? objOf(pt.objectId) : null;
       const html='<div class="'+cls+'" style="--c:'+colour+'">'
-               + elevGlyph(pt.kind, colour) + name
+               + (objHere ? objGlyph(objHere.type, colour) : elevGlyph(pt.kind, colour)) + name
                + (value?'<span>'+value+'</span>':'')
                + '</div>';
       const m=L.marker([pt.lat,pt.lng],{
@@ -5445,6 +5547,7 @@
         // finger -- but only the inspector's own DOM is touched, never the map.
         const ll=m.getLatLng();
         pt.lat=ll.lat; pt.lng=ll.lng;
+        objSyncPlumb(pt);          // the height above it moves with it
         if(inspectIs('elev', pt.id)) inspectSoon();
         // Split screen: the section is right there above the map, so it has to
         // follow the pin under the finger rather than wait for the drop.
@@ -5456,6 +5559,7 @@
         pt.lat=ll.lat; pt.lng=ll.lng;
         const firstPlacement=!pt.placed;
         pt.placed=true;
+        objSyncPlumb(pt);
         if(pt.remoteId) apiPatch('/elevation-points/'+pt.remoteId, {lat:pt.lat, lng:pt.lng, placed:true});
         // Moving a pin changes distance, so every dependent elevation moves.
         elevRenderAll(); elevStatusUpdate();
@@ -5465,7 +5569,43 @@
     });
     drawSlopes();
     sightDraw();
+    objDraw();
     surfaceDraw();      // moving a pin moves the surface it is a corner of
+  }
+
+  // ---------- objects on the plan ----------
+  // The run drawn as a line, and a plant's spread as a ground-scale ring --
+  // faint for every object, solid for the selected one, the rule the photo view
+  // cones already follow. A ring drawn to scale is the honest way round: it is a
+  // real 8 ft canopy, not a fixed blob.
+  let objLayers=[];
+  function objClear(){
+    objLayers.forEach(l=>{ if(map){ try{ map.removeLayer(l); }catch(e){} } });
+    objLayers=[];
+  }
+  function objDraw(){
+    objClear();
+    if(!map || !mapInited) return;
+    objects.forEach(o=>{
+      const pts=o.groundIds.map(id=>elevPoint(id)).filter(q=>q && q.placed && !isHidden(q));
+      if(!pts.length) return;
+      const sel = pts.some(q=>q.id===elevSelected);
+      if(pts.length>1){
+        objLayers.push(L.polyline(pts.map(q=>[q.lat,q.lng]), {
+          className:'obj-run', interactive:false,
+          color:'#8b8f7a', weight: sel?3:2, opacity: sel?0.95:0.55,
+          dashArray: o.type==='fence' ? '8 5' : null
+        }).addTo(map));
+      }
+      const T=objTypeOf(o);
+      const spread=+(o.attrs && o.attrs.spread_ft);
+      if(T.spread && isFinite(spread) && spread>0){
+        objLayers.push(L.circle([pts[0].lat, pts[0].lng], {
+          radius: spread*M_PER_FT/2, className:'obj-spread', interactive:false,
+          color:'#5a7a63', weight: sel?2:1.2, opacity: sel?0.9:0.4, fill:false
+        }).addTo(map));
+      }
+    });
   }
 
   // Arming turns the next two pin taps into a slope run instead of an
@@ -5573,6 +5713,7 @@
       gradeStatus();
     } else {
       gradeObsId=null; dwellStart=0;
+      objEnd();          // an object half-shot is closed, not left hanging
       gradeResuming=false; gradeReshootId=null; gradeAnchorBaseline=null; gradeNote=''; lastShotAngle=null;
       sightDwell.style.width='0%';
       if(map){
@@ -5620,10 +5761,48 @@
     sightCrossGlyph.innerHTML = obs ? elevGlyph('observation', OBS_SIGHT)
                               : anc ? elevGlyph('anchor', ANCHOR_SIGHT) : '';
   }
+  // The type row. Built once, then only the on/done classes change.
+  function objTypesBuild(){
+    if(!sightTypes || sightTypes.childElementCount) return;
+    OBJ_ORDER.forEach(k=>{
+      const b=document.createElement('button');
+      b.type='button'; b.dataset.type=k; b.textContent=OBJ_TYPES[k].name;
+      b.addEventListener('click', ev=>{
+        ev.stopPropagation();
+        // Tapping the type you are already shooting ends it; tapping another
+        // starts that one instead. Either way the object you were on is closed.
+        const was=objDraft && objDraft.type;
+        objEnd();
+        if(was!==k) objStart(k);
+        objTypesSync(); elevRenderAll(); gradeStatus();
+      });
+      sightTypes.appendChild(b);
+    });
+  }
+  function objTypesSync(){
+    objTypesBuild();
+    if(!sightTypes) return;
+    const role=objNextRole(objDraft);
+    [...sightTypes.children].forEach(b=>{
+      const mine=objDraft && objDraft.type===b.dataset.type;
+      b.classList.toggle('on', !!mine);
+      b.classList.toggle('done', !!mine && role==='done');
+    });
+  }
   function gradeStatus(msg){
     paintSight();
+    objTypesSync();
     if(msg){ sightMsg.innerHTML=msg; return; }
     const anchor=elevAnchorPoint();
+    // Once a type is chosen and the datum is settled, the script does the
+    // talking: origin, then height, then the ground points the shape needs.
+    if(objDraft && anchor && elevShots.some(x=>x.observationId===gradeObsId && x.pointId===anchor.id)
+       && !nextShotIsObservation()){
+      const h=objHeightFt(objDraft);
+      sightMsg.innerHTML = objPrompt(objDraft)
+        + (h!=null ? '<br>height <b>'+h.toFixed(2)+"'</b>" : '');
+      return;
+    }
     const shotHere=elevShots.filter(x=>x.observationId===gradeObsId).length;
     const anchorShotHere=anchor && elevShots.some(x=>x.observationId===gradeObsId && x.pointId===anchor.id);
     if(nextShotIsObservation()){
@@ -5664,6 +5843,249 @@
       ? 'Re-shooting <b>'+re.label+'</b> — its earlier shots will be replaced'
       : 'Aim at a <b>target</b> and hold steady &nbsp;·&nbsp; '+shotHere+' shot'+(shotHere===1?'':'s')+' from here')
       + (gradeNote ? '<br>'+gradeNote : '');
+  }
+
+  // ---------- object types ----------
+  // THE TYPE IS A SHOOT ORDER, not a label. One rule under all of them:
+  //
+  //     origin first, then the height, then whatever ground points the
+  //     structure needs.
+  //
+  // The origin is mandatory -- everything starts on the ground, so every object
+  // contributes at least one mesh vertex. There is exactly ONE height per
+  // object, plumb above the origin; anything else about the shape comes from
+  // more ground points, never more heights.
+  //
+  // This closes a live hole. surfPoints() took EVERY placed point, so a shot at
+  // the top of a fence silently became a ground vertex and pulled the surface up
+  // by the height of the fence. Typing the shots is what lets the app tell
+  // ground from not-ground.
+  //
+  // `ground` is how many ground points the type wants, counting the origin;
+  // 'path' means as many as you like until Done.
+  const OBJ_TYPES={
+    spot:  {name:'Spot',       ground:1,      height:false, glyph:'spot', code:'SP'},
+    tree:  {name:'Tree',       ground:1,      height:true,  glyph:'tree',  spread:true, code:'TR',
+            p:{origin:'Shoot the base of the trunk', height:'Now the top, straight above'}},
+    shrub: {name:'Shrub',      ground:1,      height:true,  glyph:'shrub', spread:true, code:'SH',
+            p:{origin:'Shoot the base of the shrub', height:'Now the top, straight above'}},
+    fence: {name:'Fence',      ground:'path', height:true,  glyph:'fence', code:'FN',
+            p:{origin:'Shoot the base of the first post',
+               height:'Now the top of that post',
+               ground:'Walk the line and shoot each post base \u2014 Done when finished'}},
+    wall:  {name:'Wall',       ground:'path', height:true,  glyph:'wall',  code:'WL',
+            p:{origin:'Shoot the base of the wall at one end',
+               height:'Now the top of the wall above it',
+               ground:'Shoot along the base of the wall \u2014 Done when finished'}},
+    face:  {name:'House face', ground:2,      height:true,  glyph:'face',  code:'HF',
+            p:{origin:'Shoot the foundation at one end',
+               height:'Now the roof line above it',
+               ground:'Now the foundation at the other end'}},
+    box:   {name:'Structure',  ground:3,      height:true,  glyph:'box',   code:'ST',
+            p:{origin:'Shoot the base corner',
+               height:'Now the top corner, straight above',
+               ground:'Now a base corner along one side'}},
+    drain: {name:'Drain',      ground:1,      height:false, glyph:'drain', depth:true, code:'DR',
+            p:{origin:'Shoot the grate'}}
+  };
+  const OBJ_ORDER=['spot','tree','shrub','fence','wall','face','box','drain'];
+  let objects=[];             // {id, remoteId, type, label, attrs, originId, heightId, groundIds[]}
+  let objDraft=null;          // the object being shot, if any
+
+  function objOf(id){ return objects.find(o=>o.id===id) || null; }
+  function objTypeOf(o){ return (o && OBJ_TYPES[o.type]) || OBJ_TYPES.spot; }
+  // Auto-named per type, the same rule the survey points follow -- nobody
+  // types in a yard.
+  function objLabel(o){
+    if(!o) return '';
+    if(o.label) return o.label;
+    const n=objects.filter(x=>x.type===o.type).indexOf(o)+1;
+    return objTypeOf(o).name+' '+n;
+  }
+  const OBJ_ROLE={origin:'origin \u2014 on the ground',
+                  height:'height \u2014 plumb above the origin',
+                  ground:'ground point'};
+  // What the NEXT shot is for the object being captured.
+  function objNextRole(d){
+    if(!d) return null;
+    const T=OBJ_TYPES[d.type]; if(!T) return null;
+    if(!d.originId) return 'origin';
+    if(T.height && !d.heightId) return 'height';
+    const need = T.ground==='path' ? Infinity : T.ground;
+    return d.groundIds.length < need ? 'ground' : 'done';
+  }
+  function objPrompt(d){
+    if(!d) return '';
+    const T=OBJ_TYPES[d.type], role=objNextRole(d);
+    if(role==='done') return '<b>'+T.name+' complete</b> \u2014 tap Done, or pick another type';
+    const txt=(T.p && T.p[role]) || (role==='origin' ? 'Shoot the base'
+              : role==='height' ? 'Now the top, straight above' : 'Shoot the next ground point');
+    return '<b>'+T.name+'</b> \u2014 '+txt;
+  }
+  // ---------- an object in the pin inspector ----------
+  // A stack is drawn as ONE symbol on the map, so the column is where the rest
+  // of it lives: what this point is within the object, the derived height, and
+  // whatever is typed rather than shot.
+  function objBlock(pt, o){
+    if(!o) return '';
+    const T=objTypeOf(o), h=objHeightFt(o), ground=o.groundIds.length;
+    let s='<div class="pi-group">'+objLabel(o)+'</div>'
+      + piRow('This point', OBJ_ROLE[pt.role] || 'member')
+      + piRow('Height', !T.height ? null
+          : (h==null ? '<span class="warn">not measured</span>'
+             : (h>=0?'+':'')+h.toFixed(2)+"'"))
+      + piRow('Ground points', ground || null);
+    const spread=+(o.attrs&&o.attrs.spread_ft);
+    if(T.spread && isFinite(spread) && spread>0) s+=piRow('Spread', spread.toFixed(1)+"'");
+    const depth=+(o.attrs&&o.attrs.invert_ft);
+    if(T.depth && isFinite(depth) && depth>0) s+=piRow('Invert depth', depth.toFixed(1)+"'");
+    if(T.height) s+='<div class="pi-sub">The height is the difference between two '
+      + 'sightings taken from one stance off this same pin, so the anchor cancels: '
+      + 'it does not depend on the datum at all.</div>';
+    if(T.ground==='path' && ground>1) s+='<div class="pi-sub">The top is level along the '
+      + 'whole run \u2014 every ground point carries a partner plumb above it at the '
+      + 'height shot at the origin. Only the origin\u2019s height was sighted.</div>';
+    return s;
+  }
+  // Typed attributes. Kept out of the block above because that is rewritten on
+  // every frame of a drag and this is a field somebody may be typing in.
+  function objEditorHtml(o){
+    if(!o) return '';
+    const T=objTypeOf(o);
+    let s='';
+    if(T.spread) s+='<div class="pi-group">Spread</div>'
+      + '<input class="pi-attr" id="piObjSpread" type="number" inputmode="decimal" '
+      + 'step="0.5" min="0" placeholder="feet across">'
+      + '<div class="pi-sub">Drawn on the plan as a ring at ground scale, '
+      + 'faint for every object and solid for the selected one.</div>';
+    if(T.depth) s+='<div class="pi-group">Invert depth</div>'
+      + '<input class="pi-attr" id="piObjDepth" type="number" inputmode="decimal" '
+      + 'step="0.1" min="0" placeholder="feet below the grate">'
+      + '<div class="pi-sub">Typed, not shot \u2014 nothing here measures it.</div>';
+    return s;
+  }
+  function objEditorWire(o){
+    if(!o) return;
+    const bind=(id, k, after)=>{
+      const el=$(id); if(!el) return;
+      const v=+(o.attrs&&o.attrs[k]);
+      el.value = isFinite(v)&&v>0 ? String(v) : '';
+      el.addEventListener('change', ()=>{
+        const n=parseFloat(el.value);
+        o.attrs=o.attrs||{};
+        if(isFinite(n)&&n>0) o.attrs[k]=n; else delete o.attrs[k];
+        if(o.remoteId) apiPatch('/objects/'+o.remoteId, {attrs:o.attrs});
+        if(after) after();
+      });
+    };
+    bind('piObjSpread','spread_ft', ()=>{ objDraw(); inspectRender(); });
+    bind('piObjDepth','invert_ft', ()=>inspectRender());
+  }
+
+  // An object's height is the difference between its two derived elevations.
+  // Both come off the same pin, so the map distance is identical and the anchor
+  // cancels: h = d*(tan a_top - tan a_base). It does not depend on the datum at
+  // all -- provided both shots came from the same stance, which the fixed shoot
+  // order is what guarantees.
+  function objHeightFt(o){
+    if(!o || !o.heightId || !o.originId) return null;
+    const a=elevationOf(o.originId), b=elevationOf(o.heightId);
+    if(!a || !b || a.needsPlacing || b.needsPlacing) return null;
+    const lo=a.isAnchor?0:a.ft, hi=b.isAnchor?0:b.ft;
+    if(typeof lo!=='number' || typeof hi!=='number') return null;
+    return hi-lo;
+  }
+  // A height point is plumb above its origin, so it has no position of its own:
+  // it rides the origin's pin and only its angle differs. Keeping the two in
+  // step is what makes that true after a drag.
+  function objSyncPlumb(originPt){
+    if(!originPt) return;
+    elevPoints.forEach(q=>{
+      if(q.plumbOf===originPt.id){ q.lat=originPt.lat; q.lng=originPt.lng; q.placed=originPt.placed; }
+    });
+  }
+  function objAddPointTo(d, role, latlng, placed, setObsId){
+    const pt=elevAddPoint('target', latlng, placed, null, setObsId);
+    pt.role=role; pt.objectId=d.id;
+    if(role==='height'){ pt.plumbOf=d.originId; pt.placed=true; }
+    else { d.groundIds.push(pt.id); pt.seq=d.groundIds.length-1; }
+    if(role==='origin') d.originId=pt.id;
+    if(role==='height') d.heightId=pt.id;
+    if(pt.remoteId===null && sessionId) objPointPatchPending(pt, d);
+    return pt;
+  }
+  // The point POST goes out before the object has a remote id, so the membership
+  // is PATCHed on once both exist. Fire-and-forget like every other write.
+  function objPointPatchPending(pt, d){
+    const send=()=>{
+      if(!pt.remoteId || !d.remoteId) return false;
+      apiPatch('/elevation-points/'+pt.remoteId,
+        {objectId:d.remoteId, role:pt.role, seq:pt.seq==null?null:pt.seq});
+      return true;
+    };
+    if(send()) return;
+    let tries=0;
+    const t=setInterval(()=>{ if(send() || ++tries>40) clearInterval(t); }, 500);
+  }
+
+  function objStart(type){
+    if(!OBJ_TYPES[type]) return null;
+    const d={ id:'local-'+uuid(), remoteId:null, type:type, label:null, attrs:{},
+              originId:null, heightId:null, groundIds:[] };
+    objects.push(d);
+    objDraft=d;
+    if(sessionId){
+      apiPost('/sessions/'+sessionId+'/objects', {type:type, attrs:{}})
+        .then(row=>{ if(row && row.id) d.remoteId=row.id; });
+    }
+    return d;
+  }
+  // One DELETE takes the object and every point that belongs to it: the FK
+  // from the points cascades server-side, and their shots cascade from those.
+  function objDelete(o){
+    if(!o) return;
+    const ids=elevPoints.filter(q=>q.objectId===o.id).map(q=>q.id);
+    if(o.remoteId) apiDelete('/objects/'+o.remoteId);
+    else ids.forEach(id=>{ const q=elevPoint(id);
+      if(q && q.remoteId) apiDelete('/elevation-points/'+q.remoteId); });
+    ids.forEach(id=>{ const q=elevPoint(id);
+      if(q && q.marker && map){ try{ map.removeLayer(q.marker); }catch(e){} } });
+    elevPoints=elevPoints.filter(q=>ids.indexOf(q.id)<0);
+    elevShots=elevShots.filter(sh=>ids.indexOf(sh.pointId)<0);
+    slopesDropFor(ids);
+    if(ids.indexOf(elevSelected)>=0) elevSelected=null;
+    ids.forEach(id=>inspectDrop('elev', id));
+    objects=objects.filter(x=>x.id!==o.id);
+    if(objDraft && objDraft.id===o.id) objDraft=null;
+  }
+  // Points can also go by other routes -- deleting a whole set takes its
+  // targets with it. Repair the membership rather than leaving an object
+  // pointing at rows that are gone.
+  function objPrune(){
+    objects.forEach(o=>{
+      o.groundIds=o.groundIds.filter(id=>!!elevPoint(id));
+      if(o.originId && !elevPoint(o.originId)) o.originId=null;
+      if(o.heightId && !elevPoint(o.heightId)) o.heightId=null;
+    });
+    const dead=objects.filter(o=>!o.originId);
+    dead.forEach(o=>{
+      elevPoints.filter(q=>q.objectId===o.id).forEach(q=>{
+        if(q.marker && map){ try{ map.removeLayer(q.marker); }catch(e){} }
+      });
+      const ids=elevPoints.filter(q=>q.objectId===o.id).map(q=>q.id);
+      elevPoints=elevPoints.filter(q=>q.objectId!==o.id);
+      elevShots=elevShots.filter(sh=>ids.indexOf(sh.pointId)<0);
+      if(o.remoteId) apiDelete('/objects/'+o.remoteId);
+    });
+    if(dead.length) objects=objects.filter(o=>dead.indexOf(o)<0);
+    if(objDraft && objects.indexOf(objDraft)<0) objDraft=null;
+  }
+  function objEnd(){
+    const d=objDraft;
+    objDraft=null;
+    // An object with no origin never happened.
+    if(d && !d.originId) objects=objects.filter(o=>o.id!==d.id);
+    return d;
   }
 
   function elevAddPoint(kind, latlng, placed, gps, setObsId){
@@ -5834,6 +6256,20 @@
       if(pt.remoteId) apiDelete('/elevation-points/'+pt.remoteId+'/shots');
       gradeReshootId=null;
     }
+    // ---- object capture ----
+    // The type decides what this shot IS. Origin and any further ground points
+    // are real pins to be dragged; the height rides its origin's pin, since it
+    // is plumb above it and only the angle differs.
+    else if(objDraft && objNextRole(objDraft)!=='done'){
+      const role=objNextRole(objDraft);
+      if(role==='height'){
+        const org=elevPoint(objDraft.originId);
+        pt=objAddPointTo(objDraft, 'height', L.latLng(org.lat, org.lng), true, obs.id);
+      } else {
+        pt=objAddPointTo(objDraft, role,
+             provisionalLatLng(obs, elevPoints.length, angle), false, obs.id);
+      }
+    }
     else pt=elevAddPoint('target', provisionalLatLng(obs, elevPoints.length, angle), false, null, obs.id);
 
     const shot={ id:'local-'+uuid(), observationId:obs.id, pointId:pt.id,
@@ -5855,6 +6291,14 @@
     lastShotAngle=angle; gradeArmed=false; dwellStart=0;
     sightDwell.style.width='0%';
     renderStrip();          // the new frame joins the filmstrip straight away
+    // While an object is being captured the script does the talking -- what to
+    // shoot next, and the height as soon as there is one.
+    if(objDraft && !driftNote){
+      const h=objHeightFt(objDraft);
+      gradeStatus(objPrompt(objDraft)
+        + (h!=null ? '<br>height <b>'+h.toFixed(2)+"'</b>" : ''));
+      return;
+    }
     gradeStatus('<b>'+pt.label+'</b> captured at '+(angle>=0?'+':'')+angle.toFixed(1)+'\u00b0'
                 + (driftNote ? '<br>'+driftNote : ' — move to the next point'));
   }
@@ -6009,10 +6453,21 @@
     if(elevActiveObs===obs.id) elevActiveObs=null;
     if(doomed.has(elevSelected)) elevSelected=null;
     if(doomed.has(inspectId)) inspectClose();
+    objPrune();
     elevRenderAll(); renderStrip(); elevStatusUpdate();
   }
   function targetDelete(pt){
-    if(!confirm('Remove '+pt.label+'?')) return;
+    const o=pt.objectId ? objOf(pt.objectId) : null;
+    // The origin and the height ARE the object: a height with no origin
+    // measures nothing, and an object with no origin never happened. Removing
+    // either removes the whole thing. A later point on a run is just a point.
+    if(o && pt.role!=='ground'){
+      if(!confirm('Remove '+objLabel(o)+'? Its shots go with it.')) return;
+      objDelete(o);
+      elevRenderAll(); renderStrip(); elevStatusUpdate();
+      return;
+    }
+    if(!confirm('Remove '+(pt.label||'this point')+'?')) return;
     if(pt.remoteId) apiDelete('/elevation-points/'+pt.remoteId);
     if(pt.marker && map){ try{ map.removeLayer(pt.marker); }catch(e){} }
     elevPoints=elevPoints.filter(p=>p.id!==pt.id);
@@ -6020,6 +6475,7 @@
     slopesDropFor([pt.id]);
     if(elevSelected===pt.id) elevSelected=null;
     inspectDrop('elev', pt.id);
+    objPrune();
     elevRenderAll(); renderStrip(); elevStatusUpdate();
   }
 
@@ -7676,6 +8132,7 @@
   function elevReset(){
     elevClearLayers();
     elevPoints=[]; elevShots=[]; elevSlopes=[]; evSketches=[];
+    objects=[]; objDraft=null;
     evDraft=null; evDrawing=false; evSketchOn=false;
     elevActiveObs=null; elevSelected=null; inspectClose();
     evClose(); cutsClear(); cutsOn=false; cutLocked=false;

@@ -33,7 +33,8 @@ key. Buckets are public-read.
 
 Tables are all prefixed `upright_`: `upright_sessions`, `upright_clips`,
 `upright_photos`, `upright_sketches`, `upright_measures`,
-`upright_transcript_segments`, `upright_elevation_sketches`. Storage bucket:
+`upright_transcript_segments`, `upright_elevation_sketches`, `upright_objects`.
+Storage bucket:
 `upright-media`.
 
 `upright_sessions` has a nullable `property_id` FK to the existing
@@ -51,6 +52,8 @@ Endpoints under `/functions/v1/upright-api`:
 `POST /sessions/:id/elevation-points|elevation-shots` (a shot carries
 `headingDeg`/`headingAccDeg` — evidence, never input),
 `POST /sessions/:id/elevation-slopes`, `DELETE /elevation-slopes/:id`,
+`POST /sessions/:id/objects`, `PATCH /objects/:id` (attrs merged, not
+replaced), `DELETE /objects/:id`,
 `POST /sessions/:id/elevation-sketches`, `DELETE /elevation-sketches/:id`,
 `PATCH /sessions/:id/elevation-views/:side`,
 `POST|DELETE /sessions/:id/elevation-views/:side/plan|photo`,
@@ -66,7 +69,7 @@ Secrets — NOT Vault, and NOT Vercel env vars; neither reaches the function).
 If editing the function, pull current source with `Supabase:get_edge_function`
 rather than reconstructing it. The source is now vendored at
 `supabase/functions/upright-api/index.ts` so edits are diffable; keep it in
-step with what is deployed. Currently **v21**.
+step with what is deployed. Currently **v22**.
 
 **Replacing an image writes a NEW storage path, never an upsert in place.**
 Storage public URLs are cached by the browser and by the CDN in front of the
@@ -1607,7 +1610,7 @@ recent sessions are in that state; one of them has clips, photos and a
 sketch, so this is the fire-and-forget write model showing up in real data,
 not just abandoned starts.
 
-## Object types — designed, not yet built
+## Object types
 
 Every measured thing becomes an **object with a type**, and **the type is a
 shoot order, not a label**. Tell the app what you are looking at and it walks
@@ -1634,12 +1637,12 @@ That table is the whole feature: the prompts, the shot count, the geometry and
 the mesh contribution all fall out of it, so adding a type is a row rather than
 a code path.
 
-**This is what closes a live hole.** `surfPoints()` currently takes *every*
-placed point, so a shot at the top of a fence silently becomes a ground vertex
-and pulls the mesh up by the height of the fence. Typing the shots is what lets
-the app tell ground from not-ground. And the quiet win: shooting the trees and
-posts a crew wants on the plan *also* densifies the ground model, which is the
-standing worry about the surface — eight points is mostly invention.
+**This closed a live hole.** `surfPoints()` took *every* placed point, so a shot
+at the top of a fence silently became a ground vertex and pulled the mesh up by
+the height of the fence. It now drops `role==='height'` outright — one line, and
+it is the whole reason the types exist. And the quiet win: shooting the trees
+and posts a crew wants on the plan *also* densifies the ground model, which is
+the standing worry about the surface — eight points is mostly invention.
 
 **A height point needs no pin of its own.** It is plumb above the origin, so it
 inherits that pin's map distance and differs only in angle:
@@ -1663,9 +1666,54 @@ position cannot express one — but **the face never lives in the mesh**. The me
 keeps the ground points; the object carries the face, so nothing has to bend.
 
 Two display rules, both borrowed from things already built: an object draws as
-**one map symbol** with its detail in the pin inspector, which exists precisely
-to hold that; and a plant's **spread** is a ground-scale ring, faint for every
-pin and solid for the selected one, exactly as the photo view cones behave.
+**one map symbol** — the origin wears the type's own glyph, and the height point
+gets no marker at all — with its detail in the pin inspector, which exists
+precisely to hold that; and a plant's **spread** is a ground-scale ring, faint
+for every pin and solid for the selected one, exactly as the photo view cones
+behave.
+
+### How it is wired
+
+The type picker is a row of pills **in the sighting HUD**, above the compass —
+the choice is made while you are stood up holding the iPad, so it cannot live in
+the map toolbar. Tapping the type you are already on ends that object; tapping
+another starts that one instead. `objNextRole()` is the single source of what
+the next shot is, `objPrompt()` turns it into the line under the sight, and
+`gradeFire()` routes the shot by that role rather than by anything the user
+presses.
+
+**A height point is created placed, at the origin's own lat/lng**, and
+`objSyncPlumb()` keeps it there through every drag of the origin — plumb is a
+relationship, not a position, so it is re-derived rather than stored (the same
+rule `elevationOf()` and `slopeOf()` follow). On an archived session it is
+rebuilt in `hydrateArchive()` from the membership the rows carry.
+
+**The typed attributes are built once per pin and then left alone.** The rest of
+the inspector is rewritten on every frame of a drag, and replacing a focused
+field drops what is in it along with the caret — exactly the trap the photo
+pin's note already dodges. `piBody.dataset.pin` is keyed `elev:<id>` so the
+static half survives a re-render and a change of pin still rebuilds it.
+
+Server side: one `upright_objects` table (RLS on, zero policies, like every
+other), `object_id` / `role` / `seq` on `upright_elevation_points`, and
+`POST /sessions/:id/objects`, `PATCH /objects/:id` (attrs **merged**, not
+replaced), `DELETE /objects/:id`. The point POST goes out before the object has
+a server id, so membership is PATCHed on once both exist.
+
+**The origin and the height ARE the object.** Deleting either from the filmstrip
+removes the whole thing — a height with no origin measures nothing, and an
+object with no origin never happened — while a later point on a run is just that
+point. `objPrune()` repairs membership after any other route to a deleted point
+(deleting a whole set, say) rather than leaving an object pointing at rows that
+are gone. The filmstrip names an object's frames for the object (`TR`, `TR↑`,
+`FN·2`): a picture of a treetop called *Target 5* is a picture you will not find
+again.
+
+`test55.js` covers the shoot order end to end: seven shots produce six pins, the
+height is derived (+25.02' against an independently computed 51.4 ft × (tan 20°
+− tan −7°)), it does not move when the datum is dragged, the mesh counts the
+pins rather than the heights, a spread typed in the column becomes a ground-scale
+ring, and deleting the origin takes the height with it.
 
 **The origin is the only mandatory shot.** A height that cannot be sighted is
 skipped and the object simply has none. A derived top is never presented as if
@@ -1681,6 +1729,8 @@ second, self-contained step, tested against real wall runs rather than invented
 fixtures.
 
 **Not yet built**
+- Renaming an object, and typing more than a spread or an invert depth (species,
+  material). `attrs` is a merged jsonb blob, so the storage is already there.
 - Breaklines for the surface — telling it "these points are a wall, do not
   triangulate across them". Without them a retaining wall is smoothed away.
   Deferred on purpose; see *Object types* above for why, and for the capture
@@ -1713,6 +1763,13 @@ fixtures.
 - Text labels on the map; richer desk-side annotation editor; reference-object photo measuring.
 
 **Needs field testing**
+- **Object types against a real yard.** Whether the shoot order reads as help or
+  as a cage — a fence with a gate in it, a tree you cannot see the top of, a
+  wall that steps — and whether picking a type from the sighting HUD is
+  something a crew actually does mid-visit or quietly ignores. The derived
+  height is only trustworthy if origin and apex are shot from one stance; that
+  is what the fixed order is for, but nothing stops somebody walking between the
+  two.
 - Split screen on a real iPad: whether half a portrait screen is enough map to
   place a pin in, whether the turned plan reads naturally or disorientingly
   against a yard you are standing in, and whether the split opening itself on
