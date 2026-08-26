@@ -1643,13 +1643,39 @@ inspector, which is already built for exactly that; members sort by derived
 elevation, not capture order, since the ridge may be shot before the eaves.
 
 Types carry geometry rules, not just names: `spot elevation` (1 point),
-`tree`/`shrub` (1 point + stack, height above grade, plus a **spread**
-diameter drawn as a ground-scale ring — faint for every pin, solid for the
-selected one, the rule the photo view cones already use), `fence` (run, height
-above grade so the top *rides the ground* rather than being one elevation),
-`wall` (run, level top so the height varies along it), `drain` (1 point, and
-the one type that goes **down** — the invert below the grate is what sets
-whether you can get fall to it).
+`tree`/`shrub` (1 point + stack, plus a **spread** diameter drawn as a
+ground-scale ring — faint for every pin, solid for the selected one, the rule
+the photo view cones already use), `fence` and `wall` (a run with a level top),
+`drain` (1 point, and the one type that goes **down** — the invert below the
+grate is what sets whether you can get fall to it, and it is typed rather than
+sighted, since `d·tan θ` falls apart standing over the thing).
+
+**A run's top is LEVEL, and that is the only mode.** Shoot at least one top;
+every ground point in the run then gets a partner plumb above it at that
+elevation, so the run owns a **vertical face** — a ribbon of plumb pairs. A
+stepped fence is modelled as several short level runs rather than as a second
+derivation rule, which means `fence` and `wall` share one geometry and differ
+only cosmetically.
+
+This is also what rescues the vertical face. A surface storing one height per
+ground position cannot express one — but **the face never lives in the mesh**.
+The mesh keeps the ground points and the object carries the face, so nothing
+has to bend.
+
+Tops can be shot for *some* of the run and derived for the rest. More than one
+gets averaged into the level plane, which is the same shape as the repeat-shot
+confidence model already in the app, and it hands back a **spread** for free:
+six tops agreeing within an inch says the run really is level. Two rules follow:
+
+- **Never silently average tops that genuinely disagree.** The app already knows
+  how steady your hand is (`angle_spread_deg`, the `± repeat` figure), so shot
+  noise and a real step look nothing alike against it. Past that threshold the
+  right response is not a warning but a prompt — *these tops differ by 7"; split
+  this into separate runs?* — which is exactly how a stepped run is meant to be
+  captured anyway.
+- **The top you shot is a measurement; the derived ones are not.** The inspector
+  has to say which is which, the same split as "the vertices are measurements,
+  the segments are assumptions" on the ground line.
 
 **Breaklines are deliberately NOT in the first version.** A run of wall or fence
 points is exactly the line the mesh must not cross, and without that the surface
