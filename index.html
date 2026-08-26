@@ -900,6 +900,36 @@
   .pref-title{font-size:15px; font-weight:700;}
   .pref-sub{font-size:12px; color:var(--dim); margin-top:5px; line-height:1.5;}
   .pref-sub b{color:var(--ink);}
+  .pref-block{display:block;}
+  /* The types reference. Built from OBJ_TYPES itself, so it cannot drift from
+     what the sighting overlay actually does. */
+  .obj-ref{margin-top:12px; overflow-x:auto;}
+  .obj-ref table{border-collapse:collapse; width:100%; font-size:12px;}
+  .obj-ref th{
+    text-align:left; font-size:10px; font-weight:700; letter-spacing:0.1em;
+    text-transform:uppercase; color:var(--dim); padding:0 10px 6px 0;
+    border-bottom:1px solid var(--line); white-space:nowrap;
+  }
+  .obj-ref td{
+    padding:10px 10px 10px 0; border-bottom:1px solid var(--line);
+    vertical-align:top; line-height:1.45;
+  }
+  /* currentColor, not var(--ink): var() does not resolve inside an SVG
+     presentation attribute, only in a CSS property. */
+  .obj-ref td.ico{width:36px; padding-right:12px; color:var(--ink);}
+  .obj-ref td.ico svg{display:block; width:30px; height:30px;}
+  .obj-ref .oname{font-weight:700; font-size:13px;}
+  .obj-ref .ocode{
+    display:inline-block; margin-top:4px; padding:1px 5px; border-radius:4px;
+    background:var(--bg2); color:var(--dim); font-size:10px; letter-spacing:0.06em;
+  }
+  .obj-ref ol{margin:0; padding-left:16px;}
+  .obj-ref ol li{margin-bottom:3px;}
+  .obj-ref .orole{
+    color:var(--dim); font-size:10px; text-transform:uppercase; letter-spacing:0.08em;
+  }
+  .obj-ref .oextra{color:var(--dim);}
+  .obj-ref .odash{color:var(--dim);}
   .pref-switch{
     flex:0 0 auto; width:54px; height:31px; padding:0; position:relative;
     border-radius:100px; border:1px solid var(--line); background:var(--bg2);
@@ -1452,6 +1482,23 @@
           </div>
           <input class="pref-num" id="prefEyeHeight" type="number" step="0.1" min="2" max="8">
         </div>
+        <div class="pref-row pref-block">
+          <div class="pref-main">
+            <div class="pref-title">Object types</div>
+            <div class="pref-sub">Every measured thing is an object with a type, and <b>the type
+              is a shoot order, not a label</b>. Tell the app what you are looking at from the
+              row of pills in the sighting overlay and it walks you through the shots:
+              <b>origin first, then the height, then whatever ground points the shape needs</b>.
+              The origin is always mandatory &mdash; everything starts on the ground, so every
+              object gives the surface at least one vertex. There is <b>exactly one height per
+              object</b>, plumb above the origin; it shares that pin, needs no pin of its own,
+              and is <b>never counted as ground</b>. Its number is the difference between two
+              sightings off the same pin, so the anchor cancels and the height does not depend
+              on the datum &mdash; provided both shots come from the same standing position.
+              A height that cannot be sighted is simply skipped.</div>
+            <div class="obj-ref" id="objRef"></div>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -1635,7 +1682,13 @@
     }catch(err){ console.warn('prefs apply failed', err); }
   }
   function prefToggle(key){ prefSet(key, prefs[key]===false); }
-  function openSettings(){ settingsPanel.classList.add('show'); renderPrefs(); }
+  // objRefBuild() reads OBJ_TYPES, which is declared thousands of lines below.
+  // It is called from HERE and not from renderPrefs(), which runs at the top
+  // level: reading that const from up there is a temporal dead zone throw, and
+  // that takes the entire script with it. Same trap as syncGridBtns().
+  function openSettings(){
+    settingsPanel.classList.add('show'); renderPrefs(); objRefBuild();
+  }
   function closeSettings(){ settingsPanel.classList.remove('show'); }
   settingsBtn.addEventListener('click', openSettings);
   settingsBtn2.addEventListener('click', openSettings);
@@ -5864,28 +5917,36 @@
   // `ground` is how many ground points the type wants, counting the origin;
   // 'path' means as many as you like until Done.
   const OBJ_TYPES={
-    spot:  {name:'Spot',       ground:1,      height:false, glyph:'spot', code:'SP'},
+    spot:  {name:'Spot',       ground:1,      height:false, glyph:'spot', code:'SP',
+          extra:'Just the ground under it. One shot, one mesh vertex.'},
     tree:  {name:'Tree',       ground:1,      height:true,  glyph:'tree',  spread:true, code:'TR',
+          extra:'Spread diameter, typed in the preview column \u2014 drawn as a ring at ground scale.',
             p:{origin:'Shoot the base of the trunk', height:'Now the top, straight above'}},
     shrub: {name:'Shrub',      ground:1,      height:true,  glyph:'shrub', spread:true, code:'SH',
+          extra:'Spread diameter, typed in the preview column \u2014 drawn as a ring at ground scale.',
             p:{origin:'Shoot the base of the shrub', height:'Now the top, straight above'}},
     fence: {name:'Fence',      ground:'path', height:true,  glyph:'fence', code:'FN',
+          extra:'The top is level along the whole run. A stepped fence is several short runs.',
             p:{origin:'Shoot the base of the first post',
                height:'Now the top of that post',
                ground:'Walk the line and shoot each post base \u2014 Done when finished'}},
     wall:  {name:'Wall',       ground:'path', height:true,  glyph:'wall',  code:'WL',
+          extra:'Same geometry as a fence. Not a breakline yet \u2014 the surface still smooths across it.',
             p:{origin:'Shoot the base of the wall at one end',
                height:'Now the top of the wall above it',
                ground:'Shoot along the base of the wall \u2014 Done when finished'}},
     face:  {name:'House face', ground:2,      height:true,  glyph:'face',  code:'HF',
+          extra:'A rectangle standing on the base line between the two ground points.',
             p:{origin:'Shoot the foundation at one end',
                height:'Now the roof line above it',
                ground:'Now the foundation at the other end'}},
     box:   {name:'Structure',  ground:3,      height:true,  glyph:'box',   code:'ST',
+          extra:'Three corners give the fourth.',
             p:{origin:'Shoot the base corner',
                height:'Now the top corner, straight above',
                ground:'Now a base corner along one side'}},
     drain: {name:'Drain',      ground:1,      height:false, glyph:'drain', depth:true, code:'DR',
+          extra:'Invert depth, typed in the preview column. Typed, not shot \u2014 nothing measures it.',
             p:{origin:'Shoot the grate'}}
   };
   const OBJ_ORDER=['spot','tree','shrub','fence','wall','face','box','drain'];
@@ -5914,14 +5975,70 @@
     const need = T.ground==='path' ? Infinity : T.ground;
     return d.groundIds.length < need ? 'ground' : 'done';
   }
+  // A type with several ground points repeats one prompt, so it says which of
+  // them you are on -- "a base corner along one side" twice running reads as a
+  // stuck screen rather than as two corners.
+  function objGroundStep(T, done){
+    // Only worth saying when there is more than one to count through.
+    if(T.ground==='path' || T.ground<=2) return '';
+    return ' \u00b7 ' + done + ' of ' + (T.ground-1);
+  }
   function objPrompt(d){
     if(!d) return '';
     const T=OBJ_TYPES[d.type], role=objNextRole(d);
     if(role==='done') return '<b>'+T.name+' complete</b> \u2014 tap Done, or pick another type';
     const txt=(T.p && T.p[role]) || (role==='origin' ? 'Shoot the base'
               : role==='height' ? 'Now the top, straight above' : 'Shoot the next ground point');
-    return '<b>'+T.name+'</b> \u2014 '+txt;
+    return '<b>'+T.name+'</b> \u2014 '+txt
+         + (role==='ground' ? objGroundStep(T, d.groundIds.length) : '');
   }
+  // ---------- the types, written out in Settings ----------
+  // Derived from OBJ_TYPES rather than typed out beside it: the table and the
+  // prompts the sighting overlay actually gives you come from one place, so a
+  // new type is still a row rather than a row plus a paragraph that goes stale.
+  function objShootOrder(key){
+    const T=OBJ_TYPES[key], out=[];
+    const say=(role,fallback)=>(T.p && T.p[role]) || fallback;
+    out.push({role:'origin', text:say('origin','Shoot the base \u2014 on the ground')});
+    if(T.height) out.push({role:'height', text:say('height','Now the top, straight above')});
+    if(T.ground==='path'){
+      out.push({role:'ground \u00d7 N',
+                text:say('ground','Then each further ground point along the run \u2014 '
+                                + 'as many as it takes, Done when finished')});
+    } else {
+      for(let i=1;i<T.ground;i++)
+        out.push({role:'ground',
+                  text:say('ground','Then the next ground point')+objGroundStep(T, i)});
+    }
+    return out;
+  }
+  function objRefBuild(){
+    const host=$('objRef');
+    if(!host || host.childElementCount) return;      // built once
+    const esc=t=>String(t).replace(/&/g,'&amp;').replace(/</g,'&lt;');
+    let rows='';
+    OBJ_ORDER.forEach(k=>{
+      const T=OBJ_TYPES[k], steps=objShootOrder(k);
+      const ground = T.ground==='path' ? 'origin, then the path'
+                   : (T.ground===1 ? 'origin only' : 'origin + '+(T.ground-1)+' more');
+      rows += '<tr>'
+        + '<td class="ico">'+objGlyph(k, 'currentColor')+'</td>'
+        + '<td><div class="oname">'+esc(T.name)+'</div>'
+        +   '<div class="ocode">'+esc(T.code||'')+'</div></td>'
+        + '<td>'+steps.length+(T.ground==='path'?'+':'')+'</td>'
+        + '<td><ol>'+steps.map(st=>'<li><span class="orole">'+st.role+'</span><br>'
+              + esc(st.text)+'</li>').join('')+'</ol></td>'
+        + '<td>'+ground+'</td>'
+        + '<td>'+(T.height ? 'yes' : '<span class="odash">\u2014</span>')+'</td>'
+        + '<td class="oextra">'+esc(T.extra||'')+'</td>'
+        + '</tr>';
+    });
+    host.innerHTML = '<table><thead><tr>'
+      + '<th></th><th>Type</th><th>Shots</th><th>Shoot order</th>'
+      + '<th>Ground points</th><th>Height</th><th>What else it carries</th>'
+      + '</tr></thead><tbody>'+rows+'</tbody></table>';
+  }
+
   // ---------- an object in the pin inspector ----------
   // A stack is drawn as ONE symbol on the map, so the column is where the rest
   // of it lives: what this point is within the object, the derived height, and

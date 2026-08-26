@@ -1694,6 +1694,25 @@ field drops what is in it along with the caret — exactly the trap the photo
 pin's note already dodges. `piBody.dataset.pin` is keyed `elev:<id>` so the
 static half survives a re-render and a change of pin still rebuilds it.
 
+**Settings writes the whole table out**, and *derives it from `OBJ_TYPES`* —
+glyph, name, filmstrip code, shot count, the numbered shoot order with each
+prompt exactly as the sighting overlay gives it, ground points, whether there is
+a height, and what else the type carries. Hand-typing that beside the data is
+how a reference goes stale the first time a prompt is reworded; `objRefBuild()`
+reads the same object the overlay does, so adding a type is still one row.
+
+Note the placement trap, third time now: `renderPrefs()` is called at the **top
+level**, thousands of lines above `OBJ_TYPES`. Reading that `const` from there
+is a temporal dead zone throw and takes the entire script with it, so
+`objRefBuild()` hangs off `openSettings()` — which only ever runs on a tap —
+rather than off `renderPrefs()`. Same fix as `syncGridBtns()`.
+
+The table also earned a change in the app itself: a type with more than one
+extra ground point repeats a single prompt, and *"a base corner along one side"*
+twice running reads as a stuck screen rather than as two corners. `objGroundStep()`
+appends `· 1 of 2` — and stays quiet at one, where there is nothing to count
+through.
+
 Server side: one `upright_objects` table (RLS on, zero policies, like every
 other), `object_id` / `role` / `seq` on `upright_elevation_points`, and
 `POST /sessions/:id/objects`, `PATCH /objects/:id` (attrs **merged**, not
@@ -1713,7 +1732,10 @@ again.
 height is derived (+25.02' against an independently computed 51.4 ft × (tan 20°
 − tan −7°)), it does not move when the datum is dragged, the mesh counts the
 pins rather than the heights, a spread typed in the column becomes a ground-scale
-ring, and deleting the origin takes the height with it.
+ring, and deleting the origin takes the height with it. `test56.js` covers the
+Settings table — that origin is always first, that there is at most one height
+and it is always second, that a run is open-ended, and that it is built lazily
+and only once.
 
 **The origin is the only mandatory shot.** A height that cannot be sighted is
 skipped and the object simply has none. A derived top is never presented as if
