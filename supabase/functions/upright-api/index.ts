@@ -139,6 +139,39 @@ async function purgePointPhotos(pointIds: string[]) {
   }
 }
 
+// Storage has no foreign keys, so deleting a session's rows would leave every
+// photo, clip and audio file behind it -- invisible and billable forever. The
+// bucket is walked a folder at a time (list() is not recursive) and everything
+// under sessions/<id>/ goes.
+async function purgeSessionStorage(sessionId: string) {
+  const root = `sessions/${sessionId}`;
+  const dirs = [root];
+  const files: string[] = [];
+  // Depth is bounded by the layout we write: sessions/<id>/{photos,clips,elevation,elevation-views}.
+  for (let guard = 0; dirs.length && guard < 64; guard++) {
+    const dir = dirs.shift()!;
+    const { data, error } = await supabase.storage.from(BUCKET)
+      .list(dir, { limit: 1000 });
+    if (error || !data) continue;
+    for (const entry of data) {
+      // A "folder" comes back with no id; a real object always has one.
+      if (entry.id) files.push(`${dir}/${entry.name}`);
+      else dirs.push(`${dir}/${entry.name}`);
+    }
+  }
+  if (!files.length) return 0;
+  // remove() takes at most a few hundred keys comfortably; chunk to be safe.
+  let removed = 0;
+  for (let i = 0; i < files.length; i += 100) {
+    const chunk = files.slice(i, i + 100);
+    try {
+      const { error } = await supabase.storage.from(BUCKET).remove(chunk);
+      if (!error) removed += chunk.length;
+    } catch (_e) { /* the rows still go: an orphan is better than a live row pointing nowhere */ }
+  }
+  return removed;
+}
+
 // Replacing an image must land on a NEW path. Storage public URLs are cached
 // by the browser and by the CDN in front of the bucket, so an upsert onto the
 // same path hands back a URL that still resolves to the OLD picture -- which
@@ -164,6 +197,7 @@ Deno.serve(async (req) => {
       if (!body.id || !body.startedAt) return err("id and startedAt required");
       const { error } = await supabase.from("upright_sessions").insert({
         id: body.id, started_at: body.startedAt, property_id: body.propertyId ?? null,
+        name: body.name ?? null,
       });
       if (error) return err(error.message, 500);
       return json({ id: body.id });
@@ -176,7 +210,7 @@ Deno.serve(async (req) => {
       const { data, error } = await supabase
         .from("upright_sessions")
         .select(
-          "id, started_at, ended_at, audio_storage_path, audio_duration_seconds, transcript_status, property_id, plan_storage_path, " +
+          "id, name, started_at, ended_at, audio_storage_path, audio_duration_seconds, transcript_status, property_id, plan_storage_path, " +
           "properties(id,address,latitude,longitude), " +
           "upright_clips(count), upright_photos(count), upright_sketches(count), upright_measures(count), upright_elevation_points(count)"
         )
@@ -186,7 +220,7 @@ Deno.serve(async (req) => {
       const sessions = (data || []).map((s: Record<string, unknown>) => {
         const prop = firstOf<{ id: number; address: string }>(s.properties);
         return {
-          id: s.id, startedAt: s.started_at, endedAt: s.ended_at,
+          id: s.id, name: s.name ?? null, startedAt: s.started_at, endedAt: s.ended_at,
           hasAudio: !!s.audio_storage_path, hasPlan: !!s.plan_storage_path,
           durationSeconds: s.audio_duration_seconds, transcriptStatus: s.transcript_status,
           propertyId: s.property_id ?? null, propertyAddress: prop ? prop.address : null,
@@ -258,11 +292,35 @@ Deno.serve(async (req) => {
       const body = await req.json();
       const update: Record<string, unknown> = planUpdateFrom(body);
       if (body.propertyId !== undefined) update.property_id = body.propertyId;
+      // A name and a property tag are independent: a visit can be named without
+      // being tagged and tagged without being named. An empty string clears it
+      // rather than storing a blank.
+      if (body.name !== undefined) {
+        const n = body.name === null ? null : String(body.name).trim();
+        update.name = n ? n.slice(0, 200) : null;
+      }
       if (!Object.keys(update).length) return err("nothing to update");
       const { data: row, error } = await supabase
         .from("upright_sessions").update(update).eq("id", sessionId).select().single();
       if (error) return err(error.message, 500);
       return json(row);
+    }
+
+    // DELETE /sessions/:id
+    // Every child table cascades on session_id -- clips, photos, sketches,
+    // measures, the whole elevation survey, objects and the transcript -- so
+    // one row delete takes the lot. Storage does NOT cascade, so the session's
+    // whole prefix is listed and removed first: an orphaned file is invisible
+    // and costs money forever.
+    if (req.method === "DELETE" && parts.length === 2 && parts[0] === "sessions") {
+      const sessionId = parts[1];
+      const { data: existing } = await supabase
+        .from("upright_sessions").select("id").eq("id", sessionId).maybeSingle();
+      if (!existing) return err("session not found", 404);
+      const removed = await purgeSessionStorage(sessionId);
+      const { error } = await supabase.from("upright_sessions").delete().eq("id", sessionId);
+      if (error) return err(error.message, 500);
+      return json({ ok: true, deleted: sessionId, filesRemoved: removed });
     }
 
     // ---------- relative elevation survey ----------

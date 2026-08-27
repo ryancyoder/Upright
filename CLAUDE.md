@@ -38,7 +38,8 @@ Storage bucket:
 `upright-media`.
 
 `upright_sessions` has a nullable `property_id` FK to the existing
-`properties` table — this is what the history list shows as a session's name.
+`properties` table, and a nullable free-text `name` — see *Naming and deleting
+a session* below for which of the two the history list leads with.
 Nullable on purpose: a session must always be startable with one tap, so it
 can be tagged afterwards from the history list. `event_id` / `deal_id` are
 still nullable and still unused.
@@ -47,11 +48,13 @@ still nullable and still unused.
 
 Endpoints under `/functions/v1/upright-api`:
 `POST /sessions`, `GET /sessions` (history list), `GET /sessions/:id`,
-`PATCH /sessions/:id` (assign property), `GET /properties` (address picker),
+`PATCH /sessions/:id` (assign property, set name), `GET /properties` (address picker),
 `POST /sessions/:id/audio|clips|photos|sketches|measures|plan`,
 `POST /sessions/:id/elevation-points|elevation-shots` (a shot carries
 `headingDeg`/`headingAccDeg` — evidence, never input),
 `POST /sessions/:id/elevation-slopes`, `DELETE /elevation-slopes/:id`,
+`DELETE /sessions/:id` (cascades every child table, purges the session's
+Storage prefix first),
 `POST /sessions/:id/objects`, `PATCH /objects/:id` (attrs merged, not
 replaced), `DELETE /objects/:id`,
 `POST /sessions/:id/elevation-sketches`, `DELETE /elevation-sketches/:id`,
@@ -69,7 +72,7 @@ Secrets — NOT Vault, and NOT Vercel env vars; neither reaches the function).
 If editing the function, pull current source with `Supabase:get_edge_function`
 rather than reconstructing it. The source is now vendored at
 `supabase/functions/upright-api/index.ts` so edits are diffable; keep it in
-step with what is deployed. Currently **v22**.
+step with what is deployed. Currently **v24**.
 
 **Replacing an image writes a NEW storage path, never an upsert in place.**
 Storage public URLs are cached by the browser and by the CDN in front of the
@@ -704,6 +707,57 @@ Note the two navigation returns that had to become explicit: `historyFromSession
 so closing Past sessions goes back to the session you opened it from rather than
 to the start screen, and `doneClose`, which is the only thing that now calls
 `exitArchive()` by hand.
+
+### Naming and deleting a session
+
+**A name and a property tag are different things, so they are separate fields.**
+The tag says *where* the visit was; the name says what it *was*. One property
+has many sessions — the spring walkthrough, the regrade, the punch list — and an
+address alone cannot tell them apart. Either can stand alone: a session can be
+named without being tagged and tagged without being named.
+
+Display is a fallback chain, `sessionTitleOf()`: **name → address → *Untagged
+session***. When a session has both, the address does not disappear — it moves
+to the line under the title, because it is still half of what identifies the
+session. `upright_sessions.name` is trimmed server-side and a blank string is
+stored as null rather than as an empty name.
+
+Naming is the one write here that is **not fire-and-forget**. Everything else in
+this app warns to the console and moves on, which is the right trade for a pin
+dropped mid-visit; but a name someone typed and watched fail to save is worse
+than one that never appeared to save at all, so the panel reports the failure
+and keeps what was typed.
+
+**Deleting is reachable wherever a session is** — the history list, the session
+screen, the map view and Review — because that is where you are when you decide
+a session was a false start. `deleteLoadedSession()` is one function behind the
+last three; the history row passes its own counts instead.
+
+Two things make it safe rather than merely confirmed:
+
+- **It asks twice, and the first ask names what goes** (`Delete "Back yard
+  regrade"? This permanently removes the audio recording, 2 photo pins, 3 video
+  clips…`). A generic *are you sure* on a tool held one-handed in a yard is not
+  a real question. The counts come from what is actually loaded, so they are the
+  session's own numbers rather than a guess.
+- **It puts the session down.** Deleting the session you are looking at closes
+  Review, closes the map, exits archive mode and returns to the start screen —
+  otherwise the app carries on showing rows that no longer exist.
+
+Server side, `DELETE /sessions/:id`. **Every one of the eleven child tables
+cascades on `session_id`** (verified against `information_schema`, and by a live
+round trip: insert into six of them, delete the session, all zero). **Storage
+does not cascade**, so `purgeSessionStorage()` walks `sessions/<id>/` — `list()`
+is not recursive, so it is a folder queue — and removes every object before the
+rows go. An orphaned file is invisible and billable forever, which is the one
+failure mode a cascade cannot save you from.
+
+**A crashed test is not a failing test, and the sweep used to hide that.** A
+test that throws emits neither `PASS` nor `FAIL`, so a clean failure count says
+nothing about it — `test13` sat broken through two sweeps after Open stopped
+landing in Review, and the totals looked fine because its seventeen checks
+simply stopped existing. `runsweep.sh` now names every test that produced no
+checks and flags any that is not one of the known screenshot/probe scripts.
 
 ## Data durability — important
 

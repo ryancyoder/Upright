@@ -421,6 +421,9 @@
     padding:14px 20px; border-radius:12px; border:none;
     background:var(--ink); color:var(--bg); font-size:14px; font-weight:700;
   }
+  .dl-btn.danger{
+    background:transparent; border:1px solid var(--live); color:var(--live);
+  }
   .dl-btn.secondary{background:transparent; color:var(--ink); border:1px solid var(--line);}
 
   /* Annotation sidebar — camera view only */
@@ -585,6 +588,7 @@
   .elev-bar .mt-btn{padding:5px 13px; border-radius:999px; font-size:12px;}
   .mt-btn.go{border-color:var(--flat);}
   .mt-btn:disabled{opacity:0.35;}
+  .mt-btn.danger{border-color:var(--live); color:var(--live);}
   /* Minimal: the glyph plus one line of text. No chrome around it -- a yard
      full of boxed labels is unreadable, and the glyph already says what the
      point is. Legibility on bright satellite comes from shadows, not fills. */
@@ -989,12 +993,13 @@
     color:var(--dim); border:1px solid var(--line); border-radius:100px;
     padding:1px 7px; margin-left:7px; white-space:nowrap;
   }
-  .hist-btn.danger{border-color:var(--live); color:var(--live);}
   .hist-btn{
     padding:9px 14px; border-radius:100px; border:1px solid var(--line);
     background:transparent; color:var(--ink); font-size:12px; font-weight:700; white-space:nowrap;
   }
   .hist-btn.go{border-color:var(--flat);}
+  /* Set apart from Open, which is the button the thumb goes to every time. */
+  .hist-btn.danger{border-color:var(--live); color:var(--live); margin-left:10px;}
   .hist-btn:disabled{opacity:0.3;}
   .prop-search{
     flex:0 0 auto; margin:12px 16px 0; padding:11px 14px;
@@ -1079,6 +1084,7 @@
   }
   .review-sharemsg.err{color:var(--live);}
   .review-head-actions{display:flex; align-items:center; gap:8px;}
+  .review-swap.danger{border-color:var(--live); color:var(--live);}
   .review-swap{
     padding:7px 14px; border-radius:100px; border:1px solid var(--flat);
     background:transparent; color:var(--ink); font-size:12px; font-weight:700;
@@ -1277,6 +1283,9 @@
         <button class="mt-btn" id="lockExtentBtn">Lock extent</button>
         <button class="mt-btn" id="basemapBtn" style="display:none">Plan + satellite</button>
         <button class="mt-btn" id="settingsMapBtn" title="Settings">&#9881;</button>
+        <!-- Only ever shown on a session opened out of the history: there is
+             no deleting a visit that is still being recorded. -->
+        <button class="mt-btn danger" id="mapDeleteBtn" style="display:none">Delete session</button>
       </div>
     </div>
 
@@ -1398,8 +1407,10 @@
         <button class="dl-btn secondary" id="dlPins">Download session (ZIP): audio + clips + pins</button>
         <button class="dl-btn secondary" id="historyBtn2">Past sessions</button>
         <button class="dl-btn secondary" id="settingsBtn2">Settings</button>
+        <button class="dl-btn secondary" id="nameSessionBtn">Name this session</button>
         <button class="dl-btn secondary" id="newSession">Start new session</button>
         <button class="dl-btn secondary" id="doneClose">Close</button>
+        <button class="dl-btn danger" id="deleteSessionBtn">Delete session</button>
       </div>
     </div>
 
@@ -1426,6 +1437,31 @@
       <input class="prop-search" id="propSearch" placeholder="Search address…" autocomplete="off">
       <div class="hist-status" id="propStatus"></div>
       <div class="hist-list" id="propList"></div>
+    </div>
+
+    <!-- A name and a property tag are separate things: the tag says WHERE the
+         visit was, the name says what it WAS. Either can stand alone. -->
+    <div class="prop-panel" id="namePanel">
+      <div class="review-head">
+        <span class="title">Name this session</span>
+        <div class="review-head-actions">
+          <button class="review-swap" id="nameClear">Clear name</button>
+          <button class="review-close" id="nameCancel">Cancel</button>
+        </div>
+      </div>
+      <input class="prop-search" id="nameInput" placeholder="e.g. Back yard regrade" autocomplete="off" maxlength="200">
+      <div class="hist-status" id="nameStatus"></div>
+      <div class="hist-list">
+        <div class="pref-row">
+          <div class="pref-main">
+            <div class="pref-sub">Names the visit rather than the place. A property can
+              have many sessions &mdash; <b>the spring walkthrough</b>, <b>the regrade</b>,
+              <b>the punch list</b> &mdash; and the address alone cannot tell them apart.
+              Tagging a property is separate and still worth doing.</div>
+          </div>
+        </div>
+        <button class="dl-btn" id="nameSave">Save name</button>
+      </div>
     </div>
 
     <div class="settings-panel" id="settingsPanel">
@@ -1539,6 +1575,7 @@
         <span class="title">Session review</span>
         <div class="review-head-actions">
           <button class="review-swap" id="reviewSwap">Show map</button>
+          <button class="review-swap danger" id="reviewDelete" style="display:none">Delete</button>
           <button class="review-close" id="reviewClose">Close</button>
         </div>
       </div>
@@ -1606,6 +1643,10 @@
         doneTitle=$('doneTitle'), doneStatus=$('doneStatus'), doneClose=$('doneClose'),
         openMapBtn=$('openMapBtn'), archiveMapDone=$('archiveMapDone'),
         stageToast=$('stageToast'),
+        nameSessionBtn=$('nameSessionBtn'), deleteSessionBtn=$('deleteSessionBtn'),
+        mapDeleteBtn=$('mapDeleteBtn'), reviewDelete=$('reviewDelete'),
+        namePanel=$('namePanel'), nameInput=$('nameInput'), nameStatus=$('nameStatus'),
+        nameSave=$('nameSave'), nameClear=$('nameClear'), nameCancel=$('nameCancel'),
         dlVideo=$('dlVideo'), dlPins=$('dlPins'), newSession=$('newSession'),
         importPlanBtn=$('importPlanBtn'), planFile=$('planFile'), overlayControls=$('overlayControls'),
         opSlider=$('opSlider'), scaleSlider=$('scaleSlider'), rotSlider=$('rotSlider'),
@@ -2015,6 +2056,7 @@
     if(archiveMode) exitArchive();
     audioChunks=[]; clips=[]; currentClipChunks=[]; currentClipStart=null;
     sessionId=uuid(); sessionStartedAt=new Date().toISOString(); sessionWallMs=null;
+    liveSessionName=null;
     sessionT0=Date.now();
     apiPost('/sessions', { id: sessionId, startedAt: sessionStartedAt });
 
@@ -2116,7 +2158,7 @@
   // the archive down and dumped you in the history list, and the exports lived
   // only on the tail of a live visit, so a past session could not be exported
   // at all.
-  let liveDoneSub='';
+  let liveDoneSub='', liveSessionName=null;
   function sessionHasAudio(){ return !!(finalAudioBlob || archiveAudioUrl); }
   function sessionHasAnything(){
     return !!(pins.length || sketches.length || measures.length || clips.length
@@ -2150,6 +2192,7 @@
     startOverlay.classList.add('hidden');
     archiveMapOn=true;
     archiveMapDone.classList.add('show');
+    mapDeleteBtn.style.display='';
     showMap(true);
     drawArchiveGeometry();         // plan, sketches, measures, survey markers
     // The survey is the reason to come back to a yard, so open the bar when
@@ -2161,6 +2204,7 @@
     if(!archiveMapOn) return;
     archiveMapOn=false;
     archiveMapDone.classList.remove('show');
+    mapDeleteBtn.style.display='none';
     toastHide();
     if(mapMode){ clearMeasureDraft(); setMapMode(null); }
     if(splitOn) setSplit(false);
@@ -2185,10 +2229,14 @@
   }
   function showSessionScreen(){
     const arch=archiveMode;
+    // The name leads, the address falls back, and a live session that has not
+    // been named yet still says what it is.
     doneTitle.textContent = arch
-      ? ((archiveMeta && archiveMeta.address) || 'Untagged session')
-      : 'Session complete';
-    doneSub.textContent = arch ? archiveSummary() : liveDoneSub;
+      ? sessionTitleOf(archiveMeta && archiveMeta.name, archiveMeta && archiveMeta.address)
+      : (liveSessionName || 'Session complete');
+    const addr = arch && archiveMeta && archiveMeta.name && archiveMeta.address
+      ? archiveMeta.address + ' · ' : '';
+    doneSub.textContent = addr + (arch ? archiveSummary() : liveDoneSub);
     doneStatus.textContent=''; doneStatus.classList.remove('err');
     // Review is driven by the master audio: without it there is nothing to
     // replay, which is not the same as there being nothing to export.
@@ -2204,6 +2252,12 @@
     doneModeSlot.style.display = arch ? 'none' : '';
     if(!arch) mountModePicker('done');
     doneClose.style.display = arch ? 'block' : 'none';
+    // Naming works either way; deleting is offered only once a session exists
+    // on the server, which for a live one means after it has been created.
+    nameSessionBtn.style.display = sessionId ? 'block' : 'none';
+    nameSessionBtn.textContent = (arch ? (archiveMeta && archiveMeta.name) : liveSessionName)
+      ? 'Rename this session' : 'Name this session';
+    deleteSessionBtn.style.display = sessionId ? 'block' : 'none';
     donePanel.classList.add('show');
   }
   endBtn.addEventListener('click', endSession);
@@ -2796,6 +2850,9 @@
     renderReviewPhotoRail();
     transcriptSegments=[]; transcriptActiveIdx=-1; rtList.innerHTML='';
     pollTranscript();
+    // Deleting from Review is for a session you opened, not one you have just
+    // recorded and not yet let go of.
+    reviewDelete.style.display = archiveMode ? '' : 'none';
     reviewPanel.classList.add('show');
     // Panel must be visible first: Leaflet measures the container on init and
     // a hidden one is 0x0, which wrecks both the tile grid and fitBounds.
@@ -2996,12 +3053,16 @@
       const main=document.createElement('div'); main.className='hist-main';
 
       const title=document.createElement('div');
-      title.className='hist-title'+(s.propertyAddress?'':' untagged');
-      title.textContent = s.propertyAddress || 'Untagged session';
+      // The NAME leads when there is one; the address is what it falls back to.
+      title.className='hist-title'+((s.name||s.propertyAddress)?'':' untagged');
+      title.textContent = sessionTitleOf(s.name, s.propertyAddress);
       main.appendChild(title);
 
       const when=document.createElement('div'); when.className='hist-when';
-      when.textContent=fmtWhen(s.startedAt);
+      // With a name on top, the address still has to be visible -- it is the
+      // other half of identifying the session.
+      when.textContent=(s.name && s.propertyAddress ? s.propertyAddress+' · ' : '')
+                     + fmtWhen(s.startedAt);
       main.appendChild(when);
 
       // Counts are cosmetic -- if the server ever stops sending them the row
@@ -3030,6 +3091,12 @@
       row.appendChild(main);
 
       const actions=document.createElement('div'); actions.className='hist-actions';
+      const nameBtn=document.createElement('button');
+      nameBtn.className='hist-btn';
+      nameBtn.textContent = s.name ? 'Rename' : 'Name';
+      nameBtn.addEventListener('click', ()=> openNamePanel(s.id, s.name, null));
+      actions.appendChild(nameBtn);
+
       const tagBtn=document.createElement('button');
       tagBtn.className='hist-btn';
       tagBtn.textContent = s.propertyAddress ? 'Retag' : 'Tag';
@@ -3044,6 +3111,28 @@
       // the survey and the export are all still there.
       openBtn.addEventListener('click', ()=> openArchivedSession(s.id, openBtn));
       actions.appendChild(openBtn);
+
+      const delBtn=document.createElement('button');
+      delBtn.className='hist-btn danger';
+      delBtn.textContent='Delete';
+      delBtn.addEventListener('click', async ()=>{
+        delBtn.disabled=true;
+        const gone=await deleteSession(s.id, sessionTitleOf(s.name, s.propertyAddress), {
+          audio:s.hasAudio, photos:s.photoCount, clips:s.clipCount,
+          survey:s.elevationPointCount, sketches:s.sketchCount, measures:s.measureCount
+        }, ()=>{
+          // If the deleted session is the one currently loaded, put it down --
+          // otherwise the app is holding rows that no longer exist.
+          if(sessionId===s.id && archiveMode){
+            closeReview(); exitArchive();
+            donePanel.classList.remove('show');
+          }
+          loadHistory();
+        });
+        delBtn.disabled=false;
+        if(!gone) return;
+      });
+      actions.appendChild(delBtn);
 
       row.appendChild(actions);
       histList.appendChild(row);
@@ -3073,7 +3162,8 @@
     clearArchiveLayers();
     const s=data.session;
     archiveMode=true;
-    archiveMeta={ address:s.propertyAddress||null, startedAt:s.started_at||null };
+    archiveMeta={ address:s.propertyAddress||null, startedAt:s.started_at||null,
+                  name:s.name||null };
     sessionId=s.id;
     sessionStartedAt=s.started_at;
     archiveAudioUrl=s.audioUrl||null;
@@ -3260,6 +3350,87 @@
     finalAudioBlob=null; sessionWallMs=null;
     transcriptSegments=[]; transcriptActiveIdx=-1;
     renderStrip(); updatePinCount();
+  }
+
+  // ---------- naming a session ----------
+  // The property tag says WHERE the visit was; the name says what it WAS. One
+  // property has many sessions -- the spring walkthrough, the regrade, the
+  // punch list -- and an address alone cannot tell them apart. Either can
+  // stand alone, so they are separate fields and separate controls.
+  let nameTargetId=null, nameReturn=null;
+  function sessionTitleOf(name, address){
+    return name || address || 'Untagged session';
+  }
+  function openNamePanel(sessionIdToName, currentName, back){
+    nameTargetId=sessionIdToName;
+    nameReturn=back||null;
+    namePanel.classList.add('show');
+    nameStatus.classList.remove('err');
+    nameStatus.textContent='';
+    nameInput.value=currentName||'';
+    setTimeout(()=>{ try{ nameInput.focus(); }catch(e){} }, 60);
+  }
+  function closeNamePanel(){
+    namePanel.classList.remove('show');
+    nameTargetId=null;
+    if(nameReturn){ const f=nameReturn; nameReturn=null; f(); }
+  }
+  async function saveName(value){
+    if(!nameTargetId) return;
+    const id=nameTargetId;
+    const v=(value==null?'':String(value)).trim();
+    nameStatus.classList.remove('err');
+    nameStatus.textContent='Saving…';
+    // Not fire-and-forget: a name the user typed and watched fail to save is
+    // worse than one that never appeared to save at all.
+    const row=await apiPatch('/sessions/'+id, {name: v || null});
+    if(!row){
+      nameStatus.classList.add('err');
+      nameStatus.textContent='Could not save. Check the connection and try again.';
+      return;
+    }
+    const stored=(row && row.name) || null;
+    if(archiveMode && sessionId===id){
+      if(!archiveMeta) archiveMeta={address:null, startedAt:null};
+      archiveMeta.name=stored;
+    }
+    if(!archiveMode && sessionId===id) liveSessionName=stored;
+    closeNamePanel();
+    if(historyPanel.classList.contains('show')) loadHistory();
+    if(donePanel.classList.contains('show')) showSessionScreen();
+  }
+  nameSave.addEventListener('click', ()=> saveName(nameInput.value));
+  nameClear.addEventListener('click', ()=> saveName(''));
+  nameCancel.addEventListener('click', closeNamePanel);
+  nameInput.addEventListener('keydown', e=>{ if(e.key==='Enter') saveName(nameInput.value); });
+
+  // ---------- deleting a session ----------
+  // Irreversible, and it takes the audio, every photo and the whole survey
+  // with it -- server-side every child table cascades on session_id, and the
+  // function purges the session's Storage prefix first. So it asks twice, and
+  // the first ask NAMES what is about to go rather than saying "are you sure".
+  async function deleteSession(id, label, counts, after){
+    const what=[];
+    if(counts){
+      if(counts.audio) what.push('the audio recording');
+      if(counts.photos) what.push(counts.photos+' photo pin'+(counts.photos===1?'':'s'));
+      if(counts.clips) what.push(counts.clips+' video clip'+(counts.clips===1?'':'s'));
+      if(counts.survey) what.push(counts.survey+' survey point'+(counts.survey===1?'':'s'));
+      if(counts.sketches) what.push(counts.sketches+' sketch'+(counts.sketches===1?'':'es'));
+      if(counts.measures) what.push(counts.measures+' measure'+(counts.measures===1?'':'s'));
+    }
+    const first='Delete “'+label+'”?\n\nThis permanently removes '
+      + (what.length ? what.join(', ') : 'everything in this session')
+      + ', and the transcript. It cannot be undone.';
+    if(!confirm(first)) return false;
+    if(!confirm('Last check — delete “'+label+'” for good?')) return false;
+    const res=await apiDelete('/sessions/'+id);
+    if(!res){
+      alert('Could not delete that session. Check the connection and try again.');
+      return false;
+    }
+    if(after) after();
+    return true;
   }
 
   // ---------- property tagging ----------
@@ -3684,6 +3855,47 @@
     closeReview();
     showSessionScreen();
   });
+  // The counts come from what is actually loaded, so the confirmation names
+  // real numbers rather than a generic warning.
+  function loadedCounts(){
+    return { audio: sessionHasAudio(), photos: pins.length, clips: clips.length,
+             survey: elevPoints.filter(q=>q.role!=='height').length,
+             sketches: sketches.length, measures: measures.length };
+  }
+  function loadedTitle(){
+    return archiveMode
+      ? sessionTitleOf(archiveMeta && archiveMeta.name, archiveMeta && archiveMeta.address)
+      : (liveSessionName || 'this session');
+  }
+  // Deleting the session you are looking at has to put it down as well: the
+  // rows are gone, so anything still holding them is showing a ghost.
+  async function deleteLoadedSession(){
+    if(!sessionId) return;
+    await deleteSession(sessionId, loadedTitle(), loadedCounts(), ()=>{
+      closeReview();
+      if(archiveMapOn){
+        archiveMapOn=false;
+        archiveMapDone.classList.remove('show');
+        toastHide();
+        if(splitOn) setSplit(false);
+        evClose(); elevSetSurvey(false);
+        mapwrap.classList.remove('show');
+      }
+      inspectClose();
+      exitArchive();
+      donePanel.classList.remove('show');
+      mountModePicker('start');
+      startOverlay.classList.remove('hidden');
+    });
+  }
+  nameSessionBtn.addEventListener('click', ()=>{
+    if(!sessionId) return;
+    const cur = archiveMode ? (archiveMeta && archiveMeta.name) : liveSessionName;
+    openNamePanel(sessionId, cur, null);
+  });
+  deleteSessionBtn.addEventListener('click', deleteLoadedSession);
+  mapDeleteBtn.addEventListener('click', deleteLoadedSession);
+  reviewDelete.addEventListener('click', deleteLoadedSession);
   openMapBtn.addEventListener('click', openArchiveMap);
   archiveMapDone.addEventListener('click', closeArchiveMap);
   doneClose.addEventListener('click', ()=>{
