@@ -677,6 +677,29 @@ Three things this pinned down:
   export time by `elevationOf()`, `objHeightFt()` and `slopeOf()` — never a
   stored scalar, same rule as everywhere else.
 
+**Open on map reopens the yard itself.** The same Leaflet map, the same pins,
+the same survey — the session screen simply steps aside, and `Done` in the
+header brings it back. Nothing is duplicated and nothing is read-only: dragging
+a pin here PATCHes the row exactly as it would during the visit, which is the
+rule Review's map already set.
+
+Three things it needs that a live session gets for free:
+
+- **The tilt switch has to be pinned**, the way grade mode pins it. There is no
+  session to record into, so raising the iPad must not hand the screen to a
+  camera preview — `handleOrientation()` returns early on `archiveMapOn` for
+  the same reason it does on `gradeOn`.
+- **The view has to be framed from the data.** A live session recentres on its
+  first GPS fix; an archived one has none, so `fitArchiveView()` fits the pins,
+  survey, sketches, measures and plan, or the map sits on the Hebron fallback
+  tens of km away.
+- **The export reports over the map.** `Export pins` in the map toolbar is the
+  same function as the session screen's button, and its progress and
+  missing-file report were landing in a status line that is off screen while
+  the map is up. `say()` writes to whichever of the two is visible; an error
+  toast has no timeout, because a missing-file report that fades has not been
+  read.
+
 Note the two navigation returns that had to become explicit: `historyFromSession`
 so closing Past sessions goes back to the session you opened it from rather than
 to the start screen, and `doneClose`, which is the only thing that now calls

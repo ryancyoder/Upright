@@ -66,7 +66,20 @@
     display:none;
   }
   .end-btn.show{display:block;}
+  /* Leaving a past yard is not stopping a recording, so it does not wear the
+     red that End session does. */
+  .end-btn.neutral{border-color:var(--line); color:var(--ink);}
 
+  .stage-toast{
+    position:absolute; left:50%; top:14px; transform:translateX(-50%);
+    z-index:60; max-width:min(520px, 88%); display:none;
+    padding:8px 14px; border-radius:100px; border:1px solid var(--line);
+    background:rgba(20,20,18,0.92); color:var(--ink);
+    font-size:12px; line-height:1.4; text-align:center;
+    box-shadow:0 6px 20px rgba(0,0,0,0.45);
+  }
+  .stage-toast.show{display:block;}
+  .stage-toast.err{border-color:var(--live); color:var(--live);}
   .stage{flex:1 1 auto; position:relative; background:#000; min-height:0;}
   /* Split screen: the section on top, the site map underneath, one above the
      other because that is the way a section and its plan are read on paper.
@@ -1125,6 +1138,9 @@
       </div>
       <div class="state-pill" id="statePill"><span class="dot"></span><span id="stateText">Ready</span></div>
       <button class="end-btn" id="endBtn">End session</button>
+      <!-- Reopening a past yard: the way back, in the same corner End session
+           uses during a visit. -->
+      <button class="end-btn neutral" id="archiveMapDone">Done</button>
     </div>
   </header>
 
@@ -1132,6 +1148,10 @@
     <video id="live" autoplay playsinline muted></video>
     <div class="tilt-readout" id="tiltReadout"></div>
     <div class="gps-readout" id="gpsReadout"></div>
+    <!-- The export can be run from the map toolbar as well as the session
+         screen, and its progress and its missing-file report must not land in
+         an element that is off screen. -->
+    <div class="stage-toast" id="stageToast"></div>
     <div class="clock" id="clock">0:00</div>
     <div class="anno-bar" id="annoBar">
       <button class="anno-btn" id="annoArrow" aria-label="Arrow marker"></button>
@@ -1372,6 +1392,7 @@
       <div class="done-status" id="doneStatus"></div>
       <div id="doneModeSlot"></div>
       <div class="done-actions">
+        <button class="dl-btn" id="openMapBtn">Open on map</button>
         <button class="dl-btn" id="reviewBtn">Review session</button>
         <button class="dl-btn secondary" id="dlVideo">Download audio recording</button>
         <button class="dl-btn secondary" id="dlPins">Download session (ZIP): audio + clips + pins</button>
@@ -1583,6 +1604,8 @@
         endBtn=$('endBtn'), snapBtn=$('snapBtn'), snapFlash=$('snapFlash'), pinCount=$('pinCount'),
         mapwrap=$('mapwrap'), donePanel=$('donePanel'), doneSub=$('doneSub'),
         doneTitle=$('doneTitle'), doneStatus=$('doneStatus'), doneClose=$('doneClose'),
+        openMapBtn=$('openMapBtn'), archiveMapDone=$('archiveMapDone'),
+        stageToast=$('stageToast'),
         dlVideo=$('dlVideo'), dlPins=$('dlPins'), newSession=$('newSession'),
         importPlanBtn=$('importPlanBtn'), planFile=$('planFile'), overlayControls=$('overlayControls'),
         opSlider=$('opSlider'), scaleSlider=$('scaleSlider'), rotSlider=$('rotSlider'),
@@ -2114,6 +2137,52 @@
     return bits.join(' \u00b7 ')
       + (sessionHasAudio() ? '' : ' \u2014 no audio uploaded, so it cannot be replayed');
   }
+  // ---------- reopening a past yard on the map ----------
+  // The same map, the same pins, the same survey -- the session screen simply
+  // steps aside. Nothing is duplicated and nothing is read-only: dragging a
+  // pin here PATCHes the row exactly as it would during the visit, which is
+  // the rule Review's map already set.
+  let archiveMapOn=false;
+  function openArchiveMap(){
+    if(!archiveMode) return;
+    closeReview();                 // never both at once; also unmounts the map
+    donePanel.classList.remove('show');
+    startOverlay.classList.add('hidden');
+    archiveMapOn=true;
+    archiveMapDone.classList.add('show');
+    showMap(true);
+    drawArchiveGeometry();         // plan, sketches, measures, survey markers
+    // The survey is the reason to come back to a yard, so open the bar when
+    // there is one. Its own Done closes the bar, not the map.
+    if(elevPoints.length) elevSetSurvey(true);
+    requestAnimationFrame(()=>{ if(map) map.invalidateSize(); fitArchiveView(); });
+  }
+  function closeArchiveMap(){
+    if(!archiveMapOn) return;
+    archiveMapOn=false;
+    archiveMapDone.classList.remove('show');
+    toastHide();
+    if(mapMode){ clearMeasureDraft(); setMapMode(null); }
+    if(splitOn) setSplit(false);
+    evClose(); elevSetSurvey(false);
+    mapwrap.classList.remove('show');
+    inspectClose();
+    showSessionScreen();
+  }
+  // Frame whatever the session actually has, rather than leaving the map on
+  // the Hebron fallback tens of km away -- an archived session has no live fix
+  // to recentre on.
+  function fitArchiveView(){
+    if(!map) return;
+    const pts=[];
+    pins.forEach(p=>{ if(p.lat!=null) pts.push([p.lat,p.lng]); });
+    elevPoints.forEach(q=>{ if(q.placed) pts.push([q.lat,q.lng]); });
+    sketches.forEach(k=>(k.latlngs||[]).forEach(q=>pts.push([q.lat,q.lng])));
+    measures.forEach(m=>(m.latlngs||[]).forEach(q=>pts.push([q.lat,q.lng])));
+    if(planCenter) pts.push([planCenter.lat, planCenter.lng]);
+    if(!pts.length) return;
+    try{ map.fitBounds(L.latLngBounds(pts).pad(0.25), {animate:false}); }catch(e){}
+  }
   function showSessionScreen(){
     const arch=archiveMode;
     doneTitle.textContent = arch
@@ -2126,6 +2195,10 @@
     reviewBtn.style.display = sessionHasAudio() ? 'block' : 'none';
     dlVideo.style.display   = sessionHasAudio() ? 'block' : 'none';
     dlPins.style.display    = sessionHasAnything() ? 'block' : 'none';
+    // Only for an opened session: during a live visit the map is a tap away
+    // by laying the iPad flat.
+    openMapBtn.style.display = (arch && (pins.length || elevPoints.length
+      || sketches.length || measures.length || planImg)) ? 'block' : 'none';
     // The mode picker chooses the NEXT session's audio/video switches, which
     // means nothing while you are looking at an old one.
     doneModeSlot.style.display = arch ? 'none' : '';
@@ -2475,7 +2548,20 @@
   // straight out of memory -- which is why exporting a past session was not
   // merely a missing button: the old code did `photo.split(',')[1]` on what is
   // a URL in archive mode and would have written a ZIP full of rubbish.
-  let exportBusy=false;
+  let exportBusy=false, toastTimer=null;
+  function toastHide(){
+    if(toastTimer){ clearTimeout(toastTimer); toastTimer=null; }
+    stageToast.classList.remove('show','err');
+  }
+  // ms of 0 means it stays until something replaces it -- which is what an
+  // error wants: a missing-file report that vanishes has not been read.
+  function toast(msg, bad, ms){
+    if(toastTimer){ clearTimeout(toastTimer); toastTimer=null; }
+    stageToast.textContent=msg;
+    stageToast.classList.toggle('err', !!bad);
+    stageToast.classList.add('show');
+    if(ms) toastTimer=setTimeout(()=>{ stageToast.classList.remove('show','err'); }, ms);
+  }
   async function fetchBlob(url){
     if(!url) return null;
     try{
@@ -2495,7 +2581,14 @@
     const missing=[];
     let step=0;
     const total = pins.length + clips.length + (sessionHasAudio()?1:0);
-    const say=(t,bad)=>{ doneStatus.textContent=t; doneStatus.classList.toggle('err',!!bad); };
+    // The export is reachable from the session screen AND from the map
+    // toolbar, so it reports to whichever of the two is on screen. Silence
+    // about a half-empty ZIP is the failure this whole path exists to avoid.
+    const say=(t,bad)=>{
+      doneStatus.textContent=t; doneStatus.classList.toggle('err',!!bad);
+      if(donePanel.classList.contains('show')){ toastHide(); return; }
+      toast(t, bad, bad ? 0 : 2500);
+    };
     const tick=what=>{ step++; say('Gathering '+step+' of '+total+' \u2014 '+what+'\u2026'); };
     try{
       await buildAndSaveZip(missing, tick, say);
@@ -3149,6 +3242,11 @@
   // for the next live session to inherit.
   function exitArchive(){
     if(!archiveMode) return;
+    if(archiveMapOn){
+      archiveMapOn=false;
+      archiveMapDone.classList.remove('show');
+      mapwrap.classList.remove('show');
+    }
     clearArchiveLayers();
     archiveMode=false; archiveAudioUrl=null; archivePlanData=null; archiveMeta=null;
     if(planOverlay && map){ try{ map.removeLayer(planOverlay); }catch(e){} }
@@ -3586,6 +3684,8 @@
     closeReview();
     showSessionScreen();
   });
+  openMapBtn.addEventListener('click', openArchiveMap);
+  archiveMapDone.addEventListener('click', closeArchiveMap);
   doneClose.addEventListener('click', ()=>{
     closeReview();
     exitArchive();
@@ -9068,8 +9168,10 @@
     if(sightOverlay.classList.contains('show')) sightRefresh();
     // Grade mode pins the app to the camera view: shots are taken at whatever
     // angle the target demands, including pointing at the ground, and flipping
-    // to the map mid-survey would be unusable.
-    if(gradeOn) return;
+    // to the map mid-survey would be unusable. A past yard opened on the map is
+    // pinned the other way: there is no session to record into, so raising the
+    // iPad must not hand the screen to a camera preview.
+    if(gradeOn || archiveMapOn) return;
     const wantUpright = currentlyUpright ? tilt>UPRIGHT_OFF : tilt>UPRIGHT_ON;
     if(wantUpright!==candidateState){ candidateState=wantUpright; candidateSince=Date.now(); }
     if(candidateState!==currentlyUpright && Date.now()-candidateSince>HOLD_MS){
