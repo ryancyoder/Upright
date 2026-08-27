@@ -397,6 +397,11 @@
   .done-panel > :last-child{margin-bottom:auto;}
   .done-panel.show{display:flex;}
   .done-title{font-size:18px; font-weight:700;}
+  .done-status{
+    font-size:12px; color:var(--dim); line-height:1.5; margin-top:8px;
+    min-height:1em; text-align:center;
+  }
+  .done-status.err{color:var(--live);}
   .done-sub{font-size:13px; color:var(--dim); max-width:300px; line-height:1.5;}
   .done-actions{display:flex; flex-direction:column; gap:10px; width:100%; max-width:300px;}
   .dl-btn{
@@ -1357,9 +1362,14 @@
       <div class="overlay-sub err" id="errorMsg"></div>
     </div>
 
+    <!-- ONE session screen, for a session that has just ended and for one
+         opened out of the history alike. Review is a mode you step into and
+         back out of onto this, and the exports live here rather than only on
+         the tail of a live visit. -->
     <div class="done-panel" id="donePanel">
-      <div class="done-title">Session complete</div>
+      <div class="done-title" id="doneTitle">Session complete</div>
       <div class="done-sub" id="doneSub"></div>
+      <div class="done-status" id="doneStatus"></div>
       <div id="doneModeSlot"></div>
       <div class="done-actions">
         <button class="dl-btn" id="reviewBtn">Review session</button>
@@ -1368,6 +1378,7 @@
         <button class="dl-btn secondary" id="historyBtn2">Past sessions</button>
         <button class="dl-btn secondary" id="settingsBtn2">Settings</button>
         <button class="dl-btn secondary" id="newSession">Start new session</button>
+        <button class="dl-btn secondary" id="doneClose">Close</button>
       </div>
     </div>
 
@@ -1571,6 +1582,7 @@
         tiltReadout=$('tiltReadout'), gpsReadout=$('gpsReadout'), clockEl=$('clock'),
         endBtn=$('endBtn'), snapBtn=$('snapBtn'), snapFlash=$('snapFlash'), pinCount=$('pinCount'),
         mapwrap=$('mapwrap'), donePanel=$('donePanel'), doneSub=$('doneSub'),
+        doneTitle=$('doneTitle'), doneStatus=$('doneStatus'), doneClose=$('doneClose'),
         dlVideo=$('dlVideo'), dlPins=$('dlPins'), newSession=$('newSession'),
         importPlanBtn=$('importPlanBtn'), planFile=$('planFile'), overlayControls=$('overlayControls'),
         opSlider=$('opSlider'), scaleSlider=$('scaleSlider'), rotSlider=$('rotSlider'),
@@ -2060,28 +2072,92 @@
     }
     const audioSecs=Math.round(sessionDurationMs()/1000);
     const clipSecs=Math.round(recordedMs/1000);
-    doneSub.textContent = (finalAudioBlob
+    liveDoneSub = (finalAudioBlob
       ? `${Math.floor(audioSecs/60)}:${String(audioSecs%60).padStart(2,'0')} of continuous audio, with ${clips.length} video clip${clips.length===1?'':'s'} (${Math.floor(clipSecs/60)}:${String(clipSecs%60).padStart(2,'0')} total).`
       : 'No audio recorded.') + (pins.length ? ` ${pins.length} photo pin${pins.length>1?'s':''} on the map.` : '');
-    dlVideo.style.display = finalAudioBlob ? 'block' : 'none';
-    reviewBtn.style.display = finalAudioBlob ? 'block' : 'none';
-    dlPins.style.display = pins.length ? 'block' : 'none';
     showMap(false); drawWrap.classList.remove('show');
     snapBtn.classList.remove('show'); gradeBtn.classList.remove('show'); annoBar.classList.remove('show'); annoOverlay.classList.remove('show'); pinCount.classList.remove('show');
     scaleTracks.forEach(t=>t.classList.remove('show'));
-    donePanel.classList.add('show');
-    mountModePicker('done');     // choose the next session's mode from here
+    showSessionScreen();
     endBtn.classList.remove('show'); clockEl.classList.remove('show');
     setState('Ready');
     if(wakeLock){ wakeLock.release().catch(()=>{}); wakeLock=null; }
   }
+
+  // ---------- the session screen ----------
+  // A session is a CONTEXT, not a destination. One screen describes whichever
+  // session is loaded -- the visit that has just ended, or one opened out of
+  // the history -- and Review, the exports, the history and Settings are all
+  // things you step into and back out of onto it without losing that session.
+  // Before this, Review was a dead end: closing it on an archived session tore
+  // the archive down and dumped you in the history list, and the exports lived
+  // only on the tail of a live visit, so a past session could not be exported
+  // at all.
+  let liveDoneSub='';
+  function sessionHasAudio(){ return !!(finalAudioBlob || archiveAudioUrl); }
+  function sessionHasAnything(){
+    return !!(pins.length || sketches.length || measures.length || clips.length
+              || elevPoints.length || sessionHasAudio());
+  }
+  function archiveSummary(){
+    const bits=[];
+    if(archiveMeta && archiveMeta.startedAt) bits.push(fmtWhen(archiveMeta.startedAt));
+    const secs=Math.round(sessionDurationMs()/1000);
+    if(secs) bits.push(Math.floor(secs/60)+':'+String(secs%60).padStart(2,'0')+' of audio');
+    if(clips.length) bits.push(clips.length+' clip'+(clips.length===1?'':'s'));
+    if(pins.length) bits.push(pins.length+' photo pin'+(pins.length===1?'':'s'));
+    const shot=elevPoints.filter(q=>q.kind!=='observation' && q.role!=='height').length;
+    if(shot) bits.push(shot+' survey point'+(shot===1?'':'s'));
+    if(objects.length) bits.push(objects.length+' object'+(objects.length===1?'':'s'));
+    if(sketches.length) bits.push(sketches.length+' sketch'+(sketches.length===1?'':'es'));
+    if(measures.length) bits.push(measures.length+' measure'+(measures.length===1?'':'s'));
+    return bits.join(' \u00b7 ')
+      + (sessionHasAudio() ? '' : ' \u2014 no audio uploaded, so it cannot be replayed');
+  }
+  function showSessionScreen(){
+    const arch=archiveMode;
+    doneTitle.textContent = arch
+      ? ((archiveMeta && archiveMeta.address) || 'Untagged session')
+      : 'Session complete';
+    doneSub.textContent = arch ? archiveSummary() : liveDoneSub;
+    doneStatus.textContent=''; doneStatus.classList.remove('err');
+    // Review is driven by the master audio: without it there is nothing to
+    // replay, which is not the same as there being nothing to export.
+    reviewBtn.style.display = sessionHasAudio() ? 'block' : 'none';
+    dlVideo.style.display   = sessionHasAudio() ? 'block' : 'none';
+    dlPins.style.display    = sessionHasAnything() ? 'block' : 'none';
+    // The mode picker chooses the NEXT session's audio/video switches, which
+    // means nothing while you are looking at an old one.
+    doneModeSlot.style.display = arch ? 'none' : '';
+    if(!arch) mountModePicker('done');
+    doneClose.style.display = arch ? 'block' : 'none';
+    donePanel.classList.add('show');
+  }
   endBtn.addEventListener('click', endSession);
 
-  dlVideo.addEventListener('click', ()=>{
-    if(!finalAudioBlob) return;
-    const ext=finalAudioBlob.type.includes('mp4')?'m4a':'webm';
+  // Same live/archive split as the ZIP: a finished visit has the blob in hand,
+  // an opened one has a Storage URL. A cross-origin href ignores `download`
+  // and would navigate away from the app, so it is fetched into a blob first.
+  dlVideo.addEventListener('click', async ()=>{
+    if(!sessionHasAudio()) return;
+    let blob=finalAudioBlob, ext;
+    if(blob){ ext=blob.type.includes('mp4')?'m4a':'webm'; }
+    else {
+      dlVideo.disabled=true;
+      doneStatus.classList.remove('err');
+      doneStatus.textContent='Fetching the audio\u2026';
+      blob=await fetchBlob(archiveAudioUrl);
+      dlVideo.disabled=false;
+      if(!blob){
+        doneStatus.classList.add('err');
+        doneStatus.textContent='Could not fetch the audio. Check the connection and try again.';
+        return;
+      }
+      doneStatus.textContent='';
+      ext=extOfUrl(archiveAudioUrl,'m4a');
+    }
     const a=document.createElement('a');
-    a.href=URL.createObjectURL(finalAudioBlob);
+    a.href=URL.createObjectURL(blob);
     const d=new Date();
     a.download=`session-audio-${d.getFullYear()}${String(d.getMonth()+1).padStart(2,'0')}${String(d.getDate()).padStart(2,'0')}-${String(d.getHours()).padStart(2,'0')}${String(d.getMinutes()).padStart(2,'0')}.${ext}`;
     document.body.appendChild(a); a.click(); a.remove();
@@ -2394,8 +2470,43 @@
 
   exportPinsBtn.addEventListener('click', exportPins);
   dlPins.addEventListener('click', exportPins);
+  // A live session holds its media as blobs and data URLs; an archived one
+  // holds Storage URLs. The export therefore has to FETCH rather than read
+  // straight out of memory -- which is why exporting a past session was not
+  // merely a missing button: the old code did `photo.split(',')[1]` on what is
+  // a URL in archive mode and would have written a ZIP full of rubbish.
+  let exportBusy=false;
+  async function fetchBlob(url){
+    if(!url) return null;
+    try{
+      const r=await fetch(url);
+      if(!r.ok){ console.warn('[export] HTTP '+r.status+' for '+url); return null; }
+      return await r.blob();
+    }catch(e){ console.warn('[export] could not fetch '+url, e); return null; }
+  }
+  function extOfUrl(url, fallback){
+    const m=String(url||'').split('?')[0].match(/\.([a-z0-9]{2,4})$/i);
+    return m ? m[1].toLowerCase() : fallback;
+  }
   async function exportPins(){
-    if(!pins.length && !sketches.length && !measures.length && !finalAudioBlob && !clips.length) return;
+    if(exportBusy) return;
+    if(!sessionHasAnything()) return;
+    exportBusy=true; dlPins.disabled=true;
+    const missing=[];
+    let step=0;
+    const total = pins.length + clips.length + (sessionHasAudio()?1:0);
+    const say=(t,bad)=>{ doneStatus.textContent=t; doneStatus.classList.toggle('err',!!bad); };
+    const tick=what=>{ step++; say('Gathering '+step+' of '+total+' \u2014 '+what+'\u2026'); };
+    try{
+      await buildAndSaveZip(missing, tick, say);
+    }catch(e){
+      console.warn('[export] failed', e);
+      say('Export failed \u2014 '+(e && e.message ? e.message : 'unknown error')+'.', true);
+    }finally{
+      exportBusy=false; dlPins.disabled=false;
+    }
+  }
+  async function buildAndSaveZip(missing, tick, say){
     const gj={type:'FeatureCollection', features:pins.filter(p=>p.lat!==null).map(p=>({
       type:'Feature',
       geometry:{type:'Point', coordinates:[p.lng,p.lat]},
@@ -2419,42 +2530,125 @@
                     colour:mz.colour, time:mz.time}
       });
     });
+    // The relative elevation survey. Derived at export time, exactly as it is
+    // everywhere else -- elevationOf() and objHeightFt() are the source, never
+    // a stored scalar. A height point shares its origin's coordinate, so it is
+    // carried ON the origin rather than written out as a second dot in the
+    // same place.
+    elevPoints.forEach(pt=>{
+      if(!pt.placed || pt.role==='height') return;
+      const e=elevationOf(pt.id);
+      const o=pt.objectId ? objOf(pt.objectId) : null;
+      const oh=(o && pt.role==='origin') ? objHeightFt(o) : null;
+      gj.features.push({
+        type:'Feature',
+        geometry:{type:'Point', coordinates:[pt.lng,pt.lat]},
+        properties:{
+          kind:'survey', id:pt.remoteId||pt.id, pointKind:pt.kind, label:pt.label,
+          // Relative to the anchor, which is 0.00 by definition. Nothing here
+          // is an absolute elevation.
+          elevationFt: !e ? null : (e.isAnchor ? 0
+                        : (e.needsPlacing || typeof e.ft!=='number' ? null : +e.ft.toFixed(2))),
+          shots: e && e.shots || null, observations: e && e.obsCount || null,
+          repeatSpreadDeg: e && e.repeat!=null ? +e.repeat.toFixed(2) : null,
+          agreementFt: e && e.agree!=null ? +e.agree.toFixed(2) : null,
+          objectId: o ? (o.remoteId||o.id) : null,
+          objectType: o ? o.type : null,
+          objectLabel: o ? objLabel(o) : null,
+          objectRole: pt.role||null,
+          objectHeightFt: oh==null ? null : +oh.toFixed(2),
+          spreadFt: (o && o.attrs && o.attrs.spread_ft!=null) ? +o.attrs.spread_ft : null,
+          invertDepthFt: (o && o.attrs && o.attrs.invert_ft!=null) ? +o.attrs.invert_ft : null,
+          photo: pt.photoUrl || null
+        }
+      });
+    });
+    elevSlopes.forEach(sl=>{
+      const r=slopeOf(sl);
+      if(!r || r.hidden || !r.a || !r.b || !r.a.placed || !r.b.placed) return;
+      gj.features.push({
+        type:'Feature',
+        geometry:{type:'LineString', coordinates:[[r.a.lng,r.a.lat],[r.b.lng,r.b.lat]]},
+        properties:{kind:'slope', id:sl.remoteId||sl.id,
+          fromLabel:r.a.label, toLabel:r.b.label,
+          runFt:+r.runFt.toFixed(2),
+          fallFt:r.unknown?null:+r.fallFt.toFixed(2),
+          gradePct:(r.unknown||r.pct==null)?null:+r.pct.toFixed(2),
+          // The arrow points downhill, so the percent is a magnitude and this
+          // is what carries the direction.
+          downhillTowards:r.unknown?null:(r.low && r.low.label)}
+      });
+    });
     const zip=new JSZip();
     zip.file('site-pins.geojson', JSON.stringify(gj,null,2));
+    const clipExt = c => c.blob ? (c.blob.type.includes('mp4')?'mp4':'webm')
+                                : extOfUrl(c.url,'mp4');
     const clipManifest = clips.map((c,i)=>({
-      index:i, file:'clips/clip-'+(i+1)+'.'+((c.blob&&c.blob.type.includes('mp4'))?'mp4':'webm'),
+      index:i, file:'clips/clip-'+(i+1)+'.'+clipExt(c),
       startOffsetMs:c.startOffset, endOffsetMs:c.endOffset
     }));
-    zip.file('session.json', JSON.stringify({
-      sessionId: sessionId, startedAt: sessionStartedAt, pinCount: pins.length,
-      audioFile: finalAudioBlob ? ('audio.'+(finalAudioBlob.type.includes('mp4')?'m4a':'webm')) : null,
-      audioDurationSeconds: Math.round(sessionDurationMs()/1000),
-      clips: clipManifest
-    },null,2));
+    const audioExt = finalAudioBlob ? (finalAudioBlob.type.includes('mp4')?'m4a':'webm')
+                   : (archiveAudioUrl ? extOfUrl(archiveAudioUrl,'m4a') : null);
+
+    // Photos. A live pin carries a data URL; an archived one a Storage URL.
     const photos=zip.folder('photos');
-    pins.forEach(p=>{
-      // dataURL -> base64 payload
-      const b64=p.photo.split(',')[1];
-      photos.file('pin-'+p.id+'.jpg', b64, {base64:true});
-    });
-    if(finalAudioBlob){
-      const ext=finalAudioBlob.type.includes('mp4')?'m4a':'webm';
-      zip.file('audio.'+ext, finalAudioBlob);
+    for(const p of pins){
+      tick('photo pin '+p.id);
+      if(p.photo && p.photo.indexOf('data:')===0){
+        photos.file('pin-'+p.id+'.jpg', p.photo.split(',')[1], {base64:true});
+        continue;
+      }
+      const b=await fetchBlob(p.photo);
+      if(b) photos.file('pin-'+p.id+'.jpg', b);
+      else missing.push('photos/pin-'+p.id+'.jpg');
     }
+
+    if(sessionHasAudio()){
+      tick('the audio');
+      const b = finalAudioBlob || await fetchBlob(archiveAudioUrl);
+      if(b) zip.file('audio.'+audioExt, b);
+      else missing.push('audio.'+audioExt);
+    }
+
     if(clips.length){
       const clipsFolder=zip.folder('clips');
-      clips.forEach((c,i)=>{
-        if(!c.blob) return;
-        const ext=c.blob.type.includes('mp4')?'mp4':'webm';
-        clipsFolder.file('clip-'+(i+1)+'.'+ext, c.blob);
-      });
+      for(let i=0;i<clips.length;i++){
+        const c=clips[i];
+        tick('clip '+(i+1));
+        const b = c.blob || await fetchBlob(c.url);
+        if(b) clipsFolder.file('clip-'+(i+1)+'.'+clipExt(c), b);
+        else missing.push('clips/clip-'+(i+1)+'.'+clipExt(c));
+      }
     }
+
+    // What could NOT be fetched is written into the manifest as well as
+    // reported. A ZIP quietly short of half its photos is exactly the failure
+    // this app's fire-and-forget writes already risk; it should not be silent
+    // on the one copy that is meant to be durable.
+    zip.file('session.json', JSON.stringify({
+      sessionId: sessionId, startedAt: sessionStartedAt || (archiveMeta && archiveMeta.startedAt),
+      propertyAddress: (archiveMeta && archiveMeta.address) || null,
+      source: archiveMode ? 'archived' : 'live',
+      pinCount: pins.length,
+      surveyPointCount: elevPoints.filter(q=>q.placed && q.role!=='height').length,
+      objectCount: objects.length,
+      audioFile: sessionHasAudio() ? ('audio.'+audioExt) : null,
+      audioDurationSeconds: Math.round(sessionDurationMs()/1000),
+      clips: clipManifest,
+      missing: missing
+    },null,2));
+
+    say('Building the ZIP\u2026');
     const blob=await zip.generateAsync({type:'blob'});
     const a=document.createElement('a');
     a.href=URL.createObjectURL(blob);
     const d=new Date();
     a.download=`site-session-${d.getFullYear()}${String(d.getMonth()+1).padStart(2,'0')}${String(d.getDate()).padStart(2,'0')}.zip`;
     document.body.appendChild(a); a.click(); a.remove();
+    say(missing.length
+      ? missing.length+' file'+(missing.length===1?'':'s')+' could not be fetched and '
+        + (missing.length===1?'is':'are')+' missing from the ZIP \u2014 listed in session.json.'
+      : 'Exported.', missing.length>0);
   }
 
 
@@ -2649,6 +2843,10 @@
   // variable that died on reload. GET /sessions is the index; archiveMode
   // then points Review at stored URLs instead of in-memory blobs.
   let archiveMode=false, archiveAudioUrl=null, historyBusy=false, propTargetSessionId=null;
+  // What the session screen needs to name an opened session: the live path
+  // has that in memory, an archived one only in the row it came from.
+  let archiveMeta=null;             // {address, startedAt}
+  let historyFromSession=false;     // so Close goes back where you came from
 
   function fmtWhen(iso){
     if(!iso) return 'unknown date';
@@ -2663,6 +2861,9 @@
   }
 
   function openHistory(){
+    // Remember where this was opened from: closing it used to drop you on the
+    // start screen even when you had walked in from a loaded session.
+    historyFromSession = donePanel.classList.contains('show');
     startOverlay.classList.add('hidden');
     donePanel.classList.remove('show');
     historyPanel.classList.add('show');
@@ -2670,8 +2871,9 @@
   }
   function closeHistory(){
     historyPanel.classList.remove('show');
+    if(historyFromSession){ donePanel.classList.add('show'); return; }
     // Only return to the start screen if there's nothing else to go back to.
-    if(!sessionActive && !reviewPanel.classList.contains('show') && !donePanel.classList.contains('show')){
+    if(!sessionActive && !reviewPanel.classList.contains('show')){
       startOverlay.classList.remove('hidden');
     }
   }
@@ -2744,7 +2946,9 @@
       const openBtn=document.createElement('button');
       openBtn.className='hist-btn go';
       openBtn.textContent='Open';
-      openBtn.disabled = !s.hasAudio;
+      // Openable either way now. No audio means it cannot be REPLAYED, which
+      // is not the same as there being nothing in it worth opening: the pins,
+      // the survey and the export are all still there.
       openBtn.addEventListener('click', ()=> openArchivedSession(s.id, openBtn));
       actions.appendChild(openBtn);
 
@@ -2764,7 +2968,9 @@
     }
     hydrateArchive(data);
     historyPanel.classList.remove('show');
-    openReview();
+    // The session screen, not Review. Review is a mode you choose from here --
+    // and a session with no audio has nothing to replay but plenty to export.
+    showSessionScreen();
   }
 
   // Replace live in-memory state with a stored session. Review reads the very
@@ -2774,6 +2980,7 @@
     clearArchiveLayers();
     const s=data.session;
     archiveMode=true;
+    archiveMeta={ address:s.propertyAddress||null, startedAt:s.started_at||null };
     sessionId=s.id;
     sessionStartedAt=s.started_at;
     archiveAudioUrl=s.audioUrl||null;
@@ -2943,7 +3150,7 @@
   function exitArchive(){
     if(!archiveMode) return;
     clearArchiveLayers();
-    archiveMode=false; archiveAudioUrl=null; archivePlanData=null;
+    archiveMode=false; archiveAudioUrl=null; archivePlanData=null; archiveMeta=null;
     if(planOverlay && map){ try{ map.removeLayer(planOverlay); }catch(e){} }
     if(planCenterMarker && map){ try{ map.removeLayer(planCenterMarker); }catch(e){} }
     planOverlay=null; planCenterMarker=null; planImg=null; planCenter=null;
@@ -3372,10 +3579,19 @@
   reviewBtn.addEventListener('click', openReview);
   reviewSwap.addEventListener('click', ()=> setMainPane(reviewMainPane==='video' ? 'map' : 'video'));
   reviewShare.addEventListener('click', ()=>{ if(reviewActiveClip>=0) shareClipWithAudio(reviewActiveClip); });
+  // Review is a MODE: leaving it lands on the session screen with the session
+  // still loaded, archived or not. It used to tear an archive down and drop
+  // you in the history list, which is what made it a dead end.
   reviewClose.addEventListener('click', ()=>{
-    const wasArchive = archiveMode;
     closeReview();
-    if(wasArchive){ exitArchive(); openHistory(); }
+    showSessionScreen();
+  });
+  doneClose.addEventListener('click', ()=>{
+    closeReview();
+    exitArchive();
+    donePanel.classList.remove('show');
+    mountModePicker('start');
+    startOverlay.classList.remove('hidden');
   });
   historyBtn.addEventListener('click', openHistory);
   historyBtn2.addEventListener('click', openHistory);

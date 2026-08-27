@@ -641,6 +641,47 @@ points — it is on the not-yet-built list with contours): plan strokes could
 ride the ground instead of the datum. That is their honest home. The datum is
 the right answer only until that exists.
 
+## A session is a context, not a destination
+
+There is **one session screen**, and it describes whichever session is loaded —
+the visit that has just ended, or one opened out of the history. Review, the
+exports, Past sessions and Settings are all things you step into and back out
+of *onto* it, without losing the session.
+
+Before this, Review was a dead end. Closing it on an archived session called
+`exitArchive()` and dumped you in the history list, so there was no way back to
+anything resembling an intake screen; and the done panel — the only place the
+ZIP and the audio download lived — never appeared in the archived path at all.
+
+**So a past session could not be exported.** Not "awkwardly": there was no
+button, and wiring one up would not have worked either, because
+`exportPins()` did `p.photo.split(',')[1]` on what is a **Storage URL** in
+archive mode and would have written a ZIP full of rubbish. Export now
+**fetches**: a data URL is read as before, anything else is fetched into a blob,
+and audio and clips follow the same rule (`c.blob || fetch(c.url)`).
+
+Three things this pinned down:
+
+- **What could not be fetched is named, in two places.** The status line says
+  how many files are missing and `session.json` lists them. A ZIP quietly short
+  of half its photos is exactly the failure the fire-and-forget write model
+  already risks, and the one copy that is meant to be durable must not be silent
+  about it.
+- **A session with no audio is now openable.** It cannot be *replayed* — Review
+  is driven by the master audio and is hidden — but that is not the same as
+  there being nothing in it. Its pins, survey and export are all still there,
+  and 6 of the 14 most recent sessions are in that state.
+- **The export carries the survey now.** Points with their derived elevations,
+  the object each belongs to and its derived height, spread and invert depth,
+  plus slope runs with their grade and which end is downhill. All derived at
+  export time by `elevationOf()`, `objHeightFt()` and `slopeOf()` — never a
+  stored scalar, same rule as everywhere else.
+
+Note the two navigation returns that had to become explicit: `historyFromSession`
+so closing Past sessions goes back to the session you opened it from rather than
+to the start screen, and `doneClose`, which is the only thing that now calls
+`exitArchive()` by hand.
+
 ## Data durability — important
 
 All Supabase writes are **fire-and-forget**. Failures are `console.warn`'d,
@@ -1581,9 +1622,11 @@ the same trap that once made elevation reference photos unreachable on the map. 
 
 ### Session history
 
-**Past sessions** (start screen and done panel) lists every session
+**Past sessions** (start screen and session screen) lists every session
 newest-first from `GET /sessions`, labelled by its property address. Tapping
-Open rehydrates the session and launches Review against it.
+Open rehydrates the session and lands on the **session screen** — see *A session
+is a context, not a destination* above; Review is a mode you choose from there,
+not where Open drops you.
 
 `hydrateArchive()` rebuilds the same in-memory structures a live session
 uses (`pins`, `clips`, `sketches`, `measures`) from API rows and public
@@ -1603,12 +1646,12 @@ Two things that bite here:
   `blob:` before calling `revokeObjectURL`, since clip URLs are now
   sometimes Storage URLs.
 
-Sessions whose audio never uploaded are listed but **not openable** — Review
-is driven by the master audio, so there is nothing to replay. The row says
-so rather than offering a dead button. As of writing, 6 of the 14 most
-recent sessions are in that state; one of them has clips, photos and a
-sketch, so this is the fire-and-forget write model showing up in real data,
-not just abandoned starts.
+Sessions whose audio never uploaded **open, but cannot be replayed** — Review
+is driven by the master audio, so its button is hidden and the row says why.
+Everything else about them is reachable: pins, survey, and the export. As of
+writing, 6 of the 14 most recent sessions are in that state; one of them has
+clips, photos and a sketch, so this is the fire-and-forget write model showing
+up in real data, not just abandoned starts.
 
 ## Object types
 
@@ -1762,10 +1805,6 @@ fixtures.
 - More of the compass ideas: auto-selecting the section you are standing in
   front of, and squaring the cuts to a wall by pointing at it. (A heading-up
   map is built — see *My location*.)
-- ZIP export of an *archived* session. The export reads `pin.photo` as a
-  data URL and `clip.blob`, both of which are URLs in archive mode. Not
-  currently reachable (the done panel isn't part of the archive flow) but it
-  will need fetch-and-zip when it is.
 - Absolute elevations. Everything is relative to the anchor; nothing ties a
   survey to a plan's spot elevations or a real benchmark.
 - Everything downstream of slope runs: contours, colour-coded drainage zones,
