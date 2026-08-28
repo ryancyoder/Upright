@@ -3423,7 +3423,13 @@
   // them. What the extraction threw away is reported at the bottom of the
   // panel rather than hidden -- a prompt that has started inventing shows up
   // there first.
+  // proposalState distinguishes the three things an empty list can mean, which
+  // otherwise look identical on screen: never run, run and found nothing, or
+  // failed outright. Reading a failure as "it found nothing" is exactly the
+  // mistake this cost the first time out.
   let proposalItems=[], proposalBusy=false, proposalDropped=[];
+  let proposalState='idle';      // idle | empty | error
+  let proposalError='';
   function openProposal(){
     if(!sessionId) return;
     proposalPanel.classList.add('show');
@@ -3432,7 +3438,9 @@
     loadProposal();
   }
   function closeProposal(){ proposalPanel.classList.remove('show'); }
-  async function loadProposal(){
+  // keepStatus: a reload straight after an extraction must not wipe the line
+  // that reported what the extraction did.
+  async function loadProposal(keepStatus){
     const res=await apiGet('/sessions/'+sessionId+'/proposal');
     if(!res){
       proposalStatus.classList.add('err');
@@ -3440,6 +3448,9 @@
       return;
     }
     proposalItems=res.items||[];
+    // Clear the "Loading…" that openProposal put up; it used to sit there
+    // afterwards looking like the panel was still working.
+    if(!keepStatus && proposalState!=='error') proposalStatus.textContent='';
     renderProposal();
   }
   function proposalQty(it){
@@ -3455,9 +3466,21 @@
     if(!proposalItems.length){
       const d=document.createElement('div');
       d.className='pi-drop';
-      d.innerHTML='Nothing yet. <b>Extract from transcript</b> reads what was said on this '
-        + 'visit and suggests lines \u2014 each one quoting the sentence it came from. '
-        + 'Anything it cannot quote is thrown away rather than shown.';
+      if(proposalState==='error'){
+        // A FAILED extraction must never read as "nothing was found". Nothing
+        // was read at all.
+        d.innerHTML='<b>The extraction did not run.</b> '+escapeHtml(proposalError)
+          + '<br>Nothing was read and nothing was judged \u2014 this is not the same as '
+          + 'the visit having nothing in it.';
+      } else if(proposalState==='empty'){
+        d.innerHTML='<b>Read the transcript and found nothing quotable.</b> Every suggested '
+          + 'line has to quote a sentence that is really in the recording, so a visit with '
+          + 'no work discussed in it comes back empty \u2014 which is the check doing its job.';
+      } else {
+        d.innerHTML='Nothing yet. <b>Extract from transcript</b> reads what was said on this '
+          + 'visit and suggests lines \u2014 each one quoting the sentence it came from. '
+          + 'Anything it cannot quote is thrown away rather than shown.';
+      }
       proposalList.appendChild(d);
     }
     proposalItems.forEach(it=>{
@@ -3539,17 +3562,26 @@
     const r=await apiPostVerbose('/sessions/'+sessionId+'/proposal', {});
     proposalBusy=false; proposalRun.disabled=false;
     if(!r || !r.ok){
+      proposalState='error';
+      proposalError=(r && r.body && r.body.error)
+        || ('The server returned '+((r && r.status) || 'no response')+'.');
       proposalStatus.classList.add('err');
-      proposalStatus.textContent=(r && r.body && r.body.error)
-        || 'Extraction failed. Check the connection and try again.';
+      proposalStatus.textContent=proposalError;
+      // Say it in the body as well as the status line: the thin line above the
+      // list is easy to miss, and missing it turns a failure into a wrong
+      // conclusion about the transcript.
+      renderProposal();
       return;
     }
     const res=r.body||{};
     proposalDropped=res.rejected||[];
+    proposalState=(res.kept||0) ? 'idle' : 'empty';
+    proposalError='';
+    proposalStatus.classList.remove('err');
     proposalStatus.textContent = (res.kept||0)+' suggested'
       + (res.skippedAlreadyRuledOn ? ' \u00b7 '+res.skippedAlreadyRuledOn+' already ruled on' : '')
       + (proposalDropped.length ? ' \u00b7 '+proposalDropped.length+' thrown away' : '');
-    await loadProposal();
+    await loadProposal(true);
   }
   async function addProposalItem(){
     const t=proposalAddText.value.trim();

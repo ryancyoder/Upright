@@ -199,6 +199,36 @@ export function buildProposalRows(
   return { kept, rejected };
 }
 
+// Turn an upstream failure into something a person in a yard can act on.
+// The three that actually happen have different fixes and none of them is a
+// code change, so saying which one it is saves a round trip every time.
+export function anthropicErrorMessage(status: number, body: string) {
+  const b = String(body || "");
+  if (status === 401 || status === 403) {
+    return "Anthropic rejected the API key (" + status + "). Check ANTHROPIC_API_KEY in " +
+      "Supabase \u2192 Edge Functions \u2192 Secrets \u2014 a trailing space when it was pasted " +
+      "is the usual cause.";
+  }
+  if (/credit balance is too low|insufficient_quota|billing/i.test(b)) {
+    return "The Anthropic account has no credit on it. Top it up at " +
+      "console.anthropic.com \u2192 Billing, then try again.";
+  }
+  if (status === 429) {
+    return "Anthropic is rate-limiting this key (429). Wait a moment and try again.";
+  }
+  if (status === 404 && /model/i.test(b)) {
+    return "This API key cannot reach the model the extractor asks for. Check the key's " +
+      "workspace has access to Claude Opus 5.";
+  }
+  // Anything else: hand back what the API actually said, trimmed.
+  let detail = b.slice(0, 300);
+  try {
+    const j = JSON.parse(b);
+    if (j?.error?.message) detail = String(j.error.message).slice(0, 300);
+  } catch (_e) { /* not JSON; the raw text will do */ }
+  return `Anthropic ${status}: ${detail}`;
+}
+
 export async function extractProposalItems(
   apiKey: string,
   segments: Segment[],
@@ -236,7 +266,11 @@ export async function extractProposalItems(
   });
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(`Anthropic ${res.status}: ${text.slice(0, 500)}`);
+    // Log it as well as returning it. An error that exists only in a UI status
+    // line is invisible the moment nobody is looking at that line, which is
+    // exactly the position this failed from the first time.
+    console.error(`[proposal] Anthropic ${res.status}: ${text.slice(0, 800)}`);
+    throw new Error(anthropicErrorMessage(res.status, text));
   }
   const data = await res.json();
   // A refusal is an HTTP 200 with no usable content -- check before reading.
@@ -246,6 +280,8 @@ export async function extractProposalItems(
   let parsed;
   try { parsed = JSON.parse(block.text); }
   catch (_e) { throw new Error("Response was not valid JSON"); }
-  return Array.isArray(parsed.items) ? parsed.items : [];
+  const items = Array.isArray(parsed.items) ? parsed.items : [];
+  console.log(`[proposal] model returned ${items.length} item(s) from ${segments.length} segment(s)`);
+  return items;
 }
 
