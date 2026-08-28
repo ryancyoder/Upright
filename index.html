@@ -1015,6 +1015,13 @@
     flex:0 0 auto; color:var(--ink);
   }
   .pi-qty.none{color:var(--dim); font-weight:400;}
+  /* A stated quantity is a placeholder to confirm, not a measurement. Drawn
+     unfilled and in the caution colour so it cannot be read as a survey
+     figure at a glance -- the distinction is the whole point of storing it. */
+  .pi-qty.stated{
+    color:var(--anchor-sight); font-weight:400; font-style:italic;
+    border:1px dashed var(--anchor-sight); border-radius:4px; padding:1px 6px;
+  }
   .pi-meta{font-size:11px; color:var(--dim); margin-top:4px;}
   /* The evidence. Set as a quotation because that is exactly what it is --
      and if it is not in the transcript the row does not exist. */
@@ -3413,8 +3420,10 @@
   //
   //   the quote is the row. An item that cannot show the sentence it came from
   //   is never stored, so everything on screen can be traced back to speech;
-  //   the quantity comes from the survey, never from the model -- a measured
-  //   polygon's area, a drawn line's length -- and says which;
+  //   the quantity comes from the survey or from somebody's mouth, never from
+  //   the model -- a measured polygon's area, a drawn line's length, or a
+  //   figure that was said aloud and appears in the quote -- and it always
+  //   says which of those it is;
   //   nothing is accepted until somebody accepts it.
   //
   // The failure this guards against is confabulation, and it is a specific
@@ -3454,13 +3463,18 @@
     renderProposal();
   }
   function proposalQty(it){
-    if(it.quantity==null) return {text:'needs measuring', none:true};
+    if(it.quantity==null) return {text:'needs measuring', none:true, stated:false};
     const n=+it.quantity;
     const num=(Math.abs(n)>=100 ? Math.round(n) : Math.round(n*10)/10);
-    return {text:num+(it.unit?' '+it.unit:''), none:false};
+    // A STATED figure is what somebody said, not what anybody measured, and it
+    // must never be able to pass for a survey number at a glance -- so it is
+    // drawn differently and carries the word on the figure itself.
+    const stated=(it.quantity_source==='stated');
+    return {text:num+(it.unit?' '+it.unit:'')+(stated?' stated':''), none:false, stated:stated};
   }
   const QTY_FROM={measure:'from a measured area', sketch:'from a drawn line',
-                  object:'from a surveyed object', count:'counted'};
+                  object:'from a surveyed object', count:'counted',
+                  stated:'stated on site \u2014 not measured'};
   function renderProposal(){
     proposalList.innerHTML='';
     if(!proposalItems.length){
@@ -3491,7 +3505,7 @@
       const head=document.createElement('div'); head.className='pi-head';
       const d=document.createElement('div'); d.className='pi-desc'; d.textContent=it.description;
       const qty=document.createElement('div');
-      qty.className='pi-qty'+(q.none?' none':''); qty.textContent=q.text;
+      qty.className='pi-qty'+(q.none?' none':'')+(q.stated?' stated':''); qty.textContent=q.text;
       head.appendChild(d); head.appendChild(qty);
       row.appendChild(head);
 

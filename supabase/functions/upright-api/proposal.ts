@@ -12,9 +12,15 @@
 //      "mulch, edging, spring cleanup" belong to every landscaping
 //      conversation ever had, so a model will offer them whether or not
 //      anybody said them. A substring check is cheap and catches exactly that.
-//   2. QUANTITIES COME FROM THE SURVEY. The model may point at a measured
-//      thing by id; the number is then recomputed from that row. It may never
-//      supply a number itself.
+//   2. QUANTITIES COME FROM THE SURVEY, OR FROM SOMEBODY'S MOUTH -- and the
+//      row always says which. The model may point at a measured thing by id,
+//      and the number is then recomputed from that row. It may also report a
+//      number that was SPOKEN ALOUD, but only as `stated`: that number has to
+//      appear in the verbatim quote, which has itself already been checked
+//      against the transcript, so a stated quantity is evidence by the same
+//      chain the description is. What the model may never do is supply a
+//      number from nowhere. A measured figure always wins; where the two
+//      disagree, the row says so rather than quietly preferring one.
 //   3. NOTHING IS ACCEPTED. Everything lands as `pending` for a human to rule
 //      on, and a re-run never touches a row that has been ruled on.
 
@@ -24,6 +30,48 @@ const PROPOSAL_MODEL = "claude-opus-5";
 // should not be what rejects a real quote, but the WORDS have to be there.
 export function normaliseForQuote(t: string) {
   return String(t || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+// Every number spoken in a piece of text. This is what lets a STATED quantity
+// be checked rather than trusted: the figure has to be in the quote, and the
+// quote has already been matched against the transcript.
+//
+// Digit grouping is undone first ("2,000" is one number, not two), which the
+// quote normaliser cannot do -- it turns every comma into a space, so 2,000
+// would arrive as "2 000" and never match 2000.
+//
+// Number WORDS are matched only as single words (one..twenty, and the round
+// tens). Compound speech -- "two thousand", "twenty five hundred" -- is
+// deliberately not parsed: getting it subtly wrong would put a number nobody
+// said onto a proposal, and the honest failure is no quantity at all.
+const NUMBER_WORDS: Record<string, number> = {
+  one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8,
+  nine: 9, ten: 10, eleven: 11, twelve: 12, thirteen: 13, fourteen: 14,
+  fifteen: 15, sixteen: 16, seventeen: 17, eighteen: 18, nineteen: 19,
+  twenty: 20, thirty: 30, forty: 40, fifty: 50, sixty: 60, seventy: 70,
+  eighty: 80, ninety: 90, hundred: 100, thousand: 1000,
+};
+
+export function quoteNumbers(text: string) {
+  const t = String(text || "").toLowerCase().replace(/(\d),(?=\d{3}(?!\d))/g, "$1");
+  const out: number[] = [];
+  for (const m of t.matchAll(/\d+(?:\.\d+)?/g)) {
+    const v = Number(m[0]);
+    if (Number.isFinite(v)) out.push(v);
+  }
+  for (const w of t.split(/[^a-z]+/)) {
+    if (w && Object.prototype.hasOwnProperty.call(NUMBER_WORDS, w)) out.push(NUMBER_WORDS[w]);
+  }
+  return out;
+}
+
+// A stated quantity counts only if it was actually said. Compared with a
+// relative tolerance so "2000" matching a spoken 2,000 survives, while 1750
+// against a spoken 2000 does not.
+export function statedQuantityIn(quote: string, want: unknown) {
+  const n = Number(want);
+  if (!Number.isFinite(n) || n <= 0) return false;
+  return quoteNumbers(quote).some((v) => Math.abs(v - n) <= Math.max(1e-6, Math.abs(n) * 1e-6));
 }
 
 export type Segment = { id: number; start_ms: number; end_ms: number; speaker: string; text: string };
@@ -86,6 +134,20 @@ const PROPOSAL_SCHEMA = {
               "inventory supplied (e.g. 'measure:...'). Only when the transcript makes the link " +
               "clear. Never invent a ref, and never state a quantity yourself.",
           },
+          statedQuantity: {
+            type: "number",
+            description:
+              "Optional. A number that was SPOKEN ALOUD for this item (e.g. '2 loads', " +
+              "'2,000 square feet'). The figure must appear in the quote above, or it is " +
+              "discarded. Do not estimate, convert or infer a number here -- only report one " +
+              "that was actually said. Leave it out when nothing was said.",
+          },
+          statedUnit: {
+            type: "string",
+            description:
+              "Optional. The unit that went with statedQuantity, in the words used " +
+              "(e.g. 'loads', 'sq ft', 'yards'). Only when statedQuantity is given.",
+          },
           note: { type: "string", description: "Optional short context worth keeping." },
         },
         required: ["description", "quote"],
@@ -106,9 +168,12 @@ const PROPOSAL_SYSTEM = [
   "1. Every item MUST quote the sentence it came from, verbatim. If you cannot quote it, leave it out.",
   "   Items with no support in the transcript are worse than useless here -- they get read as things",
   "   the client asked for. Do not add the obvious ones (mulch, edging, cleanup) unless they were said.",
-  "2. Never state a quantity, size, price or product code. If the transcript points at something that",
-  "   was measured on site, give its ref from the inventory and nothing more; the app computes the",
-  "   number from its own measurements.",
+  "2. Never invent a quantity, size, price or product code. There are exactly two legitimate",
+  "   sources for a number. If the transcript points at something measured on site, give its ref",
+  "   from the inventory and nothing more -- the app computes the figure from its own measurements.",
+  "   If somebody SAID a number for this item, put it in statedQuantity/statedUnit; that figure must",
+  "   appear in the quote you give, and it is checked. Do not convert, round or reconcile it -- if",
+  "   they said '2 loads', that is 2 loads, not a cubic yardage. When neither applies, give no number.",
   "3. Prefer the words the crew used. Do not translate 'shred' into 'hardwood mulch, double-ground'.",
   "4. Something raised and rejected on site ('we could take the tree out' / 'no, leave it') is not an",
   "   item. Something the client asked for is. If in doubt whether it was decided, include it and say",
@@ -117,7 +182,7 @@ const PROPOSAL_SYSTEM = [
   "   tidying it -- the quote is checked against the transcript.",
 ].join("\n");
 
-// The two rules that make an extraction trustworthy, applied to the model's
+// The rules that make an extraction trustworthy, applied to the model's
 // raw output. Pure and side-effect free on purpose: this is the part worth
 // testing, and it can be tested without spending a token.
 export function buildProposalRows(
@@ -150,9 +215,10 @@ export function buildProposalRows(
     // Which segment it came from, so the app can put the playhead there.
     const seg = ctx.segments.find((x) => normaliseForQuote(x.text).includes(needle))
       || ctx.segments.find((x) => needle.includes(normaliseForQuote(x.text)));
-    // QUANTITIES COME FROM THE SURVEY. The model may point at a measured thing
-    // by ref; the number is read off OUR row. A ref naming something that does
-    // not exist is ignored rather than trusted.
+    // QUANTITIES COME FROM THE SURVEY FIRST. The model may point at a measured
+    // thing by ref; the number is read off OUR row. A ref naming something that
+    // does not exist is ignored rather than trusted. A spoken figure is handled
+    // below, and only where this leaves no number.
     let quantity: number | null = null, unit: string | null = null;
     let quantitySource: string | null = null;
     let measureId: string | null = null, sketchId: string | null = null;
@@ -182,6 +248,33 @@ export function buildProposalRows(
       const ph = ctx.photos.find((x) => x.id === refId);
       if (ph) photoId = ph.id as string;
     }
+    // A STATED quantity: a number somebody said, kept only when it really is in
+    // the quote. A measured figure always wins -- it is the one the survey can
+    // stand behind -- but where the two disagree that is worth knowing rather
+    // than burying, so it goes in the note.
+    let statedNote = "";
+    const statedOk = statedQuantityIn(quote, it?.statedQuantity);
+    if (statedOk) {
+      const stated = Number(it?.statedQuantity);
+      const statedUnit = it?.statedUnit ? String(it.statedUnit).slice(0, 20) : null;
+      if (quantity == null) {
+        quantity = stated;
+        unit = statedUnit;
+        quantitySource = "stated";
+      } else if (Math.abs(quantity - stated) > Math.max(0.01, Math.abs(quantity) * 0.02)) {
+        statedNote = `Client stated ${stated}${statedUnit ? " " + statedUnit : ""}; ` +
+          `measured ${quantity}${unit ? " " + unit : ""}.`;
+      }
+    } else if (it?.statedQuantity != null) {
+      // Reported, not silently dropped: a number that is not in its own quote
+      // is the same confabulation the quote check exists to catch.
+      rejected.push({
+        description: desc,
+        reason: `stated quantity ${it.statedQuantity} is not in the quote -- quantity dropped`,
+      });
+    }
+    const noteParts = [it?.note ? String(it.note) : "", statedNote].filter(Boolean);
+
     kept.push({
       session_id: ctx.sessionId,
       description: desc,
@@ -192,7 +285,7 @@ export function buildProposalRows(
       segment_ids: seg ? [seg.id] : null,
       quantity, unit, quantity_source: quantitySource,
       measure_id: measureId, sketch_id: sketchId, object_id: objectId, photo_id: photoId,
-      note: it?.note ? String(it.note).slice(0, 1000) : null,
+      note: noteParts.length ? noteParts.join(" ").slice(0, 1000) : null,
       status: "pending", origin: "extracted",
     });
   }

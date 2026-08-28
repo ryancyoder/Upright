@@ -78,7 +78,7 @@ identity-linked — see *The proposal helper* below.
 If editing the function, pull current source with `Supabase:get_edge_function`
 rather than reconstructing it. The source is now vendored at
 `supabase/functions/upright-api/index.ts` so edits are diffable; keep it in
-step with what is deployed. Currently **v28**, and it is now two files:
+step with what is deployed. Currently **v31**, and it is now two files:
 `index.ts` (routing) and `proposal.ts` (the proposal helper's logic).
 
 **Replacing an image writes a NEW storage path, never an upsert in place.**
@@ -788,12 +788,38 @@ asked for in the prompt.** A prompt is a request; a check is a guarantee.
   quote — but **a paraphrase is refused as firmly as an invention**. "We would"
   for "we'd" is a tidy-up, and tidying speech into something nobody quite said
   is how a proposal line stops being evidence.
-- **Quantities come from the survey, never from the model.** The model may
-  point at a measured thing by ref (`measure:…`, `sketch:…`, `object:…`); the
-  number is then read off *our* row — a polygon's area, a drawn line's length.
-  A ref naming something that does not exist yields **no** quantity rather than
-  a number nobody measured, and an item with nothing measured says *needs
-  measuring*.
+- **Quantities come from the survey, or from somebody's mouth — and the row
+  always says which.** The model may point at a measured thing by ref
+  (`measure:…`, `sketch:…`, `object:…`); the number is then read off *our* row —
+  a polygon's area, a drawn line's length. A ref naming something that does not
+  exist yields **no** quantity rather than a number nobody measured, and an item
+  with nothing measured says *needs measuring*.
+
+  The second source is a **stated** quantity, and it exists because the first
+  real transcript exposed the gap: *"2 loads of mulch"* and *"2,000 square feet
+  of lawn"* are numbers the client said out loud, sitting inside the very quote
+  that is already treated as evidence. Refusing them while accepting the
+  sentence around them was inconsistent — so `quantity_source='stated'` records
+  the figure as **a placeholder to confirm, never a measurement**. It is checked
+  the same way the quote is: `statedQuantityIn()` requires the number to appear
+  in the verbatim quote, which has itself already been matched against the
+  transcript, so a stated quantity is evidence by the same chain the description
+  is. A figure that is not in its own quote is dropped and **reported**, exactly
+  as a bad quote is — and only the number goes, not the item.
+
+  `quoteNumbers()` ungroups thousands first (`2,000` is one number; the quote
+  normaliser turns every comma into a space, so it would otherwise arrive as
+  `2 000` and never match) and reads single number *words*. Compound speech —
+  *"two thousand"* — is deliberately not parsed: getting it subtly wrong would
+  put a number nobody said onto a proposal, and the honest failure is no
+  quantity at all.
+
+  **A measured figure always wins**, since it is the one the survey can stand
+  behind. Where the two disagree by more than 2% the row says so
+  (`Client stated 2000 sq ft; measured 242.5 sq ft.`) rather than quietly
+  preferring one — that disagreement is worth more than either number alone.
+  The panel draws a stated figure unfilled, italic and in the anchor colour, so
+  it can never be read as a survey number at a glance.
 - **Nothing is accepted.** Everything lands `pending`. Re-running replaces only
   pending extracted rows, so a second pass never clobbers what a human has
   ruled on or typed.
@@ -812,7 +838,14 @@ said *and* the catalog line — never one replacing the other.
 `test59.js` covers the checks without spending a token (`proposal.ts` is a plain
 module, so node imports it directly): a confabulated item is dropped, a
 paraphrase is dropped, punctuation and casing are not, areas and lengths come
-off the linked rows, a bogus ref yields nothing. `test60.js` covers the panel.
+off the linked rows, a bogus ref yields nothing, a stated figure that is not in
+its own quote is refused while the item survives, a grouped numeral and a number
+word both read correctly, and a measurement beats a stated figure while
+recording the disagreement. `test60.js` covers the panel.
+
+The stated-quantity check is **mutation-tested**: making `statedQuantityIn()`
+return `true` unconditionally turns two checks red, so the guarantee is the code
+and not the wording of a prompt.
 
 **Requires secret `ANTHROPIC_API_KEY`** (Supabase → Edge Functions → Secrets,
 same place as `ASSEMBLYAI_API_KEY` — NOT Vault, NOT Vercel env). Without it the
