@@ -1001,6 +1001,35 @@
   /* Set apart from Open, which is the button the thumb goes to every time. */
   .hist-btn.danger{border-color:var(--live); color:var(--live); margin-left:10px;}
   .hist-btn:disabled{opacity:0.3;}
+  .prop-add{display:flex; gap:10px; align-items:center; padding:12px 16px; border-top:1px solid var(--line);}
+  .prop-add .prop-search{flex:1 1 auto; margin:0;}
+  /* One suggested line. The quote is the point of the row, so it is not
+     tucked away behind a tap. */
+  .pi-item{padding:14px 16px; border-bottom:1px solid var(--line);}
+  .pi-item.is-rejected{opacity:0.45;}
+  .pi-item.is-accepted{border-left:3px solid var(--flat);}
+  .pi-head{display:flex; gap:10px; align-items:baseline; justify-content:space-between;}
+  .pi-desc{font-size:14px; font-weight:700; flex:1 1 auto;}
+  .pi-qty{
+    font-size:13px; font-variant-numeric:tabular-nums; white-space:nowrap;
+    flex:0 0 auto; color:var(--ink);
+  }
+  .pi-qty.none{color:var(--dim); font-weight:400;}
+  .pi-meta{font-size:11px; color:var(--dim); margin-top:4px;}
+  /* The evidence. Set as a quotation because that is exactly what it is --
+     and if it is not in the transcript the row does not exist. */
+  .pi-quote{
+    font-size:12px; line-height:1.5; margin-top:8px; padding-left:10px;
+    border-left:2px solid var(--line); color:var(--ink);
+  }
+  .pi-quote b{color:var(--dim); font-weight:400;}
+  .pi-acts{display:flex; gap:8px; margin-top:10px; flex-wrap:wrap;}
+  .pi-acts .hist-btn{padding:6px 12px; font-size:11px;}
+  .pi-drop{
+    margin:12px 16px; padding:12px 14px; border-radius:10px;
+    border:1px dashed var(--line); font-size:11px; color:var(--dim); line-height:1.5;
+  }
+  .pi-drop b{color:var(--live);}
   .prop-search{
     flex:0 0 auto; margin:12px 16px 0; padding:11px 14px;
     border-radius:10px; border:1px solid var(--line);
@@ -1402,6 +1431,7 @@
       <div id="doneModeSlot"></div>
       <div class="done-actions">
         <button class="dl-btn" id="openMapBtn">Open on map</button>
+        <button class="dl-btn secondary" id="proposalBtn">Proposal from this visit</button>
         <button class="dl-btn" id="reviewBtn">Review session</button>
         <button class="dl-btn secondary" id="dlVideo">Download audio recording</button>
         <button class="dl-btn secondary" id="dlPins">Download session (ZIP): audio + clips + pins</button>
@@ -1461,6 +1491,25 @@
           </div>
         </div>
         <button class="dl-btn" id="nameSave">Save name</button>
+      </div>
+    </div>
+
+    <!-- The proposal helper. Every line here is a SUGGESTION carrying the
+         sentence it came from; nothing is a measurement and nothing counts
+         until somebody accepts it. -->
+    <div class="prop-panel" id="proposalPanel">
+      <div class="review-head">
+        <span class="title">Proposal from this visit</span>
+        <div class="review-head-actions">
+          <button class="review-swap" id="proposalRun">Extract from transcript</button>
+          <button class="review-close" id="proposalClose">Close</button>
+        </div>
+      </div>
+      <div class="hist-status" id="proposalStatus"></div>
+      <div class="hist-list" id="proposalList"></div>
+      <div class="prop-add">
+        <input class="prop-search" id="proposalAddText" placeholder="Add a line by hand…" autocomplete="off" maxlength="500">
+        <button class="hist-btn go" id="proposalAdd">Add</button>
       </div>
     </div>
 
@@ -1643,6 +1692,10 @@
         doneTitle=$('doneTitle'), doneStatus=$('doneStatus'), doneClose=$('doneClose'),
         openMapBtn=$('openMapBtn'), archiveMapDone=$('archiveMapDone'),
         stageToast=$('stageToast'),
+        proposalPanel=$('proposalPanel'), proposalList=$('proposalList'),
+        proposalStatus=$('proposalStatus'), proposalRun=$('proposalRun'),
+        proposalClose=$('proposalClose'), proposalAdd=$('proposalAdd'),
+        proposalAddText=$('proposalAddText'), proposalBtn=$('proposalBtn'),
         nameSessionBtn=$('nameSessionBtn'), deleteSessionBtn=$('deleteSessionBtn'),
         mapDeleteBtn=$('mapDeleteBtn'), reviewDelete=$('reviewDelete'),
         namePanel=$('namePanel'), nameInput=$('nameInput'), nameStatus=$('nameStatus'),
@@ -2258,6 +2311,7 @@
     nameSessionBtn.textContent = (arch ? (archiveMeta && archiveMeta.name) : liveSessionName)
       ? 'Rename this session' : 'Name this session';
     deleteSessionBtn.style.display = sessionId ? 'block' : 'none';
+    proposalBtn.style.display = sessionId ? 'block' : 'none';
     donePanel.classList.add('show');
   }
   endBtn.addEventListener('click', endSession);
@@ -3351,6 +3405,169 @@
     transcriptSegments=[]; transcriptActiveIdx=-1;
     renderStrip(); updatePinCount();
   }
+
+  // ---------- the proposal helper ----------
+  // Suggested proposal lines pulled out of what was said on site. Three things
+  // this panel exists to keep true, all of them enforced server-side and only
+  // DISPLAYED here:
+  //
+  //   the quote is the row. An item that cannot show the sentence it came from
+  //   is never stored, so everything on screen can be traced back to speech;
+  //   the quantity comes from the survey, never from the model -- a measured
+  //   polygon's area, a drawn line's length -- and says which;
+  //   nothing is accepted until somebody accepts it.
+  //
+  // The failure this guards against is confabulation, and it is a specific
+  // one: mulch, edging and spring cleanup belong to every landscaping
+  // conversation ever had, so they will be offered whether or not anyone said
+  // them. What the extraction threw away is reported at the bottom of the
+  // panel rather than hidden -- a prompt that has started inventing shows up
+  // there first.
+  let proposalItems=[], proposalBusy=false, proposalDropped=[];
+  function openProposal(){
+    if(!sessionId) return;
+    proposalPanel.classList.add('show');
+    proposalStatus.classList.remove('err');
+    proposalStatus.textContent='Loading…';
+    loadProposal();
+  }
+  function closeProposal(){ proposalPanel.classList.remove('show'); }
+  async function loadProposal(){
+    const res=await apiGet('/sessions/'+sessionId+'/proposal');
+    if(!res){
+      proposalStatus.classList.add('err');
+      proposalStatus.textContent='Could not load. Check the connection and try again.';
+      return;
+    }
+    proposalItems=res.items||[];
+    renderProposal();
+  }
+  function proposalQty(it){
+    if(it.quantity==null) return {text:'needs measuring', none:true};
+    const n=+it.quantity;
+    const num=(Math.abs(n)>=100 ? Math.round(n) : Math.round(n*10)/10);
+    return {text:num+(it.unit?' '+it.unit:''), none:false};
+  }
+  const QTY_FROM={measure:'from a measured area', sketch:'from a drawn line',
+                  object:'from a surveyed object', count:'counted'};
+  function renderProposal(){
+    proposalList.innerHTML='';
+    if(!proposalItems.length){
+      const d=document.createElement('div');
+      d.className='pi-drop';
+      d.innerHTML='Nothing yet. <b>Extract from transcript</b> reads what was said on this '
+        + 'visit and suggests lines \u2014 each one quoting the sentence it came from. '
+        + 'Anything it cannot quote is thrown away rather than shown.';
+      proposalList.appendChild(d);
+    }
+    proposalItems.forEach(it=>{
+      const row=document.createElement('div');
+      row.className='pi-item'+(it.status==='accepted'?' is-accepted':'')
+                  +(it.status==='rejected'?' is-rejected':'');
+      const q=proposalQty(it);
+      const head=document.createElement('div'); head.className='pi-head';
+      const d=document.createElement('div'); d.className='pi-desc'; d.textContent=it.description;
+      const qty=document.createElement('div');
+      qty.className='pi-qty'+(q.none?' none':''); qty.textContent=q.text;
+      head.appendChild(d); head.appendChild(qty);
+      row.appendChild(head);
+
+      const meta=document.createElement('div'); meta.className='pi-meta';
+      const bits=[];
+      if(it.category) bits.push(it.category);
+      // Where the number came from matters as much as the number.
+      if(it.quantity_source) bits.push(QTY_FROM[it.quantity_source]||it.quantity_source);
+      if(it.origin==='manual') bits.push('added by hand');
+      if(it.catalog_id && it.upright_catalog_items) bits.push('matched: '+it.upright_catalog_items.name);
+      else if(it.origin!=='manual') bits.push('no catalog match');
+      meta.textContent=bits.join(' \u00b7 ');
+      row.appendChild(meta);
+
+      if(it.quote){
+        const qt=document.createElement('div'); qt.className='pi-quote';
+        const who=it.speaker ? 'Speaker '+it.speaker : 'heard';
+        const at=it.quote_start_ms!=null ? ' \u00b7 '+fmtClock(it.quote_start_ms/1000) : '';
+        qt.innerHTML='\u201c'+escapeHtml(it.quote)+'\u201d<br><b>'+who+at+'</b>';
+        row.appendChild(qt);
+      }
+      if(it.note){
+        const n=document.createElement('div'); n.className='pi-meta'; n.textContent=it.note;
+        row.appendChild(n);
+      }
+
+      const acts=document.createElement('div'); acts.className='pi-acts';
+      const mk=(label,cls,fn)=>{ const b=document.createElement('button');
+        b.className='hist-btn'+(cls?' '+cls:''); b.textContent=label;
+        b.addEventListener('click',fn); acts.appendChild(b); return b; };
+      if(it.status!=='accepted') mk('Accept','go',()=>setProposalStatus(it,'accepted'));
+      if(it.status!=='rejected') mk('Reject','',()=>setProposalStatus(it,'rejected'));
+      if(it.status!=='pending') mk('Undo','',()=>setProposalStatus(it,'pending'));
+      mk('Remove','danger',()=>removeProposalItem(it));
+      row.appendChild(acts);
+      proposalList.appendChild(row);
+    });
+
+    // What the quote check threw away. Shown, not hidden: this is where a
+    // prompt that has started inventing becomes visible.
+    if(proposalDropped.length){
+      const d=document.createElement('div'); d.className='pi-drop';
+      d.innerHTML='<b>'+proposalDropped.length+' suggestion'
+        + (proposalDropped.length===1?'':'s')+' thrown away</b> \u2014 nothing in the '
+        + 'transcript said it. '
+        + proposalDropped.map(r=>escapeHtml(r.description)).join('; ')
+        + '.<br>Items that cannot quote the visit are never kept.';
+      proposalList.appendChild(d);
+    }
+  }
+  async function setProposalStatus(it, status){
+    it.status=status; renderProposal();
+    const row=await apiPatch('/proposal-items/'+it.id, {status:status});
+    if(!row){
+      proposalStatus.classList.add('err');
+      proposalStatus.textContent='That change did not save. Check the connection.';
+    }
+  }
+  async function removeProposalItem(it){
+    proposalItems=proposalItems.filter(x=>x.id!==it.id); renderProposal();
+    await apiDelete('/proposal-items/'+it.id);
+  }
+  async function runProposal(){
+    if(proposalBusy || !sessionId) return;
+    proposalBusy=true; proposalRun.disabled=true;
+    proposalStatus.classList.remove('err');
+    proposalStatus.textContent='Reading the transcript\u2026';
+    const r=await apiPostVerbose('/sessions/'+sessionId+'/proposal', {});
+    proposalBusy=false; proposalRun.disabled=false;
+    if(!r || !r.ok){
+      proposalStatus.classList.add('err');
+      proposalStatus.textContent=(r && r.body && r.body.error)
+        || 'Extraction failed. Check the connection and try again.';
+      return;
+    }
+    const res=r.body||{};
+    proposalDropped=res.rejected||[];
+    proposalStatus.textContent = (res.kept||0)+' suggested'
+      + (res.skippedAlreadyRuledOn ? ' \u00b7 '+res.skippedAlreadyRuledOn+' already ruled on' : '')
+      + (proposalDropped.length ? ' \u00b7 '+proposalDropped.length+' thrown away' : '');
+    await loadProposal();
+  }
+  async function addProposalItem(){
+    const t=proposalAddText.value.trim();
+    if(!t || !sessionId) return;
+    proposalAddText.value='';
+    const row=await apiPost('/sessions/'+sessionId+'/proposal-items', {description:t});
+    if(!row){
+      proposalStatus.classList.add('err');
+      proposalStatus.textContent='Could not add that line.';
+      return;
+    }
+    await loadProposal();
+  }
+  proposalBtn.addEventListener('click', openProposal);
+  proposalClose.addEventListener('click', closeProposal);
+  proposalRun.addEventListener('click', runProposal);
+  proposalAdd.addEventListener('click', addProposalItem);
+  proposalAddText.addEventListener('keydown', e=>{ if(e.key==='Enter') addProposalItem(); });
 
   // ---------- naming a session ----------
   // The property tag says WHERE the visit was; the name says what it WAS. One

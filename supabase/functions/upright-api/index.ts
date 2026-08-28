@@ -1,5 +1,9 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
+import {
+  buildProposalRows, extractProposalItems, measurableInventory,
+  normaliseForQuote, type Segment,
+} from "./proposal.ts";
 
 // Upright site-session app API.
 // The client (a static HTML page) never talks to Postgres/Storage directly —
@@ -12,6 +16,7 @@ const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const supabase = createClient(supabaseUrl, serviceRoleKey);
 
 const ASSEMBLYAI_API_KEY = Deno.env.get("ASSEMBLYAI_API_KEY");
+const ANTHROPIC_API_KEY = Deno.env.get("ANTHROPIC_API_KEY");
 
 const BUCKET = "upright-media";
 const CORS_HEADERS = {
@@ -321,6 +326,146 @@ Deno.serve(async (req) => {
       const { error } = await supabase.from("upright_sessions").delete().eq("id", sessionId);
       if (error) return err(error.message, 500);
       return json({ ok: true, deleted: sessionId, filesRemoved: removed });
+    }
+
+    // ---------- the proposal helper ----------
+
+    // GET /sessions/:id/proposal
+    if (req.method === "GET" && parts.length === 3 && parts[0] === "sessions" && parts[2] === "proposal") {
+      const sessionId = parts[1];
+      const { data, error } = await supabase.from("upright_proposal_items")
+        .select("*, upright_catalog_items(id,name,unit,category,external_id,source)")
+        .eq("session_id", sessionId).order("seq");
+      if (error) return err(error.message, 500);
+      return json({ items: data || [] });
+    }
+
+    // POST /sessions/:id/proposal  -> run the extraction
+    if (req.method === "POST" && parts.length === 3 && parts[0] === "sessions" && parts[2] === "proposal") {
+      if (!ANTHROPIC_API_KEY) {
+        return err("ANTHROPIC_API_KEY secret is not set on this Edge Function", 500);
+      }
+      const sessionId = parts[1];
+      const [{ data: segs }, { data: session }, { data: measures }, { data: sketches },
+             { data: objects }, { data: photos }, { data: existing }] = await Promise.all([
+        supabase.from("upright_transcript_segments").select("*").eq("session_id", sessionId).order("start_ms"),
+        supabase.from("upright_sessions").select("name, properties(address)").eq("id", sessionId).maybeSingle(),
+        supabase.from("upright_measures").select("*").eq("session_id", sessionId),
+        supabase.from("upright_sketches").select("*").eq("session_id", sessionId),
+        supabase.from("upright_objects").select("*").eq("session_id", sessionId),
+        supabase.from("upright_photos").select("id, note, offset_ms").eq("session_id", sessionId),
+        supabase.from("upright_proposal_items").select("id, description, status, quote")
+          .eq("session_id", sessionId),
+      ]);
+      const segments = (segs || []) as Segment[];
+      if (!segments.length) return err("this session has no transcript yet", 400);
+
+      const prop = firstOf<{ address: string }>((session as Record<string, unknown> | null)?.properties);
+      const inventory = measurableInventory(measures || [], sketches || [], objects || [], photos || []);
+
+      let raw;
+      try {
+        raw = await extractProposalItems(ANTHROPIC_API_KEY, segments, inventory, prop?.address || "");
+      } catch (e) {
+        return err(e instanceof Error ? e.message : String(e), 502);
+      }
+
+      const { kept, rejected } = buildProposalRows(raw, {
+        sessionId, segments,
+        measures: measures || [], sketches: sketches || [],
+        objects: objects || [], photos: photos || [],
+      });
+
+      // Re-running must not clobber a human's work: only PENDING extracted
+      // rows are replaced. Accepted, rejected and hand-added lines stay.
+      await supabase.from("upright_proposal_items").delete()
+        .eq("session_id", sessionId).eq("status", "pending").eq("origin", "extracted");
+      const ruled = (existing || []).filter((r) => r.status !== "pending");
+      const seen = new Set(ruled.map((r) => normaliseForQuote(String(r.description))));
+      const fresh = kept.filter((k) => !seen.has(normaliseForQuote(String(k.description))));
+      fresh.forEach((k, i) => { k.seq = i; });
+      let inserted: Record<string, unknown>[] = [];
+      if (fresh.length) {
+        const { data, error } = await supabase.from("upright_proposal_items").insert(fresh).select();
+        if (error) return err(error.message, 500);
+        inserted = data || [];
+      }
+      return json({
+        items: inserted,
+        suggested: raw.length,
+        kept: fresh.length,
+        skippedAlreadyRuledOn: kept.length - fresh.length,
+        rejected,
+      });
+    }
+
+    // POST /sessions/:id/proposal-items  -> add a line by hand
+    if (req.method === "POST" && parts.length === 3 && parts[0] === "sessions" && parts[2] === "proposal-items") {
+      const sessionId = parts[1];
+      const body = await req.json();
+      if (!body.description) return err("description required");
+      const { data: row, error } = await supabase.from("upright_proposal_items").insert({
+        session_id: sessionId, description: String(body.description).slice(0, 500),
+        category: body.category ?? null, unit: body.unit ?? null,
+        quantity: body.quantity ?? null, note: body.note ?? null,
+        // Typed by a person, so it needs no quote and starts accepted.
+        status: body.status ?? "accepted", origin: "manual",
+      }).select().single();
+      if (error) return err(error.message, 500);
+      return json(row);
+    }
+
+    // PATCH /proposal-items/:id
+    if (req.method === "PATCH" && parts.length === 2 && parts[0] === "proposal-items") {
+      const body = await req.json();
+      const update: Record<string, unknown> = {};
+      if (body.status !== undefined) update.status = String(body.status);
+      if (body.description !== undefined) update.description = String(body.description).slice(0, 500);
+      if (body.category !== undefined) update.category = body.category;
+      if (body.unit !== undefined) update.unit = body.unit;
+      if (body.quantity !== undefined) update.quantity = body.quantity;
+      if (body.note !== undefined) update.note = body.note;
+      if (body.catalogId !== undefined) update.catalog_id = body.catalogId;
+      if (!Object.keys(update).length) return err("nothing to update");
+      const { data: row, error } = await supabase.from("upright_proposal_items")
+        .update(update).eq("id", parts[1]).select().single();
+      if (error) return err(error.message, 500);
+      return json(row);
+    }
+
+    // DELETE /proposal-items/:id
+    if (req.method === "DELETE" && parts.length === 2 && parts[0] === "proposal-items") {
+      const { error } = await supabase.from("upright_proposal_items").delete().eq("id", parts[1]);
+      if (error) return err(error.message, 500);
+      return json({ ok: true, deleted: parts[1] });
+    }
+
+    // GET /catalog?q=   POST /catalog  (bulk upsert of a catalog snapshot)
+    if (req.method === "GET" && parts.length === 1 && parts[0] === "catalog") {
+      const q = (url.searchParams.get("q") || "").trim();
+      let query = supabase.from("upright_catalog_items").select("*").eq("active", true);
+      if (q) query = query.ilike("name", `%${q}%`);
+      const { data, error } = await query.order("name").limit(500);
+      if (error) return err(error.message, 500);
+      return json({ items: data || [] });
+    }
+    if (req.method === "POST" && parts.length === 1 && parts[0] === "catalog") {
+      const body = await req.json();
+      const rows = Array.isArray(body.items) ? body.items : null;
+      if (!rows) return err("items array required");
+      const clean = rows.filter((r: Record<string, unknown>) => r && r.name).map((r: Record<string, unknown>) => ({
+        external_id: r.externalId ?? null, source: r.source ?? "aspire",
+        kind: r.kind ?? "item", name: String(r.name), description: r.description ?? null,
+        unit: r.unit ?? null, category: r.category ?? null,
+        aliases: Array.isArray(r.aliases) ? r.aliases : null,
+        active: r.active === undefined ? true : !!r.active,
+        updated_at: new Date().toISOString(),
+      }));
+      if (!clean.length) return err("no usable rows");
+      const { error } = await supabase.from("upright_catalog_items")
+        .upsert(clean, { onConflict: "source,external_id", ignoreDuplicates: false });
+      if (error) return err(error.message, 500);
+      return json({ ok: true, upserted: clean.length });
     }
 
     // ---------- relative elevation survey ----------

@@ -33,7 +33,8 @@ key. Buckets are public-read.
 
 Tables are all prefixed `upright_`: `upright_sessions`, `upright_clips`,
 `upright_photos`, `upright_sketches`, `upright_measures`,
-`upright_transcript_segments`, `upright_elevation_sketches`, `upright_objects`.
+`upright_transcript_segments`, `upright_elevation_sketches`, `upright_objects`,
+`upright_proposal_items`, plus `upright_catalog_items` (not session-scoped).
 Storage bucket:
 `upright-media`.
 
@@ -64,9 +65,12 @@ replaced), `DELETE /objects/:id`,
 `DELETE /elevation-points/:id/shots` (all, or `?observationId=` for one
 position's sightings), `POST /elevation-points/:id/photo`,
 `PATCH /photos/:id`, `POST /photos/:id/image`,
-`POST /sessions/:id/transcribe`, `GET /sessions/:id/transcript`.
+`POST /sessions/:id/transcribe`, `GET /sessions/:id/transcript`,
+`GET|POST /sessions/:id/proposal` (extract from the transcript),
+`POST /sessions/:id/proposal-items`, `PATCH|DELETE /proposal-items/:id`,
+`GET|POST /catalog`.
 
-Requires secret `ASSEMBLYAI_API_KEY` (set in Supabase → Edge Functions →
+Requires secrets `ASSEMBLYAI_API_KEY` and `ANTHROPIC_API_KEY` (set in Supabase → Edge Functions →
 Secrets — NOT Vault, and NOT Vercel env vars; neither reaches the function).
 
 If editing the function, pull current source with `Supabase:get_edge_function`
@@ -758,6 +762,66 @@ nothing about it — `test13` sat broken through two sweeps after Open stopped
 landing in Review, and the totals looked fine because its seventeen checks
 simply stopped existing. `runsweep.sh` now names every test that produced no
 checks and flags any that is not one of the known screenshot/probe scripts.
+
+## The proposal helper
+
+Suggested proposal lines pulled out of what was said on site. `POST
+/sessions/:id/proposal` sends the transcript to Claude (`claude-opus-5`,
+adaptive thinking, schema-constrained output) and writes back suggestions;
+`upright_proposal_items` holds them. The code lives in
+`supabase/functions/upright-api/proposal.ts`, split out because it is the one
+part of that function with real logic rather than routing.
+
+**Three rules make it honest, and all three are enforced in code rather than
+asked for in the prompt.** A prompt is a request; a check is a guarantee.
+
+- **Evidence or it does not exist.** Every item must carry a verbatim quote,
+  and `buildProposalRows()` verifies that quote appears in the transcript
+  before the row is written. This is the whole safety mechanism, because the
+  failure mode here is specific and predictable: *mulch, edging, spring
+  cleanup* belong to every landscaping conversation ever had, so a model will
+  offer them whether or not anybody said them. Comparison is normalised for
+  case and punctuation — speech-to-text should not be what rejects a real
+  quote — but **a paraphrase is refused as firmly as an invention**. "We would"
+  for "we'd" is a tidy-up, and tidying speech into something nobody quite said
+  is how a proposal line stops being evidence.
+- **Quantities come from the survey, never from the model.** The model may
+  point at a measured thing by ref (`measure:…`, `sketch:…`, `object:…`); the
+  number is then read off *our* row — a polygon's area, a drawn line's length.
+  A ref naming something that does not exist yields **no** quantity rather than
+  a number nobody measured, and an item with nothing measured says *needs
+  measuring*.
+- **Nothing is accepted.** Everything lands `pending`. Re-running replaces only
+  pending extracted rows, so a second pass never clobbers what a human has
+  ruled on or typed.
+
+**What the quote check throws away is reported, not swallowed** — in the status
+line and at the foot of the panel. Silently discarding half the output would
+hide a prompt that had started confabulating; that list is where it shows up
+first.
+
+The catalog (`upright_catalog_items`) is the **second pass** and is deliberately
+optional: with the table empty every item stays free text, which is what makes
+this degrade gracefully rather than silently dropping whatever the catalog does
+not cover. Both halves are kept on a matched row — the phrase somebody actually
+said *and* the catalog line — never one replacing the other.
+
+`test59.js` covers the checks without spending a token (`proposal.ts` is a plain
+module, so node imports it directly): a confabulated item is dropped, a
+paraphrase is dropped, punctuation and casing are not, areas and lengths come
+off the linked rows, a bogus ref yields nothing. `test60.js` covers the panel.
+
+**Requires secret `ANTHROPIC_API_KEY`** (Supabase → Edge Functions → Secrets,
+same place as `ASSEMBLYAI_API_KEY` — NOT Vault, NOT Vercel env). Without it the
+endpoint returns a plain "not set" message rather than failing quietly.
+
+**Unproven, and this is the important part.** There is no transcript corpus to
+judge it against: 13 sessions have completed transcripts, 85 segments between
+them, and the longest is 4½ minutes of a conversation about a birthday shoebox.
+Nothing in the database is a site walkthrough. The plumbing and the checks are
+tested; whether the extraction finds anything worth quoting is entirely unknown
+until somebody records a real visit end to end — which is also the 30–60 minute
+soak test already on the needs-testing list.
 
 ## Data durability — important
 
