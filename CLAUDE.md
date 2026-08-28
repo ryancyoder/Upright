@@ -1103,6 +1103,15 @@ observation position cancel the device's own height, so a target is
 `d_t·tan(θ_t) − d_a·tan(θ_a)` relative to the anchor. That cancellation is
 why no instrument height is stored anywhere.
 
+**`elevationOf()` and `slopeOf()` are mirrored in MasterDash.** Its Plan view
+draws this survey as a layer under the take-off, and `lib/estimator/survey.ts`
+there is a port of these two functions. Change the maths here and that copy is
+wrong until it follows — its tests pin the numbers against a real
+three-observation survey, so it should fail rather than drift silently, but it
+will not update itself. The intended fix is to move the derivation into
+`upright-api` so both apps read one answer; until then, treat this pair as
+having a second home.
+
 **Elevation is derived, never stored.** `upright_elevation_points` holds
 positions, `upright_elevation_shots` holds sightings, and `elevationOf()`
 computes the number live. Drag a pin and every dependent elevation corrects
