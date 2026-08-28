@@ -200,18 +200,25 @@ export function buildProposalRows(
 }
 
 // Turn an upstream failure into something a person in a yard can act on.
-// The three that actually happen have different fixes and none of them is a
+// The ones that actually happen have different fixes and none of them is a
 // code change, so saying which one it is saves a round trip every time.
 export function anthropicErrorMessage(status: number, body: string) {
   const b = String(body || "");
   if (status === 401 || status === 403) {
     return "Anthropic rejected the API key (" + status + "). Check ANTHROPIC_API_KEY in " +
-      "Supabase \u2192 Edge Functions \u2192 Secrets \u2014 a trailing space when it was pasted " +
+      "Supabase → Edge Functions → Secrets — a trailing space when it was pasted " +
       "is the usual cause.";
   }
   if (/credit balance is too low|insufficient_quota|billing/i.test(b)) {
     return "The Anthropic account has no credit on it. Top it up at " +
-      "console.anthropic.com \u2192 Billing, then try again.";
+      "console.anthropic.com → Billing, then try again.";
+  }
+  if (/anthropic-workspace-id is required|identity-linked/i.test(b)) {
+    return "This is an identity-linked API key, so it needs to be told which workspace " +
+      "to act in. Add ANTHROPIC_WORKSPACE_ID (it looks like wrkspc_…, from the " +
+      "Anthropic Console under Settings → Workspaces) alongside ANTHROPIC_API_KEY in " +
+      "Supabase → Edge Functions → Secrets. A plain workspace API key needs no " +
+      "such header and is the other way out.";
   }
   if (status === 429) {
     return "Anthropic is rate-limiting this key (429). Wait a moment and try again.";
@@ -231,6 +238,7 @@ export function anthropicErrorMessage(status: number, body: string) {
 
 export async function extractProposalItems(
   apiKey: string,
+  workspaceId: string | undefined,
   segments: Segment[],
   inventory: Record<string, unknown>[],
   addressLine: string,
@@ -255,13 +263,18 @@ export async function extractProposalItems(
         `Transcript:\n${transcript}`,
     }],
   };
+  const headers: Record<string, string> = {
+    "x-api-key": apiKey,
+    "anthropic-version": "2023-06-01",
+    "content-type": "application/json",
+  };
+  // An identity-linked key belongs to a person rather than to a workspace, so
+  // it will not act until it is told which workspace the request is for. A
+  // plain workspace key does not need this and ignores it.
+  if (workspaceId) headers["anthropic-workspace-id"] = workspaceId;
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
-    headers: {
-      "x-api-key": apiKey,
-      "anthropic-version": "2023-06-01",
-      "content-type": "application/json",
-    },
+    headers,
     body: JSON.stringify(body),
   });
   if (!res.ok) {
@@ -284,4 +297,3 @@ export async function extractProposalItems(
   console.log(`[proposal] model returned ${items.length} item(s) from ${segments.length} segment(s)`);
   return items;
 }
-

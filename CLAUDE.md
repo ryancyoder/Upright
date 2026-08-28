@@ -72,11 +72,13 @@ position's sightings), `POST /elevation-points/:id/photo`,
 
 Requires secrets `ASSEMBLYAI_API_KEY` and `ANTHROPIC_API_KEY` (set in Supabase → Edge Functions →
 Secrets — NOT Vault, and NOT Vercel env vars; neither reaches the function).
+`ANTHROPIC_WORKSPACE_ID` is needed **only** if that Anthropic key is
+identity-linked — see *The proposal helper* below.
 
 If editing the function, pull current source with `Supabase:get_edge_function`
 rather than reconstructing it. The source is now vendored at
 `supabase/functions/upright-api/index.ts` so edits are diffable; keep it in
-step with what is deployed. Currently **v25**, and it is now two files:
+step with what is deployed. Currently **v28**, and it is now two files:
 `index.ts` (routing) and `proposal.ts` (the proposal helper's logic).
 
 **Replacing an image writes a NEW storage path, never an upsert in place.**
@@ -815,6 +817,24 @@ off the linked rows, a bogus ref yields nothing. `test60.js` covers the panel.
 **Requires secret `ANTHROPIC_API_KEY`** (Supabase → Edge Functions → Secrets,
 same place as `ASSEMBLYAI_API_KEY` — NOT Vault, NOT Vercel env). Without it the
 endpoint returns a plain "not set" message rather than failing quietly.
+
+**And `ANTHROPIC_WORKSPACE_ID` if — and only if — that key is identity-linked.**
+An identity-linked key belongs to a person rather than to a workspace, so it
+cannot say on its own which workspace a request acts in; Anthropic rejects it
+with a **400** until an `anthropic-workspace-id` header (a `wrkspc_…` id, from
+the Console under Settings → Workspaces) says so. A plain workspace key carries
+that implicitly and needs no header, which is the other way out. The header is
+sent only when the secret is present, so setting it wrongly on a plain key is
+the one thing to avoid. Edge Functions read secrets at invocation, so neither
+needs a redeploy.
+
+**Every Anthropic failure is named, not swallowed.** `anthropicErrorMessage()`
+turns the status and body into the thing to *do* — a rejected key, a low credit
+balance, a rate limit, a workspace without Opus 5, the missing workspace id
+above — and the panel shows it in place of the idle "Nothing yet" text. That
+distinction is the whole point: an extraction that never ran and a visit with
+nothing in it look identical otherwise, and reading the first as the second is
+how you conclude the tool does not work.
 
 **Unproven, and this is the important part.** There is no transcript corpus to
 judge it against: 13 sessions have completed transcripts, 85 segments between

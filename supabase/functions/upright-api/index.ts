@@ -17,6 +17,11 @@ const supabase = createClient(supabaseUrl, serviceRoleKey);
 
 const ASSEMBLYAI_API_KEY = Deno.env.get("ASSEMBLYAI_API_KEY");
 const ANTHROPIC_API_KEY = Deno.env.get("ANTHROPIC_API_KEY");
+// Only needed when the key above is identity-linked -- such a key belongs to a
+// person rather than a workspace and will not act until it is told which
+// workspace the request is for. A plain workspace key ignores it, so absent is
+// fine.
+const ANTHROPIC_WORKSPACE_ID = Deno.env.get("ANTHROPIC_WORKSPACE_ID");
 
 const BUCKET = "upright-media";
 const CORS_HEADERS = {
@@ -56,6 +61,8 @@ function embeddedCount(v: unknown): number {
 }
 
 console.log("ASSEMBLYAI_API_KEY present:", !!ASSEMBLYAI_API_KEY, ASSEMBLYAI_API_KEY ? `(len ${ASSEMBLYAI_API_KEY.length}, starts ${ASSEMBLYAI_API_KEY.slice(0,4)})` : "");
+console.log("ANTHROPIC_API_KEY present:", !!ANTHROPIC_API_KEY, ANTHROPIC_API_KEY ? `(len ${ANTHROPIC_API_KEY.length}, starts ${ANTHROPIC_API_KEY.slice(0,7)})` : "");
+console.log("ANTHROPIC_WORKSPACE_ID present:", !!ANTHROPIC_WORKSPACE_ID);
 
 // ---------- AssemblyAI transcription ----------
 // Submission and polling are both driven by short-lived client calls rather
@@ -365,7 +372,8 @@ Deno.serve(async (req) => {
 
       let raw;
       try {
-        raw = await extractProposalItems(ANTHROPIC_API_KEY, segments, inventory, prop?.address || "");
+        raw = await extractProposalItems(
+          ANTHROPIC_API_KEY, ANTHROPIC_WORKSPACE_ID, segments, inventory, prop?.address || "");
       } catch (e) {
         return err(e instanceof Error ? e.message : String(e), 502);
       }
