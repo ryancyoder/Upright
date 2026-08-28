@@ -76,7 +76,8 @@ Secrets — NOT Vault, and NOT Vercel env vars; neither reaches the function).
 If editing the function, pull current source with `Supabase:get_edge_function`
 rather than reconstructing it. The source is now vendored at
 `supabase/functions/upright-api/index.ts` so edits are diffable; keep it in
-step with what is deployed. Currently **v24**.
+step with what is deployed. Currently **v25**, and it is now two files:
+`index.ts` (routing) and `proposal.ts` (the proposal helper's logic).
 
 **Replacing an image writes a NEW storage path, never an upsert in place.**
 Storage public URLs are cached by the browser and by the CDN in front of the
