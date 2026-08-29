@@ -312,6 +312,12 @@
   /* 190px of mini pane has no room for a column, same as the map toolbar. */
   .review-pane.in-mini .mapwrap{--insp-w:0px;}
   .review-pane.in-mini .pin-inspector{display:none;}
+  .takeoff-label{
+    background:rgba(10,10,8,.72); border:none; box-shadow:none;
+    color:#eae7de; font-size:11px; font-weight:700; padding:2px 6px;
+    border-radius:6px; white-space:nowrap;
+  }
+  .takeoff-label::before{ display:none; }
   .map-toolbar{
     flex:0 0 auto;
     display:flex; align-items:center; gap:8px;
@@ -1303,6 +1309,7 @@
           <button class="mt-btn" id="scalePlanBtn">Set scale</button>
           <button class="mt-btn" id="lockPlanBtn">Lock</button>
         </div>
+        <button class="mt-btn" id="takeoffBtn">Take-off</button>
         <button class="mt-btn" id="exportPinsBtn">Export pins</button>
         <button class="mt-btn" id="centerBtn">My location</button>
         <button class="mt-btn" id="sketchBtn">Sketch</button>
@@ -1711,7 +1718,7 @@
         importPlanBtn=$('importPlanBtn'), planFile=$('planFile'), overlayControls=$('overlayControls'),
         opSlider=$('opSlider'), scaleSlider=$('scaleSlider'), rotSlider=$('rotSlider'),
         lockPlanBtn=$('lockPlanBtn'), scalePlanBtn=$('scalePlanBtn'), exportPinsBtn=$('exportPinsBtn'), centerBtn=$('centerBtn'), lockExtentBtn=$('lockExtentBtn'),
-        basemapBtn=$('basemapBtn'), elevBtn=$('elevBtn'), cutsBtn=$('cutsBtn'),
+        basemapBtn=$('basemapBtn'), takeoffBtn=$('takeoffBtn'), elevBtn=$('elevBtn'), cutsBtn=$('cutsBtn'),
         elevPanel=$('elevPanel'), evStage=$('evStage'), evSvg=$('evSvg'), viewSwitch=$('viewSwitch'),
         evPlanImg=$('evPlanImg'), evPhotoImg=$('evPhotoImg'), evNote=$('evNote'), evEmpty=$('evEmpty'),
         evTabTop=$('evTabTop'), evExagSlider=$('evExagSlider'), evExagVal=$('evExagVal'),
@@ -9225,6 +9232,99 @@
                            : 'Satellite only';
     basemapBtn.classList.toggle('active', basemapMode==='plan');
   }
+  // ---------- the estimator's take-off, as a reference layer ----------
+  //
+  // The beds and runs drawn in MasterDash, shown on this map. The rings arrive
+  // ALREADY RESOLVED from `/takeoff` — that app writes its outlines into the
+  // estimate at save with any curved edges worked out — so nothing here knows
+  // what a spline is. Two apps computing the same bed's outline separately
+  // would eventually draw two different beds and price one of them.
+  //
+  // Read-only, and quieter than a pin on purpose. This is the desk's drawing
+  // shown on site for reference; the survey and the photos are what this app
+  // is for, and a bed fill that competed with them would be in the way.
+  let takeoffLayer=null, takeoffOn=false, takeoffData=null, takeoffLoading=false;
+
+  function takeoffLabel(s){
+    const n = Math.round(s.measurement||0).toLocaleString();
+    const unit = s.unit==='ln_ft' ? 'ln ft' : 'sq ft';
+    const what = s.assembly || 'Measure only';
+    return s.loads>0 ? what+' \u00b7 '+n+' '+unit+' \u00b7 '+s.loads+' load'+(s.loads===1?'':'s')
+                     : what+' \u00b7 '+n+' '+unit;
+  }
+
+  function drawTakeoffs(){
+    if(takeoffLayer){ map.removeLayer(takeoffLayer); takeoffLayer=null; }
+    if(!takeoffOn || !takeoffData) return 0;
+    // Padded, so a bed just off the edge of the screen still counts as here.
+    const view = map.getBounds().pad(0.5);
+    const group = L.layerGroup();
+    let shown = 0;
+    takeoffData.forEach(t=>{
+      (t.shapes||[]).forEach(sh=>{
+        const ll = (sh.ring||[]).map(p=>[p.lat, p.lng]);
+        if(ll.length < 2) return;
+        // Geography is the join. One session in a hundred carries a property
+        // id, but both apps hold the same lat/lng, so "is it on this yard" is
+        // the question that actually answers.
+        if(!ll.some(pt=> view.contains(pt))) return;
+        shown++;
+        const style = { color: sh.color || '#14b8a6', weight: 2.5, opacity: .9,
+                        fillOpacity: sh.type==='area' ? .14 : 0, interactive: false };
+        const layer = sh.type==='area' ? L.polygon(ll, style) : L.polyline(ll, style);
+        layer.bindTooltip(takeoffLabel(sh), {permanent:true, direction:'center',
+                                             className:'takeoff-label', opacity:1});
+        group.addLayer(layer);
+      });
+    });
+    takeoffLayer = group.addTo(map);
+    return shown;
+  }
+
+  async function toggleTakeoff(){
+    if(takeoffOn){
+      takeoffOn = false;
+      drawTakeoffs();
+      takeoffBtn.classList.remove('active');
+      return;
+    }
+    if(!takeoffData && !takeoffLoading){
+      takeoffLoading = true;
+      takeoffBtn.textContent = 'Loading\u2026';
+      const res = await apiGet('/takeoff?limit=20');
+      takeoffLoading = false;
+      takeoffBtn.textContent = 'Take-off';
+      // apiGet warns and returns null; no take-offs and no signal look the
+      // same to the button, so say which.
+      if(!res){ modeMsg.innerHTML='<b>Could not reach the estimator</b> \u2014 take-offs need signal'; return; }
+      takeoffData = Array.isArray(res.takeoffs) ? res.takeoffs : [];
+    }
+    takeoffOn = true;
+    takeoffBtn.classList.add('active');
+    bindTakeoffPan();
+    const shown = drawTakeoffs();
+    if(shown === 0){
+      modeMsg.innerHTML = takeoffData.length
+        ? '<b>No take-off on this yard</b> \u2014 '+takeoffData.length+' drawn elsewhere'
+        : '<b>Nothing drawn yet</b> \u2014 draw a bed in the estimator first';
+    } else {
+      modeMsg.textContent = shown+' shape'+(shown===1?'':'s')+' from the estimator';
+    }
+  }
+
+  takeoffBtn.addEventListener('click', ()=>{ toggleTakeoff(); });
+
+  // Bound on first use, not at load. `map` is null until initMap() runs, and
+  // this file is one long script — a throw here takes out everything declared
+  // after it, which is most of the app.
+  let takeoffPanBound = false;
+  function bindTakeoffPan(){
+    if(takeoffPanBound || !map) return;
+    takeoffPanBound = true;
+    // Panning to another part of the property brings its beds in.
+    map.on('moveend', ()=>{ if(takeoffOn) drawTakeoffs(); });
+  }
+
   basemapBtn.addEventListener('click', ()=>{
     basemapMode = basemapMode==='both' ? 'plan' : basemapMode==='plan' ? 'satellite' : 'both';
     applyBasemap();

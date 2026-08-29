@@ -68,7 +68,8 @@ position's sightings), `POST /elevation-points/:id/photo`,
 `POST /sessions/:id/transcribe`, `GET /sessions/:id/transcript`,
 `GET|POST /sessions/:id/proposal` (extract from the transcript),
 `POST /sessions/:id/proposal-items`, `PATCH|DELETE /proposal-items/:id`,
-`GET|POST /catalog`.
+`GET|POST /catalog`,
+`GET /takeoff?property=&limit=` (MasterDash's drawn beds, rings pre-resolved).
 
 Requires secrets `ASSEMBLYAI_API_KEY` and `ANTHROPIC_API_KEY` (set in Supabase → Edge Functions →
 Secrets — NOT Vault, and NOT Vercel env vars; neither reaches the function).
@@ -104,6 +105,29 @@ Audio does not need it — it is written once, at the end of a session.
 
 Old rows still carry unversioned paths and still resolve; nothing needed
 migrating.
+
+### The estimator's take-off, as a reference layer
+
+**Take-off** on the map toolbar draws the beds and runs from MasterDash's Plan
+view — read-only, quieter than a pin, labelled with the assembly, the
+measurement and the load count.
+
+The rings arrive **already resolved** from `GET /takeoff`. MasterDash writes
+its outlines into `quick_estimates.lines.takeoff` at save with any curved edges
+worked out, so nothing here knows what a spline is. Two apps computing the same
+bed's outline separately would eventually draw two different beds and price one
+of them.
+
+**Geography is the join, not the property.** One session in a hundred carries a
+`property_id`, so matching on it would find almost nothing — but both apps now
+hold the same lat/lng, so the client keeps whatever rings fall in the current
+view (padded, so a bed just off screen still counts). The endpoint filters by
+property when one is given and otherwise returns the newest few.
+
+The pan handler is bound on **first use, not at load**. `map` is null until
+`initMap()` runs and this is one long script, so a throw at load takes out
+everything declared after it — which is most of the app. That is not
+hypothetical: the first version of this did exactly that.
 
 ## Recording mode
 

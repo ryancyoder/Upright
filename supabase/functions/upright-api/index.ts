@@ -254,6 +254,59 @@ Deno.serve(async (req) => {
       return json({ properties: data || [] });
     }
 
+    // GET /takeoff?property=&limit=
+    //
+    // The estimator's drawn beds and runs, for showing on the map. The rings
+    // are ALREADY RESOLVED — MasterDash writes them into `quick_estimates.lines`
+    // as `takeoff` at save, with any curved edges worked out — so nothing here
+    // and nothing in the client has to know what a Catmull-Rom spline is. Two
+    // apps computing the same bed's outline separately would eventually draw
+    // two different beds and price one of them.
+    //
+    // Filtered by property when the session has one; otherwise the newest few,
+    // and the client keeps whatever is geographically near it. That is not
+    // laziness — one Upright session in a hundred carries a property_id, and
+    // both apps now hold the same lat/lng, so the ground is the more reliable
+    // join.
+    if (req.method === "GET" && parts.length === 1 && parts[0] === "takeoff") {
+      const propertyId = parseInt(url.searchParams.get("property") || "", 10);
+      const limit = Math.min(
+        Math.max(parseInt(url.searchParams.get("limit") || "20", 10) || 20, 1),
+        100,
+      );
+      // Scanned wide and filtered here rather than with a jsonb filter in the
+      // query, then trimmed — so `limit` means "this many take-offs" and not
+      // "this many estimates, most of which have nothing drawn". Most rows are
+      // empty drafts, so a filter applied after the limit would return almost
+      // nothing.
+      let query = supabase
+        .from("quick_estimates")
+        .select("id, job_name, property_id, updated_at, lines, properties(address)");
+      if (Number.isInteger(propertyId) && propertyId > 0) {
+        query = query.eq("property_id", propertyId);
+      }
+      const { data, error } = await query
+        .order("updated_at", { ascending: false })
+        .limit(200);
+      if (error) return err(error.message, 500);
+
+      const takeoffs = (data || []).map((row: Record<string, unknown>) => {
+        const lines = (row.lines ?? {}) as Record<string, unknown>;
+        const takeoff = (lines.takeoff ?? {}) as Record<string, unknown>;
+        const prop = firstOf<{ address: string }>(row.properties);
+        return {
+          id: row.id,
+          jobName: row.job_name || null,
+          propertyId: row.property_id ?? null,
+          propertyAddress: prop ? prop.address : null,
+          updatedAt: row.updated_at,
+          shapes: Array.isArray(takeoff.shapes) ? takeoff.shapes : [],
+        };
+      }).filter((t) => t.shapes.length > 0).slice(0, limit);
+
+      return json({ takeoffs });
+    }
+
     // GET /sessions/:id
     if (req.method === "GET" && parts.length === 2 && parts[0] === "sessions") {
       const sessionId = parts[1];
