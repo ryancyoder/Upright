@@ -55,6 +55,28 @@ function extFromMime(mime: string, fallback: string) {
   if (mime.includes("jpeg") || mime.includes("jpg")) return "jpg";
   return fallback;
 }
+/**
+ * A tile label, from a catalogue name.
+ *
+ * The names are written for an estimate line -- "Mulch Bed Installation -
+ * Standard" -- and a thumb-sized tile in a yard has room for "Mulch Bed". The
+ * grade is everything after the en dash, and "Installation" is what every one
+ * of them is, so neither says anything a crew needs while pointing a camera.
+ *
+ *   Mulch Bed Installation - Standard        -> Mulch Bed
+ *   Decorative Stone Bed Installation - ...  -> Decorative Stone Bed
+ *   French Drain - Standard                  -> French Drain
+ *   Planting - Landscape Bed                 -> Planting
+ *
+ * Note the last one: the part after the dash is a grade there too, not a name.
+ * Taking the head of the dash is one rule that reads all seven correctly.
+ */
+export function shortAssemblyName(name: string): string {
+  const head = String(name || "").split(/\s[–—-]\s/)[0].trim();
+  const short = head.replace(/\s+Installation$/i, "").trim();
+  return short || String(name || "").trim();
+}
+
 function firstOf<T>(v: unknown): T | null {
   if (Array.isArray(v)) return (v.length ? v[0] as T : null);
   return (v as T) ?? null;
@@ -293,6 +315,36 @@ Deno.serve(async (req) => {
       const { data, error } = await query.order("address").limit(200);
       if (error) return err(error.message, 500);
       return json({ properties: data || [] });
+    }
+
+    // GET /assemblies -- the take-off types, for tagging a photo in the field
+    //
+    // SERVED FROM HERE SO THERE IS ONE LIST. `assemblies` is a real table that
+    // MasterDash already snapshots into its own bundle (it is a static export
+    // and cannot query a table with RLS on and no policies). Upright has no
+    // build step to snapshot anything into, and a hand-kept copy of a list
+    // that must agree between two apps is precisely how the elevation maths
+    // ended up with a second home. So the function that already holds the
+    // service-role key hands the same rows to whoever asks.
+    //
+    // The SHORT name is derived here rather than in either client, for the
+    // same reason: "Mulch Bed Installation - Standard" is not a tile label,
+    // and two apps shortening it separately would eventually shorten it
+    // differently.
+    if (req.method === "GET" && parts.length === 1 && parts[0] === "assemblies") {
+      const { data, error } = await supabase
+        .from("assemblies")
+        .select("id,name,unit_of_work,operation_stage")
+        .order("name");
+      if (error) return err(error.message, 500);
+      return json({
+        assemblies: (data || []).map((a) => ({
+          id: a.id,
+          name: a.name,
+          shortName: shortAssemblyName(a.name as string),
+          unitOfWork: a.unit_of_work,
+        })),
+      });
     }
 
     // ---------- matching a session to the property it was recorded at ------
@@ -1099,6 +1151,14 @@ Deno.serve(async (req) => {
         // like the elevation shot headings -- never an input to a measurement.
         heading_deg: meta.headingDeg ?? null,
         heading_acc_deg: meta.headingAccDeg ?? null,
+        // What the crew said this is a picture OF, tagged at the shutter.
+        // assembly_item is the grouping key -- which mulch bed of this visit --
+        // and several photos of one bed share it. Everything shown from these
+        // ("Mulch Bed 2", "1 of 3") is derived at draw time, so deleting a
+        // photo renumbers the rest instead of leaving a gap.
+        assembly_id: meta.assemblyId ?? null,
+        assembly_name: meta.assemblyName ?? null,
+        assembly_item: meta.assemblyItem ?? null,
       }).select().single();
       if (insErr) return err(insErr.message, 500);
       return json({ ...row, url: publicUrl(path) });
@@ -1114,6 +1174,11 @@ Deno.serve(async (req) => {
       if (body.note !== undefined) update.note = body.note;
       if (body.manuallyAdjusted !== undefined) update.manually_adjusted = body.manuallyAdjusted;
       if (body.hasDrawing !== undefined) update.has_drawing = body.hasDrawing;
+      // Retagging at the desk: null clears the tag, which is how a photo that
+      // was tagged by a mis-aimed thumb gets untagged without deleting it.
+      if (body.assemblyId !== undefined) update.assembly_id = body.assemblyId;
+      if (body.assemblyName !== undefined) update.assembly_name = body.assemblyName;
+      if (body.assemblyItem !== undefined) update.assembly_item = body.assemblyItem;
       const { data: row, error } = await supabase.from("upright_photos").update(update).eq("id", photoId).select().single();
       if (error) return err(error.message, 500);
       return json(row);

@@ -570,6 +570,49 @@
   .grade-btn.show{display:block;}
   .grade-btn:active{transform:scale(0.92);}
   .grade-btn.on{background:rgba(196,67,43,0.92); border-color:#fff;}
+  /* Take-off tiles, stacked up the RIGHT edge above the shutter (right:18px,
+     bottom:80px, 76px across) so the same thumb that fires the shutter can
+     reach them without crossing the screen. They scroll rather than shrink:
+     seven assemblies at a legible size is taller than a phone, and a tile too
+     small to read with a glove on is worse than one that needs a scroll.
+     Capped short of the header so the state pill stays visible -- believing
+     you are recording when you are not is the expensive mistake, and a column
+     of tiles must never be what hides that. */
+  .asm-col{
+    position:absolute; right:18px; bottom:170px; z-index:22;
+    display:none; flex-direction:column; gap:6px; align-items:flex-end;
+    max-height:calc(100% - 260px); overflow-y:auto;
+    -webkit-overflow-scrolling:touch;
+  }
+  .asm-col.show{display:flex;}
+  .asm-tile{
+    min-width:96px; max-width:132px; padding:8px 10px;
+    border-radius:12px; border:2px solid rgba(255,255,255,0.55);
+    background:rgba(20,26,22,0.72); color:#fff;
+    font-size:12px; font-weight:700; line-height:1.15; text-align:right;
+    backdrop-filter:blur(2px);
+    box-shadow:0 2px 10px rgba(0,0,0,0.45);
+  }
+  .asm-tile:active{transform:scale(0.94);}
+  .asm-tile.on{background:rgba(90,122,99,0.95); border-color:#fff;}
+  /* The armed bed, and the only way to start the next one. Photographs taken
+     while a tile is armed all belong to ONE bed, so without this there is no
+     way to say "that is a different bed" without disarming and re-arming --
+     which would read as the same bed to anything downstream. */
+  .asm-armed{
+    min-width:96px; max-width:160px; padding:8px 10px;
+    border-radius:12px; border:2px solid rgba(255,255,255,0.9);
+    background:rgba(90,122,99,0.95); color:#fff; text-align:right;
+    box-shadow:0 2px 10px rgba(0,0,0,0.45);
+  }
+  .asm-armed .lbl{font-size:12px; font-weight:700; line-height:1.2;}
+  .asm-armed .cnt{font-size:11px; opacity:0.85; margin-top:1px;}
+  .asm-armed .acts{display:flex; gap:6px; margin-top:6px; justify-content:flex-end;}
+  .asm-armed button{
+    border-radius:8px; border:1px solid rgba(255,255,255,0.6);
+    background:rgba(255,255,255,0.14); color:#fff;
+    font-size:11px; font-weight:700; padding:4px 7px;
+  }
   /* Dwell progress: fills while the crosshair is held steady, and the shot
      fires when it completes. */
   .sight-dwell{
@@ -1258,6 +1301,7 @@
     </div>
     <button class="snap-btn" id="snapBtn" aria-label="Snap photo pin"></button>
     <button class="grade-btn" id="gradeBtn">SHOOT<br>GRADE</button>
+    <div class="asm-col" id="asmCol"></div>
     <div class="pin-count" id="pinCount"></div>
     <div class="snap-flash" id="snapFlash"></div>
 
@@ -2178,6 +2222,9 @@
     audioChunks=[]; clips=[]; currentClipChunks=[]; currentClipStart=null;
     sessionId=uuid(); sessionStartedAt=new Date().toISOString(); sessionWallMs=null;
     liveSessionName=null; liveSessionAddress=null;
+    // Tags belong to a visit: a tile left armed at the end of one must not
+    // silently tag the next yard's photographs.
+    armedAssembly=null; assemblyItemSeq=0;
     sessionT0=Date.now();
     apiPost('/sessions', { id: sessionId, startedAt: sessionStartedAt });
 
@@ -2200,6 +2247,10 @@
     clockTimer=setInterval(updateClock,250);
     setState('paused'); showMap(true);
     refreshRecUI();
+    // Fetched once a visit is under way rather than at load: it is one request
+    // and there is no point spending it on a page nobody has started a session
+    // on. Failure is silent — see assemblyTypesLoad().
+    assemblyTypesLoad();
   }
   function resumeRec(){
     if(!sessionActive || !isPausedFlat) return;
@@ -2670,6 +2721,134 @@
   function updatePinCount(){
     if(pins.length){ pinCount.textContent = pins.length + ' pin' + (pins.length>1?'s':''); pinCount.classList.add('show'); }
   }
+  // ---------- tagging a pin with the take-off it is a picture of ----------
+  //
+  // A crew standing in a yard already knows "this is a mulch bed". Until now
+  // that died at the shutter and somebody reconstructed it at a desk from the
+  // picture. The tiles say it once, at the moment it is obvious.
+  //
+  // THE LIST IS FETCHED, NEVER KEPT HERE. `assemblies` is a real table and the
+  // Edge Function serves it at GET /assemblies, short names and all. A copy in
+  // this file would be a second home for a list that must agree with
+  // MasterDash — the exact shape of the elevation-maths duplication the notes
+  // already regret. No list, no drift; and with no signal there are simply no
+  // tiles, which is the honest failure.
+  let assemblyTypes = [];
+  // {id, name, item} — the bed currently being photographed, or null.
+  let armedAssembly = null;
+  // Monotonic per session, so a group key is never reused even if a bed's
+  // photos are all deleted. It is a KEY, not a display number; see below.
+  let assemblyItemSeq = 0;
+
+  /**
+   * "Mulch Bed 2 · 1 of 3", derived — never stored.
+   *
+   * Same rule as elevationOf() and slopeOf(): the pin stores which bed it
+   * belongs to (`assemblyItem`, a grouping key that nothing else can express)
+   * and every number shown is worked out from the pins that exist right now.
+   * Delete the second of three photos and the third becomes "2 of 2"; delete a
+   * whole bed and the beds after it move up. A stored caption could do neither.
+   */
+  function assemblyLabelOf(pin){
+    if(!pin || !pin.assemblyId) return null;
+    const sameType = pins.filter(p=>p.assemblyId===pin.assemblyId);
+    // Which bed: the position of this group among the groups that still exist,
+    // not the raw key, so deleting bed 1 does not leave the survivors at "2".
+    const groups = [...new Set(sameType.map(p=>p.assemblyItem))].sort((a,b)=>a-b);
+    const bedNo = groups.indexOf(pin.assemblyItem) + 1;
+    const inBed = sameType.filter(p=>p.assemblyItem===pin.assemblyItem)
+                          .sort((a,b)=>a.id-b.id);
+    const idx = inBed.findIndex(p=>p.uuid===pin.uuid) + 1;
+    const bed = pin.assemblyName + ' ' + bedNo;
+    return inBed.length>1 ? bed + ' \u00b7 ' + idx + ' of ' + inBed.length : bed;
+  }
+
+  /** How many photographs the armed bed has so far. */
+  function armedShotCount(){
+    if(!armedAssembly) return 0;
+    return pins.filter(p=>p.assemblyId===armedAssembly.id
+                       && p.assemblyItem===armedAssembly.item).length;
+  }
+
+  const asmCol = $('asmCol');
+
+  /**
+   * Fetch the take-off types once a session is under way.
+   *
+   * Failure is silent and total: no tiles. That is deliberate — this is a
+   * convenience laid over photo pins, and a yard with no signal must still be
+   * able to take pictures. Nothing else in a session depends on it.
+   */
+  async function assemblyTypesLoad(){
+    if(assemblyTypes.length) return;
+    try{
+      const r = await apiGet('/assemblies');
+      assemblyTypes = (r && r.assemblies) || [];
+    }catch(e){ console.warn('assemblies unavailable', e); }
+    assemblyBarSync();
+  }
+
+  function assemblyArm(type){
+    // Tapping the armed tile puts it down. Tagging every photograph for the
+    // rest of a visit because a tile was left on is worse than tagging none.
+    if(armedAssembly && armedAssembly.id===type.id){ armedAssembly = null; }
+    else { armedAssembly = { id:type.id, name:type.shortName || type.name, item:++assemblyItemSeq }; }
+    assemblyBarSync();
+  }
+
+  /** Start the next bed of the same type. See the note on `.asm-armed`. */
+  function assemblyNext(){
+    if(!armedAssembly) return;
+    armedAssembly = { ...armedAssembly, item:++assemblyItemSeq };
+    assemblyBarSync();
+  }
+
+  function assemblyBarSync(){
+    if(!asmCol) return;
+    const on = sessionActive && !gradeOn && assemblyTypes.length>0;
+    asmCol.classList.toggle('show', on);
+    if(!on){ asmCol.innerHTML=''; return; }
+    asmCol.innerHTML = '';
+
+    if(armedAssembly){
+      const n = armedShotCount();
+      const box = document.createElement('div');
+      box.className = 'asm-armed';
+      const lbl = document.createElement('div');
+      lbl.className = 'lbl';
+      // The bed's number as it will READ, which is its position among the beds
+      // of this type that exist — the same derivation assemblyLabelOf() uses,
+      // so the tile and the pin can never disagree about which bed this is.
+      const groups = [...new Set(pins.filter(p=>p.assemblyId===armedAssembly.id)
+                                     .map(p=>p.assemblyItem))].sort((a,b)=>a-b);
+      const idx = groups.indexOf(armedAssembly.item);
+      lbl.textContent = armedAssembly.name + ' ' + (idx>=0 ? idx+1 : groups.length+1);
+      const cnt = document.createElement('div');
+      cnt.className = 'cnt';
+      cnt.textContent = n ? n + (n===1?' photo':' photos') : 'no photos yet';
+      const acts = document.createElement('div');
+      acts.className = 'acts';
+      const next = document.createElement('button');
+      next.textContent = 'Next bed';
+      next.addEventListener('click', assemblyNext);
+      const done = document.createElement('button');
+      done.textContent = 'Done';
+      done.addEventListener('click', ()=>{ armedAssembly=null; assemblyBarSync(); });
+      acts.append(next, done);
+      box.append(lbl, cnt, acts);
+      asmCol.appendChild(box);
+      return;
+    }
+
+    for(const t of assemblyTypes){
+      const b = document.createElement('button');
+      b.className = 'asm-tile';
+      b.textContent = t.shortName || t.name;
+      b.addEventListener('click', ()=>assemblyArm(t));
+      asmCol.appendChild(b);
+    }
+  }
+
   function capturePin(){
     // capture frame from live video
     const c=document.createElement('canvas');
@@ -2690,9 +2869,16 @@
       // Which way the camera was pointed. Evidence for the view cone, never an
       // input: nothing about where this pin sits is computed from it.
       heading: lastHeading, headingAcc: lastHeadingAcc,
-      note:'', adjusted:false, marker:null, remoteId:null
+      note:'', adjusted:false, marker:null, remoteId:null,
+      // The tag, if a tile is armed. The NAME is copied down beside the id so
+      // a pin can be labelled with no lookup, and so renaming an assembly in
+      // the catalogue later does not silently relabel an old visit.
+      assemblyId: armedAssembly ? armedAssembly.id : null,
+      assemblyName: armedAssembly ? armedAssembly.name : null,
+      assemblyItem: armedAssembly ? armedAssembly.item : null
     };
     pins.push(pin);
+    if(armedAssembly) assemblyBarSync();
     snapFlash.classList.remove('go'); void snapFlash.offsetWidth; snapFlash.classList.add('go');
     updatePinCount();
     if(map && pin.lat!==null){ addPinMarker(pin); conesDraw(); }
@@ -2700,7 +2886,9 @@
     apiUpload('/sessions/'+sessionId+'/photos', dataUrlToBlob(pin.photo), {
       seq: pin.id, offsetMs: pin.offset, lat: pin.lat, lng: pin.lng, accM: pin.acc,
       note: pin.note, takenAt: pin.time, manuallyAdjusted: pin.adjusted, hasDrawing: false,
-      headingDeg: pin.heading, headingAccDeg: pin.headingAcc
+      headingDeg: pin.heading, headingAccDeg: pin.headingAcc,
+      assemblyId: pin.assemblyId, assemblyName: pin.assemblyName,
+      assemblyItem: pin.assemblyItem
     }).then(row=>{ if(row && row.id) pin.remoteId = row.id; });
     return pin;
   }
@@ -3389,9 +3577,14 @@
       heading:p.heading_deg==null?null:+p.heading_deg,
       headingAcc:p.heading_acc_deg==null?null:+p.heading_acc_deg,
       hasDrawing:!!p.has_drawing,
+      assemblyId:p.assembly_id||null, assemblyName:p.assembly_name||null,
+      assemblyItem:p.assembly_item==null?null:+p.assembly_item,
       marker:null, remoteId:p.id
     }));
     pinSeq=pins.reduce((m,p)=>Math.max(m, p.id||0), 0);
+    // So that resuming a visit and tagging more does not reuse a group key an
+    // existing bed already holds.
+    assemblyItemSeq=pins.reduce((m,p)=>Math.max(m, p.assemblyItem||0), 0);
     selectedPinId=null;
 
     sketches=(data.sketches||[]).map(k=>({
@@ -4877,8 +5070,11 @@
   // the caret, and a note typed but not yet blurred has never been sent
   // anywhere -- so those two are built once per pin and left alone.
   function inspectRenderPin(pin){
-    piTitle.innerHTML = 'Pin '+pin.id
-      + '<span class="pi-kind">Photo pin</span>';
+    // The tag leads where there is one: "Mulch Bed 2 · 1 of 3" is what the
+    // picture is OF, and "Pin 7" is only where it sits in the roll.
+    const asm = assemblyLabelOf(pin);
+    piTitle.innerHTML = (asm ? escapeHtml(asm) : 'Pin '+pin.id)
+      + '<span class="pi-kind">' + (asm ? 'Photo pin \u00b7 Pin '+pin.id : 'Photo pin') + '</span>';
     piPhoto(pin.photo, null, 'No photo');
     if(piBody.dataset.pin !== String(pin.id)){
       piBody.dataset.pin = String(pin.id);
@@ -6723,6 +6919,9 @@
   // ---------- grade mode: shoot first ----------
   function gradeSetMode(on, resumeObsId){
     gradeOn=on;
+    // The tiles stand down while grade is on: that HUD owns the screen, and a
+    // shot fired on dwell is a survey point rather than a photograph anyway.
+    assemblyBarSync();
     gradeBtn.classList.toggle('on', on);
     gradeBtn.innerHTML = on ? 'END<br>GRADE' : 'SHOOT<br>GRADE';
     sightOverlay.classList.toggle('show', on);
@@ -9287,6 +9486,7 @@
   function showMap(show){
     if(show){
       mapwrap.classList.add('show');
+      assemblyBarSync();      // the tiles belong to the camera, not the map
       initMap();
       requestAnimationFrame(()=>{ map.invalidateSize(); });
       pins.forEach(p=>{ if(!p.marker) addPinMarker(p); });
@@ -9295,6 +9495,7 @@
       mapwrap.classList.remove('show');
       if(splitOn) setSplit(false);      // the section is a map-view companion
       wakeCamera();          // covers every path back, not just resumeRec()
+      assemblyBarSync();
       // The survey deliberately SURVIVES going upright: points are placed on
       // the map lying flat, then sighted standing up. Only the bar hides with
       // the map; elevSurveyOn and every point stay exactly as they were.
