@@ -7,7 +7,7 @@
 
 import {
   MATCH_M, MARGIN_M, SPREAD_M,
-  backfillCandidate, distanceM, matchProperty, sessionPosition,
+  backfillCandidate, clientNameFrom, distanceM, matchProperty, sessionPosition,
 } from "./supabase/functions/upright-api/match.ts";
 
 let pass = 0, fail = 0;
@@ -124,6 +124,31 @@ ok("no properties with coordinates is its own answer",
   ok("and are never written back to a property",
      backfillCandidate(scattered, { id: 106, lat: null, lng: null }) === null);
 }
+
+// --- naming a session from its client ------------------------------------
+// Every fixture is a real value out of `contacts.last_name`.
+
+ok("an ordinary surname passes through", clientNameFrom("Yoder") === "Yoder");
+ok("as does one with an apostrophe", clientNameFrom("O'Brien") === "O'Brien");
+ok("surrounding space is trimmed", clientNameFrom("  Adams  ") === "Adams");
+ok(
+  "a bare phone number yields no name",
+  clientNameFrom("219-248-4569") === null,
+  "better unnamed than a session called 219-248-4569",
+);
+ok(
+  "a company with a phone on the end keeps the company",
+  clientNameFrom("TLC Plumbing - 219.922.6214") === "TLC Plumbing",
+);
+ok("a missing value is no name", clientNameFrom(null) === null);
+ok("an empty value is no name", clientNameFrom("   ") === null);
+ok("a single letter is not a name", clientNameFrom("A") === null);
+ok(
+  "a first name in the surname column is left alone",
+  clientNameFrom("Amy") === "Amy",
+  "there is no honest way to tell that from a real surname, and guessing would rename real clients",
+);
+ok("a hyphenated surname survives", clientNameFrom("Smith-Jones") === "Smith-Jones");
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);

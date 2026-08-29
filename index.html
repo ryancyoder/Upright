@@ -2234,12 +2234,16 @@
       const sid = sessionId;
       autoTagSession(sid).then(async rep => {
         if(!rep || sid !== sessionId) return;   // a new session has started
-        doneStatus.textContent = matchLine(rep);
         if(rep.applied){
           liveSessionAddress = rep.match.address;
+          // Named after the client whose yard it was, when the property has a
+          // contact worth reading. The server only ever fills a blank, so this
+          // can never overwrite a name somebody typed.
+          if(rep.named) liveSessionName = rep.named;
           showSessionScreen();
-          doneStatus.textContent = matchLine(rep);
         }
+        doneStatus.textContent = matchLine(rep) +
+          (rep.applied && rep.named ? ' Named \u201c' + rep.named + '\u201d.' : '');
       });
     }
     if(wakeLock){ wakeLock.release().catch(()=>{}); wakeLock=null; }

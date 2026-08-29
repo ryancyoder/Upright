@@ -197,3 +197,38 @@ export function backfillCandidate(
   if (position.spreadM > SPREAD_M) return null;
   return { propertyId: property.id, at: position.at, points: position.points };
 }
+
+/**
+ * The name to give a session, from its property's contact.
+ *
+ * A visit is remembered by whose yard it was, so a session tagged to a
+ * property should carry that name without anybody typing it. `contacts.last_name`
+ * is the source and it is MOSTLY a surname, but not always: of the 100 contacts
+ * attached to a property, one holds a bare phone number and one holds a company
+ * with a phone stuck on the end. So it is cleaned rather than trusted.
+ *
+ * A phone number is stripped wherever it appears, along with whatever
+ * punctuation was joining it on, and what is left has to contain a letter. A
+ * value that is only a phone number yields null, and the session simply stays
+ * unnamed — which is what it would have been anyway.
+ *
+ * What is deliberately NOT attempted: telling a first name from a surname.
+ * `2651 Naples Drive` has "Amy" in that column, and there is no honest way to
+ * know from one word whether it is the wrong field or somebody's actual name.
+ * Guessing would rename real clients.
+ */
+export function clientNameFrom(lastName: string | null | undefined): string | null {
+  if (typeof lastName !== "string") return null;
+  const cleaned = lastName
+    // Any run that looks like a phone number, in any of the shapes this
+    // project's data actually uses: 219-248-4569, 219.922.6214.
+    .replace(/\+?\d[\d().\-\s]{6,}\d/g, " ")
+    // Punctuation left stranded once the number is gone ("TLC Plumbing - ").
+    .replace(/[\s,;:/\\|-]+$/g, "")
+    .replace(/^[\s,;:/\\|-]+/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (cleaned.length < 2) return null;
+  if (!/[A-Za-z]/.test(cleaned)) return null;
+  return cleaned.slice(0, 200);
+}

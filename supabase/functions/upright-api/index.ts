@@ -5,7 +5,7 @@ import {
   normaliseForQuote, type Segment,
 } from "./proposal.ts";
 import {
-  backfillCandidate, matchProperty, sessionPosition,
+  backfillCandidate, clientNameFrom, matchProperty, sessionPosition,
   type PropertyPos,
 } from "./match.ts";
 
@@ -199,6 +199,43 @@ async function dropOldObject(oldPath: string | null | undefined, newPath: string
   try { await supabase.storage.from(BUCKET).remove([oldPath]); } catch (_e) { /* orphan is harmless */ }
 }
 
+/**
+ * The name a session tagged to this property should carry.
+ *
+ * A visit is remembered by whose yard it was, so naming it is the other half
+ * of tagging it. The value is cleaned rather than trusted -- see
+ * clientNameFrom(): two of the hundred contacts on a property hold a phone
+ * number in that column.
+ *
+ * Null on anything unusable, and the session then stays unnamed, which is
+ * exactly what it would have been without this.
+ */
+async function clientNameForProperty(propertyId: number): Promise<string | null> {
+  const { data: prop } = await supabase.from("properties")
+    .select("primary_contact_id").eq("id", propertyId).maybeSingle();
+  if (!prop?.primary_contact_id) return null;
+  const { data: contact } = await supabase.from("contacts")
+    .select("last_name").eq("id", prop.primary_contact_id).maybeSingle();
+  return clientNameFrom(contact?.last_name as string | null);
+}
+
+/**
+ * Name a session after its property's client, if it has no name of its own.
+ *
+ * NEVER overwrites. A name somebody typed says what the visit WAS -- "Back
+ * yard regrade" -- and is worth more than a surname; the auto name is only
+ * ever filling a blank.
+ */
+async function autoNameSession(sessionId: string, propertyId: number,
+                               currentName: unknown): Promise<string | null> {
+  if (typeof currentName === "string" && currentName.trim()) return null;
+  const name = await clientNameForProperty(propertyId);
+  if (!name) return null;
+  const { error } = await supabase.from("upright_sessions")
+    .update({ name }).eq("id", sessionId);
+  return error ? null : name;
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: CORS_HEADERS });
 
@@ -271,7 +308,7 @@ Deno.serve(async (req) => {
       const sessionId = parts[1];
       const [{ data: session }, { data: photos }, { data: points }, { data: props }] =
         await Promise.all([
-          supabase.from("upright_sessions").select("id, property_id").eq("id", sessionId).maybeSingle(),
+          supabase.from("upright_sessions").select("id, property_id, name").eq("id", sessionId).maybeSingle(),
           supabase.from("upright_photos").select("lat, lng").eq("session_id", sessionId),
           supabase.from("upright_elevation_points").select("lat, lng").eq("session_id", sessionId),
           supabase.from("properties").select("id, address, latitude, longitude"),
@@ -349,7 +386,10 @@ Deno.serve(async (req) => {
       const { error } = await supabase.from("upright_sessions")
         .update({ property_id: toSet }).eq("id", sessionId);
       if (error) return err(error.message, 500);
-      return json({ ...report, applied: true, propertyId: toSet });
+      // Naming is the other half of tagging: a visit is remembered by whose
+      // yard it was. Only ever fills a blank -- see autoNameSession().
+      const named = await autoNameSession(sessionId, toSet, session.name);
+      return json({ ...report, applied: true, propertyId: toSet, named });
     }
 
     // POST /properties/:id/coordinates { lat, lng }
@@ -496,6 +536,13 @@ Deno.serve(async (req) => {
       const { data: row, error } = await supabase
         .from("upright_sessions").update(update).eq("id", sessionId).select().single();
       if (error) return err(error.message, 500);
+      // Tagging by hand from the property picker lands here rather than on the
+      // matcher, and deserves the same name. Skipped when this same request is
+      // setting a name, so an explicit one is never raced by the automatic one.
+      if (update.property_id && body.name === undefined && !row.name) {
+        const named = await autoNameSession(sessionId, update.property_id as number, null);
+        if (named) return json({ ...row, name: named, named });
+      }
       return json(row);
     }
 

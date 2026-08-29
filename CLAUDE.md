@@ -876,6 +876,34 @@ on file, which is what the backfill is for.
 outvoted by the median but still reported in the spread, and a property that
 already has coordinates is never offered new ones.
 
+### And the name comes with it
+
+A visit is remembered by *whose yard it was*, so tagging a session also names
+it — `clientNameFrom()` reads `properties.primary_contact_id → contacts.last_name`
+and `autoNameSession()` writes it. Both routes that can set a property do it:
+the match POST and the by-hand `PATCH /sessions/:id`.
+
+**It never overwrites a name somebody typed.** Naming runs only when the
+session's `name` is null, so the auto name is a default, not a correction. Per
+*Naming and deleting a session* above the two fields stay separate — the tag
+says where, the name says whose — and `sessionTitleOf()` already falls back
+name → address → *Untagged session*, so a session that cannot be named reads
+exactly as it did before.
+
+**That column is mostly a surname and is therefore cleaned, not trusted.** Of
+the 100 contacts attached to a property, one holds a bare phone number
+(`219-248-4569`) and one a company with a phone stuck on the end (`TLC Plumbing
+- 219.922.6214`). A phone-shaped run is stripped wherever it appears along with
+whatever punctuation was joining it on, and what survives must still contain a
+letter — so the company keeps its name and the bare number yields **null**,
+leaving the session unnamed, which is what it would have been anyway.
+
+**What is deliberately not attempted: telling a first name from a surname.**
+`2651 Naples Drive` has "Amy" in that column, and from one word there is no
+honest way to know whether that is the wrong field or somebody's actual name.
+Guessing would rename real clients. Ten of `test61.js`'s checks are this
+function, including that one.
+
 ## The proposal helper
 
 Suggested proposal lines pulled out of what was said on site. `POST
