@@ -582,8 +582,13 @@
     width:100%; height:100%; object-fit:contain; background:#000;
   }
   .outline-frame.show{display:block;}
+  /* WIDTH AND HEIGHT ARE NOT OPTIONAL ON AN SVG. An absolutely positioned
+     replaced element with `inset:0` and no size resolves to its INTRINSIC size
+     -- 300x150 for an SVG -- and `right`/`bottom` are then dropped as
+     over-constrained. It clips to that box, so every crosshair drawn where the
+     picture actually is landed outside it and simply never appeared. */
   .outline-hud{
-    position:absolute; inset:0; z-index:7; display:none;
+    position:absolute; inset:0; width:100%; height:100%; z-index:7; display:none;
     pointer-events:none;              /* never swallow a tap meant for the shutter */
   }
   .outline-hud.show{display:block;}
@@ -2868,7 +2873,12 @@
 
   function assemblyBarSync(){
     if(!asmCol) return;
-    const on = sessionActive && !gradeOn && !outlineOn && assemblyTypes.length>0;
+    // The tiles belong to the CAMERA, not the map. They were showing over the
+    // map as well, where tapping one would have frozen a picture behind it --
+    // the same reasoning that keeps the recording switches out of the map
+    // toolbar: that toolbar is invisible exactly when you need the switch.
+    const cameraUp = !mapwrap.classList.contains('show');
+    const on = sessionActive && cameraUp && !gradeOn && !outlineOn && assemblyTypes.length>0;
     asmCol.classList.toggle('show', on);
     if(!on){ asmCol.innerHTML=''; return; }
     asmCol.innerHTML = '';
@@ -2942,7 +2952,7 @@
   /** Low-pass on the crosshair. A hand shakes; the sensor reports every tremor. */
   const OUTLINE_SMOOTH = 0.28;
 
-  let outlineOn=false, outlinePin=null, outlinePts=[], outlineBase=null;
+  let outlineOn=false, outlinePin=null, outlinePts=[], outlineBase=null, outlineHintTimer=0;
   let outlineAt=null, outlineRect=null, outlineRaf=0, outlineNear=false;
 
   /**
@@ -2974,11 +2984,17 @@
    * saved photograph goes through this.
    */
   function outlineLayout(){
-    const el=outlineFrame, r=el.getBoundingClientRect();
+    // ELEMENT-LOCAL, NOT VIEWPORT. The overlay is an SVG laid over this image
+    // in the same parent, so its user space starts at the image's own top-left.
+    // getBoundingClientRect() answers in viewport coordinates, which are offset
+    // by however far down the page the camera stage begins -- and every corner
+    // marked would have been drawn that far out of place.
+    const el=outlineFrame;
+    const W=el.clientWidth||window.innerWidth, H=el.clientHeight||window.innerHeight;
     const iw=el.naturalWidth||1280, ih=el.naturalHeight||720;
-    const scale=Math.min(r.width/iw, r.height/ih);
+    const scale=Math.min(W/iw, H/ih);
     const w=iw*scale, h=ih*scale;
-    outlineRect={ x:r.left+(r.width-w)/2, y:r.top+(r.height-h)/2, w, h, iw, ih };
+    outlineRect={ x:(W-w)/2, y:(H-h)/2, w, h, iw, ih };
   }
 
   /** Screen point -> a fraction of the saved image, so it survives any resize. */
@@ -3064,7 +3080,15 @@
     // picture with nothing to move on it is a dead end. The tile falls back to
     // plain tagging, which still works.
     if(!lastOrientEvt || lastOrientEvt.alpha==null){
+      // NO SENSOR, NO CURSOR -- and say so. Falling back to plain tagging is
+      // the right behaviour, but doing it silently looks identical to the
+      // outline being broken, which is the reading somebody will reach for.
       assemblyArm(type);
+      outlineHint.textContent='No orientation sensor \u2014 tagging only. '
+        + 'Motion access has to be allowed for the aiming outline.';
+      outlineHint.classList.add('show');
+      clearTimeout(outlineHintTimer);
+      outlineHintTimer=setTimeout(()=>outlineHint.classList.remove('show'), 5000);
       return;
     }
     armedAssembly = { id:type.id, name:type.shortName||type.name, item:++assemblyItemSeq };

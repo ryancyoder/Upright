@@ -249,6 +249,28 @@ from the matrix rather than assumed:
 by source** rather than copying them, so it checks the code that actually runs.
 25 checks, no browser.
 
+**And test62 was not enough, which is the lesson worth keeping.** It proves
+where the crosshair *should* be to fourteen decimal places; it cannot see
+whether the crosshair is on screen at all — and it was not. The overlay `<svg>`
+carried `position:absolute; inset:0` and no width or height, so it resolved to
+an SVG's **intrinsic 300×150**, dropped `right`/`bottom` as over-constrained,
+and clipped away every mark drawn where the picture actually is. Worse, the
+coordinates were computed with `getBoundingClientRect()` — viewport space —
+while an SVG's user space starts at its own top-left, so everything was also
+53px out, the height of the header above the stage. The maths was right and
+nothing appeared.
+
+That is the flow-arrow lesson again: *the maths was verified and the rendering
+was not*. `test63.js` drives the real UI in a real browser and reads the
+RENDERED elements — is the cross inside its own overlay, does the hint change
+on returning to the first corner, does closing put the camera back. Supabase
+and the Leaflet CDN are stubbed; nothing it tests touches either. Run it with
+`NODE_PATH=$(npm root -g) node test63.js`. 14 checks.
+
+It also caught a second thing on the way: **the tiles were showing over the
+map**, where tapping one would have frozen a picture behind it. They are
+gated on the camera being up now.
+
 **The ring is burned into the photograph**, exactly as the pencil editor's
 strokes are and saved by the same route (`POST /photos/:id/image`), so it shows
 wherever the picture does — MasterDash's review rail included — with nothing
