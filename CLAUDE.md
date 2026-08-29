@@ -356,6 +356,44 @@ It also caught a second thing on the way: **the tiles were showing over the
 map**, where tapping one would have frozen a picture behind it. They are
 gated on the camera being up now.
 
+### Detected edges, as a hint rather than a snap
+
+**Edges** in the outline's bar (and a switch in Settings) draws the boundaries
+the camera can find over the frozen picture. **Stage one of three, and
+deliberately the one that does nothing**: it never moves a corner. The eye is
+very good at following a faint line, and the crosshair was always the hard
+part — but the real reason to build only this much first is that it answers the
+question deciding whether snapping is worth building at all, *does a bed edge
+actually light up in a real yard*, before any snapping logic exists to be wrong.
+
+**Colour, not luminance.** Mulch against grass is a large colour difference and
+frequently a small brightness one — dark brown and shaded green sit at much the
+same luminance — so the classic grayscale Sobel misses the one edge that matters
+here while finding every shadow. The gradient is taken across all three
+channels.
+
+**Half resolution, and the blur is a feature.** Grass at full resolution is a
+field of tiny gradients; downsampling averages that away while leaving a bed
+edge exactly where it was. It is also four times cheaper, which more than pays
+for the three channels: measured at **11 ms** on a 720p frame against 46 ms for
+a full-resolution luminance pass. One-time, on a picture that is already frozen.
+
+**The threshold is a percentile, not a number** (`EDGE_KEEP`, the top 5.5%). A
+fixed one would be right in one photograph and wrong in the next — flat light
+and hard midday sun differ by more than any constant survives. Alpha rides the
+strength above the cut, so a firm boundary reads solid and whatever squeaked
+past stays a whisper.
+
+**What is NOT built, and why.** Hough lines would find edging, walks and drain
+runs — but a bed is curved, so the classic tool is the wrong instrument for the
+main case; it belongs with the linear assemblies if it is built. A segmentation
+model that actually knows what mulch is means megabytes of weights in a
+single-file app used where there is no signal. And any future snap has to be
+**visible and refusable**: the *snap versus align* argument in the elevation
+grid above is weaker here — this would snap to the subject rather than to an
+arbitrary aid, and an outline is an annotation rather than a measurement — but
+"never move a point somewhere the user did not put it, silently" still holds.
+
 **The ring is burned into the photograph**, exactly as the pencil editor's
 strokes are and saved by the same route (`POST /photos/:id/image`), so it shows
 wherever the picture does — MasterDash's review rail included — with nothing
@@ -708,6 +746,7 @@ preferences only show their effect from inside a view.
 - **Split screen in portrait** — see *Split screen: section over plan*.
 - **Outline cross follows the aim — sideways / up and down** — two switches, one
   per axis. See *Outlining a bed by aiming the iPad*.
+- **Show detected edges while outlining** — the hint layer; never moves a corner.
 - **Eye height when shooting grade** — the `h` in `d = h / tan|θ|`, used only to
   park a just-shot pin. The one preference here that is a number, not a switch.
 

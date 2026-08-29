@@ -105,9 +105,33 @@ const LEAFLET_STUB = `window.L = (function(){
       hint: document.getElementById('outlineHint').textContent,
       label: t ? t.textContent : null,
       labelLow: tb ? (tb.top > hud.top + hud.height * 0.6) : false,
+      ...(() => {
+        const c = document.getElementById('outlineEdges');
+        if (!c.classList.contains('show')) return { edgesShown: false, edgePixels: 0, edgesAligned: false };
+        const ctx = c.getContext('2d');
+        const d = ctx.getImageData(0, 0, c.width, c.height).data;
+        let lit = 0, minY = c.height, maxY = 0;
+        for (let y = 0; y < c.height; y += 2) for (let x = 0; x < c.width; x += 2) {
+          if (d[(y * c.width + x) * 4 + 3] > 0) { lit++; if (y < minY) minY = y; if (y > maxY) maxY = y; }
+        }
+        // The picture is letterboxed, so nothing should be lit in the bars.
+        const fr = document.getElementById('outlineFrame').getBoundingClientRect();
+        const iw = 1280, ih = 720;
+        const sc = Math.min(fr.width / iw, fr.height / ih);
+        const top = (fr.height - ih * sc) / 2, bot = top + ih * sc;
+        return {
+          edgesShown: true, edgePixels: lit,
+          edgesAligned: lit === 0 || (minY >= top - 4 && maxY <= bot + 4),
+        };
+      })(),
     };
   });
   ok('the picture freezes immediately', settling.frozen);
+  ok('the detected edges are drawn over it', settling.edgesShown);
+  ok('and something was actually found in the frame', settling.edgePixels > 0,
+     `${settling.edgePixels} lit pixels`);
+  ok('the edge layer is registered with the picture, not the element',
+     settling.edgesAligned, 'it draws into the letterboxed rect');
   ok('and it is captioned with the take-off it is of',
      settling.label === 'Mulch Bed', settling.label);
   ok('the caption sits at the bottom of the picture',
@@ -293,6 +317,14 @@ const LEAFLET_STUB = `window.L = (function(){
   ok('and both default to following the aim', sense && sense.x && sense.y);
   ok('the sideways one names the axis it governs',
      sense && /sideways/i.test(sense.xLabel), sense && sense.xLabel);
+
+  // Optional, and off means off.
+  const edgeToggle = await page.evaluate(() => {
+    const sw = document.getElementById('prefOutlineEdges');
+    return sw ? { present: true, on: sw.classList.contains('on') } : { present: false };
+  });
+  ok('the edge hint is a Settings switch', edgeToggle.present);
+  ok('and it is on by default', edgeToggle.on);
 
   ok('nothing threw along the way', errors.length === 0, errors.join(' / '));
 

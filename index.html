@@ -587,6 +587,14 @@
      -- 300x150 for an SVG -- and `right`/`bottom` are then dropped as
      over-constrained. It clips to that box, so every crosshair drawn where the
      picture actually is landed outside it and simply never appeared. */
+  /* The detected edges, between the picture and the vector overlay. Equal
+     z-index to the frame and later in the DOM, so it lies on top of it without
+     climbing over the shutter. */
+  .outline-edges{
+    position:absolute; inset:0; width:100%; height:100%; z-index:5; display:none;
+    pointer-events:none;
+  }
+  .outline-edges.show{display:block;}
   .outline-hud{
     position:absolute; inset:0; width:100%; height:100%; z-index:7; display:none;
     pointer-events:none;              /* never swallow a tap meant for the shutter */
@@ -607,6 +615,7 @@
     box-shadow:0 2px 10px rgba(0,0,0,0.45);
   }
   .outline-bar button:disabled{opacity:0.4;}
+  .outline-bar button.on{background:rgba(90,122,99,0.95); border-color:#fff;}
   .outline-hint{
     position:absolute; left:50%; transform:translateX(-50%);
     top:calc(env(safe-area-inset-top,0px) + 64px); z-index:23;
@@ -1349,9 +1358,11 @@
     <button class="snap-btn" id="snapBtn" aria-label="Snap photo pin"></button>
     <button class="grade-btn" id="gradeBtn">SHOOT<br>GRADE</button>
     <img class="outline-frame" id="outlineFrame" alt="">
+    <canvas class="outline-edges" id="outlineEdges"></canvas>
     <svg class="outline-hud" id="outlineHud"></svg>
     <div class="outline-hint" id="outlineHint"></div>
     <div class="outline-bar" id="outlineBar">
+      <button type="button" id="outlineEdgesBtn">Edges</button>
       <button type="button" id="outlineRecentreBtn">Re-centre</button>
       <button type="button" id="outlineUndoBtn">Undo</button>
       <button type="button" id="outlineCancelBtn">Cancel</button>
@@ -1713,6 +1724,18 @@
         </div>
         <div class="pref-row">
           <div class="pref-main">
+            <div class="pref-title">Show detected edges while outlining</div>
+            <div class="pref-sub">Draw the boundaries the camera can find over the frozen
+              picture, so there is a line to follow while placing corners. <b>It never moves a
+              corner</b> &mdash; it is something to look at, not a snap. The gradient is taken
+              across colour rather than brightness, since mulch against grass is often a big
+              colour difference and a small brightness one. Whether a real bed edge lights up
+              is the open question; turn it off if it is just clutter.</div>
+          </div>
+          <button class="pref-switch" id="prefOutlineEdges" role="switch"><i></i></button>
+        </div>
+        <div class="pref-row">
+          <div class="pref-main">
             <div class="pref-title">Outline cross follows the aim &mdash; up and down</div>
             <div class="pref-sub">The same choice for the other axis, separately, because
               they are separate habits: <b>on</b>, tipping the top of the iPad away from you
@@ -1902,6 +1925,7 @@
         prefInspector=$('prefInspector'), prefFilmstrip=$('prefFilmstrip'),
         prefSplit=$('prefSplit'), prefFolds=$('prefFolds'), prefGround=$('prefGround'),
         prefOutlineAimX=$('prefOutlineAimX'), prefOutlineAimY=$('prefOutlineAimY'),
+        prefOutlineEdges=$('prefOutlineEdges'),
         prefEyeHeight=$('prefEyeHeight'),
         panelsMapBtn=$('panelsMapBtn'), stripMapBtn=$('stripMapBtn'),
         panelsEvBtn=$('panelsEvBtn'), stripEvBtn=$('stripEvBtn'),
@@ -1925,6 +1949,7 @@
   // every other switch here -- renderPrefs() treats absent as on.
   const PREF_DEFAULTS={vertExag:true, inspector:true, filmstrip:true, splitPortrait:true,
                        folds:true, ground:true, outlineAimX:true, outlineAimY:true,
+                       outlineEdges:true,
                        eyeHeightFt:4.5};
   const prefs=Object.assign({}, PREF_DEFAULTS);
   try{
@@ -1938,7 +1963,8 @@
   function renderPrefs(){
     [[prefVertExag,'vertExag'],[prefInspector,'inspector'],[prefFilmstrip,'filmstrip'],
       [prefSplit,'splitPortrait'],[prefFolds,'folds'],[prefGround,'ground'],
-      [prefOutlineAimX,'outlineAimX'],[prefOutlineAimY,'outlineAimY']]
+      [prefOutlineAimX,'outlineAimX'],[prefOutlineAimY,'outlineAimY'],
+      [prefOutlineEdges,'outlineEdges']]
       .forEach(([el,key])=>{
         const on = prefs[key]!==false;
         el.classList.toggle('on', on);
@@ -2856,7 +2882,8 @@
   const outlineFrame=$('outlineFrame'), outlineHud=$('outlineHud'),
         outlineBar=$('outlineBar'), outlineHint=$('outlineHint'),
         outlineUndoBtn=$('outlineUndoBtn'), outlineCancelBtn=$('outlineCancelBtn'),
-        outlineRecentreBtn=$('outlineRecentreBtn');
+        outlineRecentreBtn=$('outlineRecentreBtn'), outlineEdges=$('outlineEdges'),
+        outlineEdgesBtn=$('outlineEdgesBtn');
   // Re-centre puts the cross back in the middle wherever the iPad is being
   // held now. It is how a posture that has crept, or a gyro that has drifted
   // over a long outline, is put right without losing the corners already down.
@@ -2865,11 +2892,24 @@
     outlineZero(orientBasis(lastOrientEvt.alpha, lastOrientEvt.beta||0, lastOrientEvt.gamma||0));
     outlineRender();
   });
+  // The same preference Settings holds, with a button where you actually are:
+  // walking into Settings mid-outline to see whether the hint helps is not a
+  // thing anybody would do. Same rule as Preview and Filmstrip.
+  outlineEdgesBtn.addEventListener('click', ()=>{
+    prefs.outlineEdges = prefs.outlineEdges===false;
+    savePrefs(); renderPrefs(); outlineEdgesSync(); outlineEdgesBtnSync();
+  });
+  function outlineEdgesBtnSync(){
+    outlineEdgesBtn.classList.toggle('on', prefs.outlineEdges!==false);
+  }
   outlineUndoBtn.addEventListener('click', ()=>outlineUndo());
   outlineCancelBtn.addEventListener('click', ()=>outlineCancel());
   // The letterboxed image rect moves with the viewport, and every corner
   // already marked is held in screen pixels against it.
-  window.addEventListener('resize', ()=>{ if(outlineOn){ outlineLayout(); outlineRender(); } });
+  window.addEventListener('resize', ()=>{
+    if(!outlineOn) return;
+    outlineLayout(); outlineEdgesPaint(); outlineRender();
+  });
 
   /**
    * Fetch the take-off types once a session is under way.
@@ -3101,6 +3141,104 @@
     return outlinePin && outlinePin.assemblyName ? outlinePin.assemblyName : '';
   }
 
+  // ---------- edges, as a hint rather than a snap ----------
+  //
+  // STAGE ONE OF THREE, AND DELIBERATELY THE ONE THAT DOES NOTHING. It draws
+  // what it finds over the frozen picture and never moves a corner. The eye is
+  // very good at following a faint line; the crosshair was always the hard
+  // part. And it answers the question that decides whether snapping is worth
+  // building at all -- does a bed edge actually light up in a real yard --
+  // before any snapping logic exists to be wrong.
+  //
+  // COLOUR, NOT LUMINANCE. Mulch against grass is a large colour difference and
+  // frequently a small brightness one: dark brown and shaded green sit at much
+  // the same luminance, so the classic grayscale Sobel misses the one edge that
+  // matters here while finding every shadow. The gradient is taken across all
+  // three channels instead, which costs three times the arithmetic and is still
+  // nothing against a frozen frame.
+  //
+  // HALF RESOLUTION. Four times cheaper, and the blur is a FEATURE: grass at
+  // full resolution is a field of tiny gradients, and downsampling averages
+  // that away while leaving a bed edge exactly where it was.
+  //
+  // The threshold is a PERCENTILE rather than a number. A fixed one would be
+  // right in one photograph and wrong in the next -- flat light and hard
+  // midday sun differ by more than any constant survives.
+  const EDGE_SCALE = 0.5, EDGE_KEEP = 0.055, EDGE_TINT = [64, 214, 232];
+  let outlineEdgeSrc=null;              // offscreen RGBA at detection resolution
+
+  function outlineEdgesBuild(){
+    outlineEdgeSrc=null;
+    const img=outlineFrame;
+    const iw=img.naturalWidth, ih=img.naturalHeight;
+    if(!iw || !ih) return;
+    const w=Math.max(2, Math.round(iw*EDGE_SCALE)), h=Math.max(2, Math.round(ih*EDGE_SCALE));
+    const src=document.createElement('canvas'); src.width=w; src.height=h;
+    const sctx=src.getContext('2d', {willReadFrequently:true});
+    sctx.drawImage(img, 0, 0, w, h);
+    let d;
+    try{ d=sctx.getImageData(0, 0, w, h).data; }
+    catch(e){ console.warn('edge read failed', e); return; }
+
+    const mag=new Float32Array(w*h);
+    let peak=0;
+    for(let y=1; y<h-1; y++) for(let x=1; x<w-1; x++){
+      const o=y*w+x;
+      let sum=0;
+      for(let ch=0; ch<3; ch++){
+        const i=o*4+ch, r=w*4;
+        const gx=-d[i-r-4] - 2*d[i-4] - d[i+r-4] + d[i-r+4] + 2*d[i+4] + d[i+r+4];
+        const gy=-d[i-r-4] - 2*d[i-r] - d[i-r+4] + d[i+r-4] + 2*d[i+r] + d[i+r+4];
+        sum += gx*gx + gy*gy;
+      }
+      const m=Math.sqrt(sum);
+      mag[o]=m; if(m>peak) peak=m;
+    }
+    if(peak<=0) return;
+
+    // Percentile by histogram: one pass to count, one to find the cut.
+    const bins=new Uint32Array(256);
+    for(let i=0; i<mag.length; i++) bins[(mag[i]/peak*255)|0]++;
+    const want=Math.round(mag.length*EDGE_KEEP);
+    let seen=0, cut=255;
+    for(let b=255; b>=0; b--){ seen+=bins[b]; if(seen>=want){ cut=b; break; } }
+    const thr=cut/255*peak;
+
+    const out=document.createElement('canvas'); out.width=w; out.height=h;
+    const octx=out.getContext('2d');
+    const px=octx.createImageData(w, h);
+    for(let i=0; i<mag.length; i++){
+      if(mag[i]<thr) continue;
+      const j=i*4;
+      // Alpha rides the strength above the cut, so a firm boundary reads solid
+      // and the noise that squeaked past stays a whisper.
+      px.data[j]=EDGE_TINT[0]; px.data[j+1]=EDGE_TINT[1]; px.data[j+2]=EDGE_TINT[2];
+      px.data[j+3]=90+Math.min(150, ((mag[i]-thr)/(peak-thr||1))*150);
+    }
+    octx.putImageData(px, 0, 0);
+    outlineEdgeSrc=out;
+  }
+
+  /** Lay the detected edges over the picture, wherever it is currently drawn. */
+  function outlineEdgesPaint(){
+    const on = outlineOn && prefs.outlineEdges!==false && outlineEdgeSrc && outlineRect;
+    outlineEdges.classList.toggle('show', !!on);
+    if(!on) return;
+    const el=outlineEdges;
+    const W=el.clientWidth||1, H=el.clientHeight||1;
+    if(el.width!==W || el.height!==H){ el.width=W; el.height=H; }
+    const ctx=el.getContext('2d');
+    ctx.clearRect(0, 0, W, H);
+    ctx.imageSmoothingEnabled=true;
+    ctx.drawImage(outlineEdgeSrc, outlineRect.x, outlineRect.y, outlineRect.w, outlineRect.h);
+  }
+
+  /** Detect on first need, so turning it on mid-outline works. */
+  function outlineEdgesSync(){
+    if(outlineOn && prefs.outlineEdges!==false && !outlineEdgeSrc) outlineEdgesBuild();
+    outlineEdgesPaint();
+  }
+
   /** Screen point -> a fraction of the saved image, so it survives any resize. */
   function outlineToImage(pt){
     return [ (pt.x-outlineRect.x)/outlineRect.w, (pt.y-outlineRect.y)/outlineRect.h ];
@@ -3285,7 +3423,12 @@
     // outlineSettleStep().
     outlineBase=null; outlineSettling=true; outlineSettleFrom=null;
     outlineFrozenAt=Date.now();
-    outlineFrame.onload=()=>{ outlineLayout(); outlineAt=null; outlineRender(); };
+    outlineFrame.onload=()=>{
+      outlineLayout(); outlineAt=null;
+      // Detection needs the picture's own pixels, so it waits for the decode.
+      outlineEdgeSrc=null; outlineEdgesSync();
+      outlineRender();
+    };
     outlineFrame.src=pin.photo;
     outlineOn=true;
     outlineFrame.classList.add('show');
@@ -3295,6 +3438,7 @@
     assemblyBarSync();
     gradeBtn.classList.remove('show');
     outlineLayout();
+    outlineEdgesBtnSync();
     outlineRender();
   }
 
@@ -3413,6 +3557,7 @@
     outlineBar.classList.remove('show');
     outlineHint.classList.remove('show');
     outlineHud.innerHTML='';
+    outlineEdgeSrc=null; outlineEdges.classList.remove('show');
     outlineFrame.removeAttribute('src');
     assemblyBarSync();
     if(sessionActive) gradeBtn.classList.add('show');
@@ -5911,6 +6056,10 @@
   prefFolds.addEventListener('click', ()=>prefToggle('folds'));
   prefOutlineAimX.addEventListener('click', ()=>prefToggle('outlineAimX'));
   prefOutlineAimY.addEventListener('click', ()=>prefToggle('outlineAimY'));
+  prefOutlineEdges.addEventListener('click', ()=>{
+    prefToggle('outlineEdges');
+    if(outlineOn){ outlineEdgesSync(); outlineEdgesBtnSync(); }
+  });
   panelsMapBtn.addEventListener('click', ()=>prefToggle('inspector'));
   panelsEvBtn.addEventListener('click', ()=>prefToggle('inspector'));
   stripMapBtn.addEventListener('click', ()=>prefToggle('filmstrip'));
