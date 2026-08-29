@@ -213,7 +213,20 @@ thought, and walking the cross back to the first corner is a second aim for no
 information. Coming back to the first corner still closes it, for anyone who
 prefers that; it swells and fills when the cross is within `OUTLINE_CLOSE_PX`.
 
-**The finished ring is held on screen for half a second** (`OUTLINE_HELD_MS`)
+**The picture is captioned with the take-off it is of** — "Mulch Bed", across
+the bottom — from the moment it freezes, and the caption is **burned into the
+saved JPEG** along with the ring. That is what makes the photograph say what it
+is of wherever it turns up: MasterDash's rail, the ZIP export, with nothing
+there needing to know this feature exists. `OUTLINE_LABEL` describes the band
+in fractions of the picture and is drawn twice from that one description —
+on screen and onto the canvas — because those two surfaces are different sizes
+(the screen shows it letterboxed to fit, the canvas is its full pixel
+dimensions) and a caption that drifted between them would be a caption you
+could not trust. It says the assembly alone, not the bed number; adding
+`assemblyLabelOf()` there is one line if a yard with three mulch beds turns out
+to need telling apart.
+
+**The finished ring is held on screen for a second** (`OUTLINE_HELD_MS`)
 before the camera comes back. Closing straight to a live preview gives you
 nothing to check against: the one moment the outline is worth seeing whole is
 the moment it is finished, and by then it was already gone. It is redrawn

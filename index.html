@@ -2993,10 +2993,10 @@
    *
    * A closing gesture that cuts straight to a live preview gives you nothing to
    * check against: the one moment the ring is worth seeing whole is the moment
-   * it is finished, and by then it is already gone. Half a second is long
-   * enough to read and short enough not to feel like a wait.
+   * it is finished, and by then it is already gone. A second is long enough to
+   * read the ring and the caption under it without feeling like a wait.
    */
-  const OUTLINE_HELD_MS = 500;
+  const OUTLINE_HELD_MS = 1000;
   /**
    * Settling: where the cross takes its centre from.
    *
@@ -3083,6 +3083,22 @@
     const scale=Math.min(W/iw, H/ih);
     const w=iw*scale, h=ih*scale;
     outlineRect={ x:(W-w)/2, y:(H-h)/2, w, h, iw, ih };
+  }
+
+  /**
+   * The caption band, in fractions of the picture.
+   *
+   * Described once and drawn twice -- on screen while outlining, and into the
+   * JPEG when it is saved -- so the two cannot drift apart. Everything is
+   * proportional to the image, because those two surfaces are different sizes:
+   * the screen shows the picture letterboxed to fit, the canvas is its full
+   * pixel dimensions.
+   */
+  const OUTLINE_LABEL = { band:0.085, text:0.55, pad:0.30 };
+
+  /** What the caption says. The take-off this picture is of. */
+  function outlineLabelText(){
+    return outlinePin && outlinePin.assemblyName ? outlinePin.assemblyName : '';
   }
 
   /** Screen point -> a fraction of the saved image, so it survives any resize. */
@@ -3176,13 +3192,27 @@
     if(!outlineRaf) outlineRaf=requestAnimationFrame(()=>{ outlineRaf=0; outlineRender(); });
   }
 
+  /** The caption as SVG, over the bottom of the letterboxed picture. */
+  function outlineLabelSvg(){
+    const text=outlineLabelText();
+    if(!text || !outlineRect) return '';
+    const r=outlineRect;
+    const bh=Math.max(24, r.h*OUTLINE_LABEL.band);
+    const fs=bh*OUTLINE_LABEL.text;
+    return '<rect x="'+r.x+'" y="'+(r.y+r.h-bh)+'" width="'+r.w+'" height="'+bh+'" '
+      + 'fill="rgba(0,0,0,0.55)"/>'
+      + '<text x="'+(r.x+r.w/2)+'" y="'+(r.y+r.h-bh/2+fs*0.36)+'" fill="#eae7de" '
+      + 'font-size="'+fs+'" font-weight="700" text-anchor="middle">'
+      + escapeHtml(text)+'</text>';
+  }
+
   function outlineRender(){
     if(!outlineOn) return;
     // SETTLING: the picture is up, the cross is not. Showing one before it has
     // a centre would invite somebody to start marking against a reference that
     // is about to move under them.
     if(outlineSettling){
-      outlineHud.innerHTML='';
+      outlineHud.innerHTML=outlineLabelSvg();
       outlineUndoBtn.disabled=true;
       outlineHint.textContent='Get comfortable \u2014 the cross centres where you hold still';
       return;
@@ -3192,8 +3222,8 @@
     // over, and a cross still sitting on a completed outline reads as though
     // there is another corner to place.
     if(outlineDone){
-      outlineHud.innerHTML =
-        '<polygon points="'+outlinePts.map(p=>p.x+','+p.y).join(' ')+'" '
+      outlineHud.innerHTML = outlineLabelSvg()
+        + '<polygon points="'+outlinePts.map(p=>p.x+','+p.y).join(' ')+'" '
         + 'fill="rgba(90,122,99,0.28)" stroke="#eae7de" stroke-width="3" stroke-linejoin="round"/>'
         + outlinePts.map(p=>'<circle cx="'+p.x+'" cy="'+p.y+'" r="5" fill="none" '
           + 'stroke="#eae7de" stroke-width="2.5"/>').join('');
@@ -3213,7 +3243,7 @@
       '<circle cx="'+p.x+'" cy="'+p.y+'" r="'+(i===0 && near ? 11 : 5)+'" '
       + 'fill="'+(i===0 && near ? '#5a7a63' : 'none')+'" stroke="#eae7de" stroke-width="2.5"/>'
     ).join('');
-    outlineHud.innerHTML = live + dots
+    outlineHud.innerHTML = outlineLabelSvg() + live + dots
       + '<circle cx="'+outlineAt.x+'" cy="'+outlineAt.y+'" r="13" fill="none" '
       + 'stroke="'+TARGET_SIGHT+'" stroke-width="2.5"/>'
       + '<line x1="'+(outlineAt.x-22)+'" y1="'+outlineAt.y+'" x2="'+(outlineAt.x-5)+'" y2="'+outlineAt.y+'" stroke="'+TARGET_SIGHT+'" stroke-width="2.5"/>'
@@ -3327,6 +3357,22 @@
     ctx.strokeStyle='#eae7de';
     ctx.lineJoin='round';
     ctx.stroke();
+    // The caption goes into the picture itself, not just onto the screen it was
+    // drawn on. That is what makes the photograph say what it is of wherever it
+    // turns up -- MasterDash's rail, the ZIP export -- with nothing there
+    // needing to know this feature exists.
+    const text=outlineLabelText();
+    if(text){
+      const bh=Math.max(24, c.height*OUTLINE_LABEL.band);
+      const fs=bh*OUTLINE_LABEL.text;
+      ctx.fillStyle='rgba(0,0,0,0.55)';
+      ctx.fillRect(0, c.height-bh, c.width, bh);
+      ctx.fillStyle='#eae7de';
+      ctx.font='700 '+Math.round(fs)+'px -apple-system, system-ui, sans-serif';
+      ctx.textAlign='center';
+      ctx.textBaseline='middle';
+      ctx.fillText(text, c.width/2, c.height-bh/2);
+    }
     const pin=outlinePin;
     pin.photo=c.toDataURL('image/jpeg',0.85);
     pin.hasDrawing=true;

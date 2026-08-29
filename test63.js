@@ -95,12 +95,23 @@ const LEAFLET_STUB = `window.L = (function(){
   // SETTLING. The reference pose is not the one the picture was shot at: the
   // iPad was held up for that and nobody wants to keep holding it there. So
   // the cross waits, and centres wherever the hand comes to rest.
-  const settling = await page.evaluate(() => ({
-    frozen: document.getElementById('outlineFrame').classList.contains('show'),
-    cross: document.querySelectorAll('#outlineHud circle').length,
-    hint: document.getElementById('outlineHint').textContent,
-  }));
+  const settling = await page.evaluate(() => {
+    const t = document.querySelector('#outlineHud text');
+    const hud = document.getElementById('outlineHud').getBoundingClientRect();
+    const tb = t ? t.getBoundingClientRect() : null;
+    return {
+      frozen: document.getElementById('outlineFrame').classList.contains('show'),
+      cross: document.querySelectorAll('#outlineHud circle').length,
+      hint: document.getElementById('outlineHint').textContent,
+      label: t ? t.textContent : null,
+      labelLow: tb ? (tb.top > hud.top + hud.height * 0.6) : false,
+    };
+  });
   ok('the picture freezes immediately', settling.frozen);
+  ok('and it is captioned with the take-off it is of',
+     settling.label === 'Mulch Bed', settling.label);
+  ok('the caption sits at the bottom of the picture',
+     settling.labelLow, 'a caption over the middle would cover the bed');
   ok('but no cross appears until it has a centre', settling.cross === 0);
   ok('and it says to get comfortable first',
      /comfortable/i.test(settling.hint), settling.hint);
@@ -183,6 +194,8 @@ const LEAFLET_STUB = `window.L = (function(){
     stillShowing: document.getElementById('outlineFrame').classList.contains('show'),
     closedRing: !!document.querySelector('#outlineHud polygon'),
     crossGone: document.querySelectorAll('#outlineHud line').length === 0,
+    label: document.querySelector('#outlineHud text')
+      ? document.querySelector('#outlineHud text').textContent : null,
     hint: document.getElementById('outlineHint').textContent,
   }));
   ok('the finished ring is held on screen rather than vanishing', held.stillShowing);
@@ -190,8 +203,16 @@ const LEAFLET_STUB = `window.L = (function(){
   ok('with the crosshair gone, since there is nothing left to aim',
      held.crossGone);
   ok('and it says the outline was saved', /saved/i.test(held.hint), held.hint);
+  ok('the caption is still under it while it is held',
+     held.label === 'Mulch Bed', held.label);
 
-  await page.waitForTimeout(600);
+  // Still up most of a second later: the hold is OUTLINE_HELD_MS, not a blink.
+  await page.waitForTimeout(500);
+  const midHold = await page.evaluate(() =>
+    document.getElementById('outlineFrame').classList.contains('show'));
+  ok('and it is still up two thirds of a second after closing', midHold);
+
+  await page.waitForTimeout(700);
   const after = await page.evaluate(() => ({
     unfrozen: !document.getElementById('outlineFrame').classList.contains('show'),
     hudEmpty: document.getElementById('outlineHud').innerHTML === '',
@@ -237,7 +258,7 @@ const LEAFLET_STUB = `window.L = (function(){
   // rather than throwing the outline away as a cancel.
   await aim(5, 112, 0); await page.waitForTimeout(100);
   await hold(700);
-  await page.waitForTimeout(900);      // the hold-up, then the exit
+  await page.waitForTimeout(1500);     // the hold-up, then the exit
   const closed = await page.evaluate(() => ({
     unfrozen: !document.getElementById('outlineFrame').classList.contains('show'),
     hudEmpty: document.getElementById('outlineHud').innerHTML === '',
