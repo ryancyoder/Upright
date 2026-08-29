@@ -570,6 +570,48 @@
   .grade-btn.show{display:block;}
   .grade-btn:active{transform:scale(0.92);}
   .grade-btn.on{background:rgba(196,67,43,0.92); border-color:#fff;}
+  /* ---------- outlining a bed by aiming the iPad ----------
+     The frozen picture sits ABOVE the video and BELOW the shutter (z-index 6),
+     so the shutter draws over it and stays tappable without any of the
+     pointer-events juggling the sighting HUD needs. `contain`, not `cover`:
+     the outline belongs to the picture that gets saved, so the whole of that
+     picture has to be on screen while it is drawn. The live preview crops
+     (`cover`), which is right for framing and wrong for this. */
+  .outline-frame{
+    position:absolute; inset:0; z-index:5; display:none;
+    width:100%; height:100%; object-fit:contain; background:#000;
+  }
+  .outline-frame.show{display:block;}
+  .outline-hud{
+    position:absolute; inset:0; z-index:7; display:none;
+    pointer-events:none;              /* never swallow a tap meant for the shutter */
+  }
+  .outline-hud.show{display:block;}
+  /* Bottom LEFT, where the grade button lives -- which is stood down for the
+     duration, so the two never share the corner. A screen-width from the
+     shutter: one thumb each, and no chance of undoing when you meant to mark. */
+  .outline-bar{
+    position:absolute; left:18px; bottom:80px; z-index:23;
+    display:none; flex-direction:column; gap:6px; align-items:flex-start;
+  }
+  .outline-bar.show{display:flex;}
+  .outline-bar button{
+    border-radius:10px; border:2px solid rgba(255,255,255,0.75);
+    background:rgba(20,26,22,0.78); color:#fff;
+    font-size:12px; font-weight:700; padding:7px 11px;
+    box-shadow:0 2px 10px rgba(0,0,0,0.45);
+  }
+  .outline-bar button:disabled{opacity:0.4;}
+  .outline-hint{
+    position:absolute; left:50%; transform:translateX(-50%);
+    top:calc(env(safe-area-inset-top,0px) + 64px); z-index:23;
+    display:none; max-width:82%; text-align:center;
+    font-size:12px; font-weight:700; line-height:1.3; color:#fff;
+    background:rgba(20,26,22,0.78); padding:7px 11px; border-radius:10px;
+    pointer-events:none;
+  }
+  .outline-hint.show{display:block;}
+
   /* Take-off tiles, stacked up the RIGHT edge above the shutter (right:18px,
      bottom:80px, 76px across) so the same thumb that fires the shutter can
      reach them without crossing the screen. They scroll rather than shrink:
@@ -1301,6 +1343,13 @@
     </div>
     <button class="snap-btn" id="snapBtn" aria-label="Snap photo pin"></button>
     <button class="grade-btn" id="gradeBtn">SHOOT<br>GRADE</button>
+    <img class="outline-frame" id="outlineFrame" alt="">
+    <svg class="outline-hud" id="outlineHud"></svg>
+    <div class="outline-hint" id="outlineHint"></div>
+    <div class="outline-bar" id="outlineBar">
+      <button type="button" id="outlineUndoBtn">Undo</button>
+      <button type="button" id="outlineCancelBtn">Cancel</button>
+    </div>
     <div class="asm-col" id="asmCol"></div>
     <div class="pin-count" id="pinCount"></div>
     <div class="snap-flash" id="snapFlash"></div>
@@ -2771,6 +2820,14 @@
   }
 
   const asmCol = $('asmCol');
+  const outlineFrame=$('outlineFrame'), outlineHud=$('outlineHud'),
+        outlineBar=$('outlineBar'), outlineHint=$('outlineHint'),
+        outlineUndoBtn=$('outlineUndoBtn'), outlineCancelBtn=$('outlineCancelBtn');
+  outlineUndoBtn.addEventListener('click', ()=>outlineUndo());
+  outlineCancelBtn.addEventListener('click', ()=>outlineCancel());
+  // The letterboxed image rect moves with the viewport, and every corner
+  // already marked is held in screen pixels against it.
+  window.addEventListener('resize', ()=>{ if(outlineOn){ outlineLayout(); outlineRender(); } });
 
   /**
    * Fetch the take-off types once a session is under way.
@@ -2789,6 +2846,12 @@
   }
 
   function assemblyArm(type){
+    // Some take-offs are outlined rather than merely tagged: the tile takes the
+    // picture and hands you a crosshair. Disarming still just disarms.
+    if(OUTLINE_ASSEMBLIES.has(type.id) && (!armedAssembly || armedAssembly.id!==type.id)){
+      outlineStart(type);
+      return;
+    }
     // Tapping the armed tile puts it down. Tagging every photograph for the
     // rest of a visit because a tile was left on is worse than tagging none.
     if(armedAssembly && armedAssembly.id===type.id){ armedAssembly = null; }
@@ -2805,7 +2868,7 @@
 
   function assemblyBarSync(){
     if(!asmCol) return;
-    const on = sessionActive && !gradeOn && assemblyTypes.length>0;
+    const on = sessionActive && !gradeOn && !outlineOn && assemblyTypes.length>0;
     asmCol.classList.toggle('show', on);
     if(!on){ asmCol.innerHTML=''; return; }
     asmCol.innerHTML = '';
@@ -2849,6 +2912,256 @@
     }
   }
 
+  // ---------- outlining a bed by aiming the iPad ----------
+  //
+  // AN ALTERNATIVE TO THE PENCIL, not a replacement. Tap the tile, the app
+  // takes the picture and holds it on screen; the crosshair then follows where
+  // you AIM, and the shutter drops a corner each time. Close on the first
+  // corner and the ring is drawn onto the photograph.
+  //
+  // Why aiming rather than a joystick: the cursor tracks the SCENE. Point the
+  // iPad at the corner of a real bed and the crosshair lands on that corner in
+  // the frozen picture, because the offset is projected through the lens's own
+  // field of view. So the gesture is the one you were already doing — aiming
+  // the camera at things — rather than a new one to learn.
+  //
+  // IT IS AN ANNOTATION, NOT A MEASUREMENT. The ring is in image pixels and
+  // has no scale: nothing here knows how far away the bed is. Turning it into
+  // an area would mean projecting each corner onto an assumed ground plane,
+  // which is the same flat-earth assumption the pin parking already warns is
+  // circular. The number would look real and be invented.
+  //
+  // THE COMPASS IS IRRELEVANT HERE, and that is provable rather than hoped:
+  // the cursor is a pose RELATIVE to the moment of the shot, and a constant
+  // error in alpha premultiplies both poses by the same rotation. A rotation
+  // preserves dot products, so it cancels exactly. iOS compass calibration
+  // cannot move this crosshair.
+  const OUTLINE_ASSEMBLIES = new Set(['mulch_bed_installation_standard']);
+  /** How near the first corner the crosshair must be to close the ring. */
+  const OUTLINE_CLOSE_PX = 30;
+  /** Low-pass on the crosshair. A hand shakes; the sensor reports every tremor. */
+  const OUTLINE_SMOOTH = 0.28;
+
+  let outlineOn=false, outlinePin=null, outlinePts=[], outlineBase=null;
+  let outlineAt=null, outlineRect=null, outlineRaf=0, outlineNear=false;
+
+  /**
+   * The device's axes in earth coordinates, as columns of R = Rz(a)Rx(b)Ry(g).
+   *
+   * The third column is device z; the camera looks along its negation, which is
+   * the same axis cameraBearing() takes its azimuth from. Taking all three
+   * gives a frame rather than a direction, which is what a cursor needs: an
+   * offset has to be expressed in the picture's own left/right and up/down.
+   */
+  function orientBasis(A, B, G){
+    const r=Math.PI/180;
+    const cA=Math.cos(A*r), sA=Math.sin(A*r);
+    const cB=Math.cos(B*r), sB=Math.sin(B*r);
+    const cG=Math.cos(G*r), sG=Math.sin(G*r);
+    return {
+      x:[cA*cG - sA*sB*sG, sA*cG + cA*sB*sG, -cB*sG],
+      y:[-sA*cB,           cA*cB,             sB],
+      cam:[-(cA*sG + sA*sB*cG), -(sA*sG - cA*sB*cG), -(cB*cG)],
+    };
+  }
+  const dot3=(a,b)=>a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
+
+  /**
+   * Where the frozen picture is actually drawn, in screen pixels.
+   *
+   * `object-fit:contain` letterboxes, so the image rect is not the element
+   * rect, and every mapping between a corner on screen and a pixel in the
+   * saved photograph goes through this.
+   */
+  function outlineLayout(){
+    const el=outlineFrame, r=el.getBoundingClientRect();
+    const iw=el.naturalWidth||1280, ih=el.naturalHeight||720;
+    const scale=Math.min(r.width/iw, r.height/ih);
+    const w=iw*scale, h=ih*scale;
+    outlineRect={ x:r.left+(r.width-w)/2, y:r.top+(r.height-h)/2, w, h, iw, ih };
+  }
+
+  /** Screen point -> a fraction of the saved image, so it survives any resize. */
+  function outlineToImage(pt){
+    return [ (pt.x-outlineRect.x)/outlineRect.w, (pt.y-outlineRect.y)/outlineRect.h ];
+  }
+
+  /**
+   * Where the camera is now aiming, as a point in the frozen picture.
+   *
+   * Pure, and separated from the sensor plumbing so it can be checked without
+   * a browser -- see test62.js. The properties worth pinning are not obvious by
+   * eye: that rolling the iPad does not move the crosshair, and that a constant
+   * compass error cancels exactly.
+   */
+  function outlineProject(base, now, screenAngleDeg, rect, fovDeg){
+    // How far the camera has swung, measured in the frame it was in when the
+    // picture was taken.
+    const ax=Math.asin(Math.max(-1, Math.min(1, dot3(now.cam, base.x))));
+    const ay=Math.asin(Math.max(-1, Math.min(1, dot3(now.cam, base.y))));
+    // Device axes are not screen axes once the iPad is turned. The content
+    // rotation says by how much.
+    const th=(screenAngleDeg||0)*Math.PI/180;
+    const c=Math.cos(th), s=Math.sin(th);
+    const sx= ax*c + ay*s;
+    const sy=-ax*s + ay*c;
+    // Pinhole, not linear: a point 20 degrees off axis is not two thirds of the
+    // way to the edge of a 62-degree frame.
+    const fovH=fovDeg*Math.PI/180;
+    const fovV=2*Math.atan(Math.tan(fovH/2)*(rect.ih/rect.iw));
+    const px=rect.x + rect.w/2 + (Math.tan(sx)/Math.tan(fovH/2))*(rect.w/2);
+    const py=rect.y + rect.h/2 - (Math.tan(sy)/Math.tan(fovV/2))*(rect.h/2);
+    return {
+      x: Math.max(rect.x, Math.min(rect.x+rect.w, px)),
+      y: Math.max(rect.y, Math.min(rect.y+rect.h, py)),
+    };
+  }
+
+  function outlineFeed(A, B, G){
+    if(!outlineOn || !outlineBase || !outlineRect) return;
+    if(A==null || B==null || G==null) return;
+    const angle=(screen.orientation && screen.orientation.angle) || window.orientation || 0;
+    const want=outlineProject(outlineBase, orientBasis(A,B,G), angle, outlineRect, PHOTO_FOV_DEG);
+    outlineAt = outlineAt
+      ? { x: outlineAt.x + (want.x-outlineAt.x)*OUTLINE_SMOOTH,
+          y: outlineAt.y + (want.y-outlineAt.y)*OUTLINE_SMOOTH }
+      : want;
+    if(!outlineRaf) outlineRaf=requestAnimationFrame(()=>{ outlineRaf=0; outlineRender(); });
+  }
+
+  function outlineRender(){
+    if(!outlineOn || !outlineAt) return;
+    const near = outlinePts.length>2 &&
+      Math.hypot(outlineAt.x-outlinePts[0].x, outlineAt.y-outlinePts[0].y) < OUTLINE_CLOSE_PX;
+    outlineNear = near;
+    const ring = outlinePts.map(p=>p.x+','+p.y).join(' ');
+    const live = outlinePts.length
+      ? '<polyline points="'+ring+' '+outlineAt.x+','+outlineAt.y+'" fill="rgba(90,122,99,0.22)" '
+        + 'stroke="#eae7de" stroke-width="2.5" stroke-linejoin="round"/>'
+      : '';
+    const dots = outlinePts.map((p,i)=>
+      '<circle cx="'+p.x+'" cy="'+p.y+'" r="'+(i===0 && near ? 11 : 5)+'" '
+      + 'fill="'+(i===0 && near ? '#5a7a63' : 'none')+'" stroke="#eae7de" stroke-width="2.5"/>'
+    ).join('');
+    outlineHud.innerHTML = live + dots
+      + '<circle cx="'+outlineAt.x+'" cy="'+outlineAt.y+'" r="13" fill="none" '
+      + 'stroke="'+TARGET_SIGHT+'" stroke-width="2.5"/>'
+      + '<line x1="'+(outlineAt.x-22)+'" y1="'+outlineAt.y+'" x2="'+(outlineAt.x-5)+'" y2="'+outlineAt.y+'" stroke="'+TARGET_SIGHT+'" stroke-width="2.5"/>'
+      + '<line x1="'+(outlineAt.x+5)+'" y1="'+outlineAt.y+'" x2="'+(outlineAt.x+22)+'" y2="'+outlineAt.y+'" stroke="'+TARGET_SIGHT+'" stroke-width="2.5"/>'
+      + '<line x1="'+outlineAt.x+'" y1="'+(outlineAt.y-22)+'" x2="'+outlineAt.x+'" y2="'+(outlineAt.y-5)+'" stroke="'+TARGET_SIGHT+'" stroke-width="2.5"/>'
+      + '<line x1="'+outlineAt.x+'" y1="'+(outlineAt.y+5)+'" x2="'+outlineAt.x+'" y2="'+(outlineAt.y+22)+'" stroke="'+TARGET_SIGHT+'" stroke-width="2.5"/>';
+    outlineUndoBtn.disabled = !outlinePts.length;
+    outlineHint.textContent = near
+      ? 'Shutter closes the outline'
+      : outlinePts.length
+        ? 'Aim to move the cross \u00b7 shutter marks a corner \u00b7 '
+          + outlinePts.length + (outlinePts.length===1?' corner':' corners')
+        : 'Aim the iPad to move the cross \u00b7 shutter marks each corner';
+  }
+
+  function outlineStart(type){
+    // Needs the sensor: with no orientation there is no cursor, and a frozen
+    // picture with nothing to move on it is a dead end. The tile falls back to
+    // plain tagging, which still works.
+    if(!lastOrientEvt || lastOrientEvt.alpha==null){
+      assemblyArm(type);
+      return;
+    }
+    armedAssembly = { id:type.id, name:type.shortName||type.name, item:++assemblyItemSeq };
+    const pin = capturePin();
+    if(!pin){ armedAssembly=null; return; }
+    outlinePin=pin; outlinePts=[]; outlineAt=null; outlineNear=false;
+    outlineBase=orientBasis(lastOrientEvt.alpha, lastOrientEvt.beta||0, lastOrientEvt.gamma||0);
+    outlineFrame.onload=()=>{ outlineLayout(); outlineAt=null; outlineRender(); };
+    outlineFrame.src=pin.photo;
+    outlineOn=true;
+    outlineFrame.classList.add('show');
+    outlineHud.classList.add('show');
+    outlineBar.classList.add('show');
+    outlineHint.classList.add('show');
+    assemblyBarSync();
+    gradeBtn.classList.remove('show');
+    outlineLayout();
+    outlineRender();
+  }
+
+  function outlineMark(){
+    if(!outlineAt) return;
+    if(outlineNear){ outlineClose(); return; }
+    outlinePts.push({ x:outlineAt.x, y:outlineAt.y });
+    outlineRender();
+  }
+
+  function outlineUndo(){
+    outlinePts.pop();
+    outlineRender();
+  }
+
+  /**
+   * Draw the ring onto the photograph and put the camera back.
+   *
+   * Burned into the picture, exactly as the pencil editor's strokes are, and
+   * saved by the same route -- so it shows up wherever the photograph does,
+   * MasterDash's review rail included, with nothing else needing to know this
+   * feature exists. What it does NOT do is keep the corners as data, so the
+   * ring cannot be re-edited afterwards; storing the points is the obvious next
+   * step if that is wanted.
+   */
+  function outlineClose(){
+    if(outlinePts.length<3){ outlineCancel(); return; }
+    const img=outlineFrame;
+    const c=document.createElement('canvas');
+    c.width=img.naturalWidth||1280; c.height=img.naturalHeight||720;
+    const ctx=c.getContext('2d');
+    ctx.drawImage(img, 0, 0, c.width, c.height);
+    const pts=outlinePts.map(outlineToImage).map(([u,v])=>[u*c.width, v*c.height]);
+    ctx.beginPath();
+    ctx.moveTo(pts[0][0], pts[0][1]);
+    for(const [x,y] of pts.slice(1)) ctx.lineTo(x,y);
+    ctx.closePath();
+    ctx.fillStyle='rgba(90,122,99,0.28)';
+    ctx.fill();
+    ctx.lineWidth=Math.max(3, Math.min(c.width,c.height)*0.006);
+    ctx.strokeStyle='#eae7de';
+    ctx.lineJoin='round';
+    ctx.stroke();
+    const pin=outlinePin;
+    pin.photo=c.toDataURL('image/jpeg',0.85);
+    pin.hasDrawing=true;
+    if(inspectIs('pin', pin.id)) inspectRender();
+    renderStrip();
+    if(pin.remoteId) apiUpload('/photos/'+pin.remoteId+'/image', dataUrlToBlob(pin.photo), null);
+    else {
+      // The photo POST is still in flight. Catch the id when it lands rather
+      // than dropping the outline -- this is the fire-and-forget write model,
+      // and the picture on screen already has the ring on it.
+      pin.pendingOutline=true;
+    }
+    // The bed is finished: one tap of the tile, one outline, one bed. Leaving
+    // it armed would put the next photograph in the same bed by default.
+    armedAssembly=null;
+    outlineExit();
+  }
+
+  function outlineCancel(){
+    // The photograph stays -- it is a picture of the yard whether or not
+    // anybody drew on it, and throwing it away would be a surprise.
+    armedAssembly=null;
+    outlineExit();
+  }
+
+  function outlineExit(){
+    outlineOn=false; outlinePin=null; outlinePts=[]; outlineBase=null; outlineAt=null;
+    outlineFrame.classList.remove('show');
+    outlineHud.classList.remove('show');
+    outlineBar.classList.remove('show');
+    outlineHint.classList.remove('show');
+    outlineHud.innerHTML='';
+    outlineFrame.removeAttribute('src');
+    assemblyBarSync();
+    if(sessionActive) gradeBtn.classList.add('show');
+  }
+
   function capturePin(){
     // capture frame from live video
     const c=document.createElement('canvas');
@@ -2889,10 +3202,23 @@
       headingDeg: pin.heading, headingAccDeg: pin.headingAcc,
       assemblyId: pin.assemblyId, assemblyName: pin.assemblyName,
       assemblyItem: pin.assemblyItem
-    }).then(row=>{ if(row && row.id) pin.remoteId = row.id; });
+    }).then(row=>{
+      if(!row || !row.id) return;
+      pin.remoteId = row.id;
+      // An outline closed before the photograph's own POST came back has no id
+      // to save against. Send it the moment there is one, rather than dropping
+      // a ring the user watched themselves draw.
+      if(pin.pendingOutline){
+        pin.pendingOutline=false;
+        apiUpload('/photos/'+pin.remoteId+'/image', dataUrlToBlob(pin.photo), null);
+      }
+    });
     return pin;
   }
-  snapBtn.addEventListener('click', ()=>{ capturePin(); });
+  // ONE BUTTON, TWO JOBS. While an outline is open the shutter drops a corner
+  // instead of taking another photograph -- it is the thumb already in place,
+  // and a second button for it would be a second thing to find one-handed.
+  snapBtn.addEventListener('click', ()=>{ if(outlineOn) outlineMark(); else capturePin(); });
 
   function addPinMarker(pin){
     if(pin.lat===null) return;
@@ -5866,6 +6192,8 @@
   let elevPoints=[], elevShots=[];
   let elevSurveyOn=false, elevActiveObs=null, elevSelected=null;
   let gradeOn=false, gradeObsId=null, gradeArmed=true, dwellStart=0;
+  /** The last raw orientation event, for freezing an outline's reference pose. */
+  let lastOrientEvt=null;
   // The compass, recorded as EVIDENCE and never as input. iOS reports a true
   // heading (it applies declination itself) and an accuracy in degrees, which
   // goes negative when the device considers the compass unusable.
@@ -10149,6 +10477,11 @@
       headingLive=bearing;
       headingUpFeed(deviceTopBearing(alphaTrue, evt.beta||0, evt.gamma||0));
     } else { headingLive=null; }
+    // Raw alpha, deliberately: the outline cursor is a pose RELATIVE to the
+    // shot, so a constant compass offset premultiplies both poses by the same
+    // rotation and cancels in the dot products. Nothing here needs north.
+    lastOrientEvt = evt;
+    if(outlineOn) outlineFeed(evt.alpha, evt.beta, evt.gamma);
     tiltSamples.push({t:Date.now(), angle:tilt-90});
     if(tiltSamples.length>240) tiltSamples.splice(0, tiltSamples.length-240);
     if(sightOverlay.classList.contains('show')) sightRefresh();
@@ -10157,7 +10490,10 @@
     // to the map mid-survey would be unusable. A past yard opened on the map is
     // pinned the other way: there is no session to record into, so raising the
     // iPad must not hand the screen to a camera preview.
-    if(gradeOn || archiveMapOn) return;
+    // Outlining pins the app to the camera the way grade mode does: the whole
+    // gesture is aiming the iPad about, and letting that hand the screen to the
+    // map halfway through an outline would be unusable.
+    if(gradeOn || archiveMapOn || outlineOn) return;
     const wantUpright = currentlyUpright ? tilt>UPRIGHT_OFF : tilt>UPRIGHT_ON;
     if(wantUpright!==candidateState){ candidateState=wantUpright; candidateSince=Date.now(); }
     if(candidateState!==currentlyUpright && Date.now()-candidateSince>HOLD_MS){

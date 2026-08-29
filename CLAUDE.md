@@ -200,6 +200,91 @@ MasterDash names the case rather than saying "unsupported format", and points
 at Safari. Re-encoding the back catalogue would need a server-side transcode
 and has not been built.
 
+## Outlining a bed by aiming the iPad
+
+An **alternative to the Apple Pencil**, not a replacement. Tap a take-off tile
+that carries it — `OUTLINE_ASSEMBLIES`, currently mulch alone — and the app
+takes the picture, holds it on screen, and hands you a crosshair. The **shutter
+drops a corner** each time; closing on the first corner draws the ring onto the
+photograph and returns to video.
+
+**The crosshair tracks the SCENE, not a joystick.** Point the iPad at the corner
+of a real bed and the cross lands on that corner in the frozen picture, because
+the swing since the shot is projected through the lens's own field of view
+(`PHOTO_FOV_DEG`, 62°). So the gesture is the one you were already doing —
+aiming the camera at things — rather than a new one to learn. The projection is
+**pinhole, not linear**: a point 20° off axis is not two thirds of the way to
+the edge of a 62° frame.
+
+**It is an annotation, not a measurement.** The ring is in image pixels and has
+no scale — nothing here knows how far away the bed is. Turning it into an area
+would mean projecting each corner onto an assumed ground plane, which is the
+same flat-earth assumption *The compass, as evidence* already calls circular.
+The number would look real and be invented.
+
+**The compass is irrelevant, and that is provable rather than hoped.** The
+cursor is a pose *relative* to the moment of the shot, so a constant error in
+alpha premultiplies both poses by the same rotation — and a rotation preserves
+dot products, so it cancels exactly. iOS compass calibration cannot move this
+crosshair. `test62.js` checks it at four different offsets.
+
+**Roll invariance is the property most likely to be got wrong**, and gamma is
+the trap: gamma is *not* roll. It turns about the device's own y axis, which for
+an iPad held vertical is a **yaw**. Held vertical the camera axis obeys
+`alpha + gamma` alone, so a genuine roll is the pair moving together and
+cancelling. `test62.js` pins both halves — that a real roll moves nothing, and
+that gamma alone does move it, so the first check cannot pass by everything
+being frozen.
+
+Three conventions the test had backwards before it was believed, all derived
+from the matrix rather than assumed:
+
+- **Alpha turns LEFT.** It is counter-clockwise about the up axis, which is why
+  a heading elsewhere in this file is `360 − alpha`. Adding to it swings the
+  camera west, so the cross moves left.
+- **Beta past 90° aims UP.** Below 90 the axis has a downward component.
+- **Gamma is a yaw when the iPad is vertical**, per above.
+
+`test62.js` lifts `orientBasis()` and `outlineProject()` **out of `index.html`
+by source** rather than copying them, so it checks the code that actually runs.
+25 checks, no browser.
+
+**The ring is burned into the photograph**, exactly as the pencil editor's
+strokes are and saved by the same route (`POST /photos/:id/image`), so it shows
+wherever the picture does — MasterDash's review rail included — with nothing
+else needing to know this feature exists. What it does **not** do is keep the
+corners as data, so a ring cannot be re-edited; storing the points is the
+obvious next step if that is wanted.
+
+Smaller things that are load-bearing:
+
+- **`object-fit:contain`, not `cover`.** The live preview crops, which is right
+  for framing and wrong here: the outline belongs to the picture that gets
+  saved, so the whole of that picture has to be on screen while it is drawn.
+  Every screen↔image mapping goes through the letterboxed rect.
+- **The frozen frame sits at `z-index:5`** — above the video, below the shutter
+  at 6 — so the shutter draws over it and stays tappable with none of the
+  `pointer-events` juggling the sighting HUD needs.
+- **One tap, one outline, one bed.** The tile disarms on close, so the next
+  photograph does not join the bed just finished.
+- **Cancel keeps the photograph.** It is a picture of the yard whether or not
+  anybody drew on it.
+- **Outlining pins the tilt switch**, the way grade mode does: the whole gesture
+  is aiming the iPad about, and handing the screen to the map halfway through
+  would be unusable.
+- An outline closed before the photo's own POST returns has no id to save
+  against; the ring is sent when the id lands rather than dropped.
+
+**Needs field testing, and one thing needs it before it can be trusted:** the
+**screen-rotation correction**. Device axes are not screen axes once the iPad is
+turned, so the offset is rotated by `screen.orientation.angle`. The behaviour is
+pinned by a test, but the *sign* of that rotation has only been reasoned about —
+in portrait it does not arise, and in landscape it may need inverting. Also
+unproven: whether 62° is close enough to the real lens for the cross to land
+where you are actually pointing, whether the 0.28 smoothing is steady enough at
+arm's length, and whether gyro drift is noticeable over the half-minute an
+outline takes.
+
 ## Recording mode
 
 Audio and video are **two independent switches**, chosen on the start screen
