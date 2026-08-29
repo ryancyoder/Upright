@@ -35,8 +35,12 @@ function lift(name) {
   return src.slice(at, end);
 }
 
+const INVERT = /const OUTLINE_INVERT = (-?\d+);/.exec(src);
+if (!INVERT) throw new Error('cannot find OUTLINE_INVERT in index.html');
+
 const { orientBasis, outlineProject, dot3 } = new Function(
-  lift('orientBasis')
+  'const OUTLINE_INVERT = ' + INVERT[1] + ';\n'
+  + lift('orientBasis')
   + '\nconst dot3=(a,b)=>a[0]*b[0]+a[1]*b[1]+a[2]*b[2];\n'
   + lift('outlineProject')
   + '\nreturn { orientBasis, outlineProject, dot3 };',
@@ -83,20 +87,29 @@ const put = (a, b, g, angle = 0) => outlineProject(shot, at(a, b, g), angle, REC
 }
 
 {
-  // ALPHA TURNS LEFT. It is a counter-clockwise rotation about the up axis,
-  // which is why a compass heading elsewhere in this file is 360 - alpha. So
-  // adding to it swings the camera west, and the thing it is now aimed at sits
-  // further LEFT in the picture that was already taken.
+  // THE DIRECTIONS ARE INVERTED, from the hand rather than from the geometry.
+  //
+  // Read as tracking the scene -- aim at a real corner and the cross lands on
+  // that corner in the frozen picture -- the offsets want the sign they are
+  // computed with. On the iPad they read backwards, so OUTLINE_INVERT negates
+  // both: the picture behaves as though it is dragged under a fixed cross
+  // rather than aimed at. These checks pin the sense that SHIPS, and the
+  // constant is lifted from the source, so flipping it there fails them here
+  // rather than changing the feel of the tool silently.
+  //
+  // Alpha itself is unchanged and still turns LEFT -- it is counter-clockwise
+  // about the up axis, which is why a heading elsewhere in index.html is
+  // 360 - alpha.
   const half = put(UP.a + FOV / 2, UP.b, UP.g);
   ok('turning by half the field of view reaches the far edge',
-     near(half.x, RECT.x, 0.5), `x=${half.x.toFixed(1)}`);
+     near(half.x, RECT.x + RECT.w, 0.5), `x=${half.x.toFixed(1)}`);
   ok('and stays on the horizon while it does', near(half.y, CY, 0.5));
   const other = put(UP.a - FOV / 2, UP.b, UP.g);
   ok('turning back the other way reaches the opposite edge',
-     near(other.x, RECT.x + RECT.w, 0.5));
+     near(other.x, RECT.x, 0.5));
 
   // Half of that is NOT half the distance: the lens is a pinhole, not a ruler.
-  const quarter = put(UP.a - FOV / 4, UP.b, UP.g);
+  const quarter = put(UP.a + FOV / 4, UP.b, UP.g);
   const linear = CX + RECT.w / 4;
   ok('a quarter turn is not a quarter of the way across',
      Math.abs(quarter.x - linear) > 8,
@@ -106,13 +119,14 @@ const put = (a, b, g, angle = 0) => outlineProject(shot, at(a, b, g), angle, REC
 }
 
 {
-  // BETA PAST 90 AIMS UP. Below 90 the camera is tipped toward the ground:
-  // at beta 80 the axis has a downward component, at 100 an upward one.
+  // BETA PAST 90 AIMS UP. Below 90 the camera is tipped toward the ground: at
+  // beta 80 the axis has a downward component, at 100 an upward one. Inverted,
+  // aiming higher runs the cross DOWN the picture.
   const upward = put(UP.a, UP.b + 10, UP.g);
-  ok('aiming higher moves the cross up the picture', upward.y < CY - 20,
+  ok('aiming higher moves the cross down the picture', upward.y > CY + 20,
      `y=${upward.y.toFixed(1)} against a centre of ${CY}`);
   const downward = put(UP.a, UP.b - 10, UP.g);
-  ok('and aiming lower moves it down', downward.y > CY + 20);
+  ok('and aiming lower moves it up', downward.y < CY - 20);
 }
 
 {

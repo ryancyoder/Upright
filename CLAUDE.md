@@ -208,13 +208,27 @@ takes the picture, holds it on screen, and hands you a crosshair. The **shutter
 drops a corner** each time; closing on the first corner draws the ring onto the
 photograph and returns to video.
 
-**The crosshair tracks the SCENE, not a joystick.** Point the iPad at the corner
-of a real bed and the cross lands on that corner in the frozen picture, because
-the swing since the shot is projected through the lens's own field of view
-(`PHOTO_FOV_DEG`, 62°). So the gesture is the one you were already doing —
-aiming the camera at things — rather than a new one to learn. The projection is
-**pinhole, not linear**: a point 20° off axis is not two thirds of the way to
-the edge of a 62° frame.
+**The swing since the shot is projected through the lens's own field of view**
+(`PHOTO_FOV_DEG`, 62°), so a turn moves the cross by as much of the picture as
+that turn would have moved the camera. The projection is **pinhole, not
+linear**: a point 20° off axis is not two thirds of the way to the edge of a
+62° frame.
+
+**Both axes are inverted, and that came from the hand rather than from the
+geometry.** Read as *tracking the scene* — aim at a real corner and the cross
+lands on that corner in the frozen picture — the offsets want the sign they are
+computed with. On the iPad they read backwards, so `OUTLINE_INVERT` negates
+both: the picture behaves as though it is being **dragged under a fixed cross**
+rather than aimed at.
+
+The likeliest reason is the screen-orientation convention: an iPad's *natural*
+orientation is landscape, so held in portrait it reports an angle rather than
+zero and the correction turns the mapping by that much. Rather than guess at
+which quadrant it reports, the sign is one named constant. Negating both axes
+at once is a half turn, which **commutes** with that rotation — so it stays
+right however the iPad is held, rather than being a fix that works in one grip.
+`test62.js` lifts the constant from the source, so flipping it fails the
+direction checks rather than changing the feel of the tool silently.
 
 **It is an annotation, not a measurement.** The ring is in image pixels and has
 no scale — nothing here knows how far away the bed is. Turning it into an area

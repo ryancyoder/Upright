@@ -2951,6 +2951,15 @@
   const OUTLINE_CLOSE_PX = 30;
   /** Low-pass on the crosshair. A hand shakes; the sensor reports every tremor. */
   const OUTLINE_SMOOTH = 0.28;
+  /**
+   * Which way the crosshair runs. -1 is what the iPad actually wants.
+   *
+   * Negating both axes at once is a half turn, which commutes with the
+   * screen-orientation rotation below -- so this stays correct however the iPad
+   * is held, rather than being a fix that only works in one grip. Flip to 1 to
+   * get the scene-tracking sense back.
+   */
+  const OUTLINE_INVERT = -1;
 
   let outlineOn=false, outlinePin=null, outlinePts=[], outlineBase=null, outlineHintTimer=0;
   let outlineAt=null, outlineRect=null, outlineRaf=0, outlineNear=false;
@@ -3013,8 +3022,21 @@
   function outlineProject(base, now, screenAngleDeg, rect, fovDeg){
     // How far the camera has swung, measured in the frame it was in when the
     // picture was taken.
-    const ax=Math.asin(Math.max(-1, Math.min(1, dot3(now.cam, base.x))));
-    const ay=Math.asin(Math.max(-1, Math.min(1, dot3(now.cam, base.y))));
+    //
+    // BOTH AXES ARE INVERTED, AND THAT IS FROM THE HAND RATHER THAN FROM THE
+    // GEOMETRY. Read as tracking the scene -- aim at a real corner, the cross
+    // lands on that corner in the frozen picture -- the offsets want the sign
+    // they are computed with. On the iPad they read backwards, so they are
+    // negated: the picture behaves as though it is being dragged under a fixed
+    // cross rather than aimed at.
+    //
+    // The likeliest reason is the screen-orientation convention below. An
+    // iPad's NATURAL orientation is landscape, so held in portrait it reports
+    // an angle rather than zero, and the correction turns the mapping by that
+    // much. Rather than guess at which quadrant it is reporting, the sign lives
+    // here as one named constant, checked against a device.
+    const ax=OUTLINE_INVERT*Math.asin(Math.max(-1, Math.min(1, dot3(now.cam, base.x))));
+    const ay=OUTLINE_INVERT*Math.asin(Math.max(-1, Math.min(1, dot3(now.cam, base.y))));
     // Device axes are not screen axes once the iPad is turned. The content
     // rotation says by how much.
     const th=(screenAngleDeg||0)*Math.PI/180;
