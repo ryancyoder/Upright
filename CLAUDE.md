@@ -214,21 +214,26 @@ that turn would have moved the camera. The projection is **pinhole, not
 linear**: a point 20° off axis is not two thirds of the way to the edge of a
 62° frame.
 
-**Both axes are inverted, and that came from the hand rather than from the
-geometry.** Read as *tracking the scene* — aim at a real corner and the cross
-lands on that corner in the frozen picture — the offsets want the sign they are
-computed with. On the iPad they read backwards, so `OUTLINE_INVERT` negates
-both: the picture behaves as though it is being **dragged under a fixed cross**
-rather than aimed at.
+**Horizontal tracks the scene; vertical is inverted.** Swing the iPad right and
+the cross goes right — that is where the thing now being aimed at sits in the
+picture already taken. Tip the top away from you, aiming *higher*, and the
+cross runs **down**: the inverted-Y a flight stick uses. The geometry has no
+opinion about which of the two is right, and the hand does.
 
-The likeliest reason is the screen-orientation convention: an iPad's *natural*
+**One axis and not the other is a MIRROR, not a rotation**, and that is worth
+recording because it settled an argument. When both axes read backwards the
+obvious suspect was the screen-orientation convention — an iPad's *natural*
 orientation is landscape, so held in portrait it reports an angle rather than
-zero and the correction turns the mapping by that much. Rather than guess at
-which quadrant it reports, the sign is one named constant. Negating both axes
-at once is a half turn, which **commutes** with that rotation — so it stays
-right however the iPad is held, rather than being a fix that works in one grip.
-`test62.js` lifts the constant from the source, so flipping it fails the
-direction checks rather than changing the feel of the tool silently.
+zero and the correction turns the mapping by that much. That theory is dead:
+a rotation cannot flip one axis alone. The horizontal was right the whole time.
+
+Because it is a mirror, `OUTLINE_INVERT_X` / `_Y` are applied to the **screen**
+axes, after the rotation, rather than to the device offsets before it. A half
+turn commutes with a rotation and a mirror does not — flipping in device space
+would put the mirror on a different axis the moment the iPad was turned, and
+the preference is about what is on the screen. `test62.js` lifts both constants
+from the source, so changing either fails the direction checks rather than
+altering the feel of the tool silently.
 
 **It is an annotation, not a measurement.** The ring is in image pixels and has
 no scale — nothing here knows how far away the bed is. Turning it into an area

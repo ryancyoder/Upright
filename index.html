@@ -2952,14 +2952,22 @@
   /** Low-pass on the crosshair. A hand shakes; the sensor reports every tremor. */
   const OUTLINE_SMOOTH = 0.28;
   /**
-   * Which way the crosshair runs. -1 is what the iPad actually wants.
+   * Which way the crosshair runs, per SCREEN axis.
    *
-   * Negating both axes at once is a half turn, which commutes with the
-   * screen-orientation rotation below -- so this stays correct however the iPad
-   * is held, rather than being a fix that only works in one grip. Flip to 1 to
-   * get the scene-tracking sense back.
+   * Horizontal tracks the scene: swing the iPad right and the cross goes right,
+   * which is where it lands in the picture that was already taken. Vertical is
+   * inverted -- tip the top of the iPad away from you, aiming higher, and the
+   * cross runs DOWN. That is the inverted-Y a flight stick and most camera
+   * controls use, and it is what the hand wanted; the geometry has no opinion
+   * about which of the two is right.
+   *
+   * ONE AXIS ONLY IS A REFLECTION, NOT A ROTATION, which is why these are
+   * applied AFTER the screen-orientation rotation below rather than before it.
+   * A half turn commutes with that rotation and a mirror does not: flipping in
+   * device space would put the mirror on a different axis the moment the iPad
+   * was turned, and the preference is about what is on the screen.
    */
-  const OUTLINE_INVERT = -1;
+  const OUTLINE_INVERT_X = 1, OUTLINE_INVERT_Y = -1;
 
   let outlineOn=false, outlinePin=null, outlinePts=[], outlineBase=null, outlineHintTimer=0;
   let outlineAt=null, outlineRect=null, outlineRaf=0, outlineNear=false;
@@ -3023,26 +3031,18 @@
     // How far the camera has swung, measured in the frame it was in when the
     // picture was taken.
     //
-    // BOTH AXES ARE INVERTED, AND THAT IS FROM THE HAND RATHER THAN FROM THE
-    // GEOMETRY. Read as tracking the scene -- aim at a real corner, the cross
-    // lands on that corner in the frozen picture -- the offsets want the sign
-    // they are computed with. On the iPad they read backwards, so they are
-    // negated: the picture behaves as though it is being dragged under a fixed
-    // cross rather than aimed at.
-    //
-    // The likeliest reason is the screen-orientation convention below. An
-    // iPad's NATURAL orientation is landscape, so held in portrait it reports
-    // an angle rather than zero, and the correction turns the mapping by that
-    // much. Rather than guess at which quadrant it is reporting, the sign lives
-    // here as one named constant, checked against a device.
-    const ax=OUTLINE_INVERT*Math.asin(Math.max(-1, Math.min(1, dot3(now.cam, base.x))));
-    const ay=OUTLINE_INVERT*Math.asin(Math.max(-1, Math.min(1, dot3(now.cam, base.y))));
+    const ax=Math.asin(Math.max(-1, Math.min(1, dot3(now.cam, base.x))));
+    const ay=Math.asin(Math.max(-1, Math.min(1, dot3(now.cam, base.y))));
     // Device axes are not screen axes once the iPad is turned. The content
     // rotation says by how much.
     const th=(screenAngleDeg||0)*Math.PI/180;
     const c=Math.cos(th), s=Math.sin(th);
-    const sx= ax*c + ay*s;
-    const sy=-ax*s + ay*c;
+    // The sense is applied HERE, on screen axes, and not to ax/ay above: it is
+    // a mirror rather than a half turn now, and a mirror does not commute with
+    // a rotation. Flipping in device space would move the mirror onto a
+    // different axis the moment the iPad was turned.
+    const sx=OUTLINE_INVERT_X*( ax*c + ay*s);
+    const sy=OUTLINE_INVERT_Y*(-ax*s + ay*c);
     // Pinhole, not linear: a point 20 degrees off axis is not two thirds of the
     // way to the edge of a 62-degree frame.
     const fovH=fovDeg*Math.PI/180;

@@ -35,11 +35,11 @@ function lift(name) {
   return src.slice(at, end);
 }
 
-const INVERT = /const OUTLINE_INVERT = (-?\d+);/.exec(src);
-if (!INVERT) throw new Error('cannot find OUTLINE_INVERT in index.html');
+const SENSE = /const OUTLINE_INVERT_X = (-?\d+), OUTLINE_INVERT_Y = (-?\d+);/.exec(src);
+if (!SENSE) throw new Error('cannot find OUTLINE_INVERT_X/Y in index.html');
 
 const { orientBasis, outlineProject, dot3 } = new Function(
-  'const OUTLINE_INVERT = ' + INVERT[1] + ';\n'
+  `const OUTLINE_INVERT_X = ${SENSE[1]}, OUTLINE_INVERT_Y = ${SENSE[2]};\n`
   + lift('orientBasis')
   + '\nconst dot3=(a,b)=>a[0]*b[0]+a[1]*b[1]+a[2]*b[2];\n'
   + lift('outlineProject')
@@ -87,29 +87,21 @@ const put = (a, b, g, angle = 0) => outlineProject(shot, at(a, b, g), angle, REC
 }
 
 {
-  // THE DIRECTIONS ARE INVERTED, from the hand rather than from the geometry.
-  //
-  // Read as tracking the scene -- aim at a real corner and the cross lands on
-  // that corner in the frozen picture -- the offsets want the sign they are
-  // computed with. On the iPad they read backwards, so OUTLINE_INVERT negates
-  // both: the picture behaves as though it is dragged under a fixed cross
-  // rather than aimed at. These checks pin the sense that SHIPS, and the
-  // constant is lifted from the source, so flipping it there fails them here
-  // rather than changing the feel of the tool silently.
-  //
-  // Alpha itself is unchanged and still turns LEFT -- it is counter-clockwise
-  // about the up axis, which is why a heading elsewhere in index.html is
-  // 360 - alpha.
+  // HORIZONTAL TRACKS THE SCENE. Swing the iPad right and the cross goes right,
+  // which is where the thing now being aimed at sits in the picture that was
+  // already taken. Alpha turns LEFT -- it is counter-clockwise about the up
+  // axis, which is why a heading elsewhere in index.html is 360 - alpha -- so
+  // adding to it runs the cross left.
   const half = put(UP.a + FOV / 2, UP.b, UP.g);
   ok('turning by half the field of view reaches the far edge',
-     near(half.x, RECT.x + RECT.w, 0.5), `x=${half.x.toFixed(1)}`);
+     near(half.x, RECT.x, 0.5), `x=${half.x.toFixed(1)}`);
   ok('and stays on the horizon while it does', near(half.y, CY, 0.5));
   const other = put(UP.a - FOV / 2, UP.b, UP.g);
   ok('turning back the other way reaches the opposite edge',
-     near(other.x, RECT.x, 0.5));
+     near(other.x, RECT.x + RECT.w, 0.5));
 
   // Half of that is NOT half the distance: the lens is a pinhole, not a ruler.
-  const quarter = put(UP.a + FOV / 4, UP.b, UP.g);
+  const quarter = put(UP.a - FOV / 4, UP.b, UP.g);
   const linear = CX + RECT.w / 4;
   ok('a quarter turn is not a quarter of the way across',
      Math.abs(quarter.x - linear) > 8,
@@ -119,9 +111,13 @@ const put = (a, b, g, angle = 0) => outlineProject(shot, at(a, b, g), angle, REC
 }
 
 {
-  // BETA PAST 90 AIMS UP. Below 90 the camera is tipped toward the ground: at
-  // beta 80 the axis has a downward component, at 100 an upward one. Inverted,
-  // aiming higher runs the cross DOWN the picture.
+  // VERTICAL IS INVERTED, and that is a preference rather than a mistake -- the
+  // inverted-Y a flight stick uses. Beta past 90 aims UP (below 90 the camera
+  // is tipped toward the ground), and the cross runs DOWN.
+  //
+  // One axis flipped and not the other is a MIRROR, not a half turn, which is
+  // why the sense is applied on screen axes rather than device ones: a mirror
+  // does not commute with the screen rotation.
   const upward = put(UP.a, UP.b + 10, UP.g);
   ok('aiming higher moves the cross down the picture', upward.y > CY + 20,
      `y=${upward.y.toFixed(1)} against a centre of ${CY}`);
