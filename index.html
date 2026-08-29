@@ -1701,6 +1701,27 @@
         </div>
         <div class="pref-row">
           <div class="pref-main">
+            <div class="pref-title">Outline cross follows the aim &mdash; sideways</div>
+            <div class="pref-sub">Which way the cross runs when you swing the iPad while
+              outlining a bed. <b>On</b>, it follows what you are pointing at: swing right and
+              the cross goes right, where that thing sits in the picture already taken.
+              <b>Off</b>, the picture is dragged under a cross that stays put. Neither is more
+              correct &mdash; the geometry has no opinion, and hands differ.</div>
+          </div>
+          <button class="pref-switch" id="prefOutlineAimX" role="switch"><i></i></button>
+        </div>
+        <div class="pref-row">
+          <div class="pref-main">
+            <div class="pref-title">Outline cross follows the aim &mdash; up and down</div>
+            <div class="pref-sub">The same choice for the other axis, separately, because
+              they are separate habits: <b>on</b>, tipping the top of the iPad away from you
+              aims higher and runs the cross up; <b>off</b> is the inverted-Y a flight stick
+              uses.</div>
+          </div>
+          <button class="pref-switch" id="prefOutlineAimY" role="switch"><i></i></button>
+        </div>
+        <div class="pref-row">
+          <div class="pref-main">
             <div class="pref-title">Ground line in sections</div>
             <div class="pref-sub">Join the survey points along each cut, in order, so a section
               reads as ground rather than as scattered dots. The <b>points are measurements</b>;
@@ -1879,6 +1900,7 @@
         evExagLabel=$('evExagLabel'), prefVertExag=$('prefVertExag'),
         prefInspector=$('prefInspector'), prefFilmstrip=$('prefFilmstrip'),
         prefSplit=$('prefSplit'), prefFolds=$('prefFolds'), prefGround=$('prefGround'),
+        prefOutlineAimX=$('prefOutlineAimX'), prefOutlineAimY=$('prefOutlineAimY'),
         prefEyeHeight=$('prefEyeHeight'),
         panelsMapBtn=$('panelsMapBtn'), stripMapBtn=$('stripMapBtn'),
         panelsEvBtn=$('panelsEvBtn'), stripEvBtn=$('stripEvBtn'),
@@ -1897,8 +1919,12 @@
   // rather than returning null -- and a thrown preference read must not be
   // able to stop a session starting.
   const PREFS_KEY='upright.prefs';
+  // Both outline senses default ON, which is the cross following the aim. They
+  // are named positively rather than as "invert" so they read the same way as
+  // every other switch here -- renderPrefs() treats absent as on.
   const PREF_DEFAULTS={vertExag:true, inspector:true, filmstrip:true, splitPortrait:true,
-                       folds:true, ground:true, eyeHeightFt:4.5};
+                       folds:true, ground:true, outlineAimX:true, outlineAimY:true,
+                       eyeHeightFt:4.5};
   const prefs=Object.assign({}, PREF_DEFAULTS);
   try{
     const raw=localStorage.getItem(PREFS_KEY);
@@ -1910,7 +1936,8 @@
   }
   function renderPrefs(){
     [[prefVertExag,'vertExag'],[prefInspector,'inspector'],[prefFilmstrip,'filmstrip'],
-      [prefSplit,'splitPortrait'],[prefFolds,'folds'],[prefGround,'ground']]
+      [prefSplit,'splitPortrait'],[prefFolds,'folds'],[prefGround,'ground'],
+      [prefOutlineAimX,'outlineAimX'],[prefOutlineAimY,'outlineAimY']]
       .forEach(([el,key])=>{
         const on = prefs[key]!==false;
         el.classList.toggle('on', on);
@@ -2952,22 +2979,24 @@
   /** Low-pass on the crosshair. A hand shakes; the sensor reports every tremor. */
   const OUTLINE_SMOOTH = 0.28;
   /**
-   * Which way the crosshair runs, per SCREEN axis.
+   * Which way the crosshair runs, per SCREEN axis, from Settings.
    *
-   * Horizontal tracks the scene: swing the iPad right and the cross goes right,
-   * which is where it lands in the picture that was already taken. Vertical is
-   * inverted -- tip the top of the iPad away from you, aiming higher, and the
-   * cross runs DOWN. That is the inverted-Y a flight stick and most camera
-   * controls use, and it is what the hand wanted; the geometry has no opinion
-   * about which of the two is right.
+   * A PREFERENCE RATHER THAN A CONSTANT, because it turned out nobody can tell
+   * from the armchair which way round it should be -- it was guessed wrong
+   * twice, once each way, before anybody held it. The geometry has no opinion:
+   * following the aim and dragging the picture are both coherent, and which
+   * one a hand expects is a habit.
    *
-   * ONE AXIS ONLY IS A REFLECTION, NOT A ROTATION, which is why these are
-   * applied AFTER the screen-orientation rotation below rather than before it.
-   * A half turn commutes with that rotation and a mirror does not: flipping in
-   * device space would put the mirror on a different axis the moment the iPad
-   * was turned, and the preference is about what is on the screen.
+   * Default is ON for both, which is the cross FOLLOWING THE AIM: swing right
+   * and it goes right, where the thing now aimed at sits in the picture already
+   * taken. The axes are separate switches because they are separate habits --
+   * inverted-Y with normal X is what a flight stick does, and is the one
+   * combination somebody actually asked for along the way.
    */
-  const OUTLINE_INVERT_X = 1, OUTLINE_INVERT_Y = -1;
+  function outlineSense(){
+    return { x: prefs.outlineAimX===false ? -1 : 1,
+             y: prefs.outlineAimY===false ? -1 : 1 };
+  }
 
   let outlineOn=false, outlinePin=null, outlinePts=[], outlineBase=null, outlineHintTimer=0;
   let outlineAt=null, outlineRect=null, outlineRaf=0, outlineNear=false;
@@ -3027,7 +3056,7 @@
    * eye: that rolling the iPad does not move the crosshair, and that a constant
    * compass error cancels exactly.
    */
-  function outlineProject(base, now, screenAngleDeg, rect, fovDeg){
+  function outlineProject(base, now, screenAngleDeg, rect, fovDeg, sense){
     // How far the camera has swung, measured in the frame it was in when the
     // picture was taken.
     //
@@ -3037,12 +3066,13 @@
     // rotation says by how much.
     const th=(screenAngleDeg||0)*Math.PI/180;
     const c=Math.cos(th), s=Math.sin(th);
-    // The sense is applied HERE, on screen axes, and not to ax/ay above: it is
-    // a mirror rather than a half turn now, and a mirror does not commute with
-    // a rotation. Flipping in device space would move the mirror onto a
-    // different axis the moment the iPad was turned.
-    const sx=OUTLINE_INVERT_X*( ax*c + ay*s);
-    const sy=OUTLINE_INVERT_Y*(-ax*s + ay*c);
+    // The sense is applied HERE, on screen axes, and not to ax/ay above.
+    // Inverting ONE axis is a mirror rather than a half turn, and a mirror does
+    // not commute with a rotation: flipping in device space would move the
+    // mirror onto a different axis the moment the iPad was turned, while the
+    // preference is about what is on the screen.
+    const sx=sense.x*( ax*c + ay*s);
+    const sy=sense.y*(-ax*s + ay*c);
     // Pinhole, not linear: a point 20 degrees off axis is not two thirds of the
     // way to the edge of a 62-degree frame.
     const fovH=fovDeg*Math.PI/180;
@@ -3059,7 +3089,8 @@
     if(!outlineOn || !outlineBase || !outlineRect) return;
     if(A==null || B==null || G==null) return;
     const angle=(screen.orientation && screen.orientation.angle) || window.orientation || 0;
-    const want=outlineProject(outlineBase, orientBasis(A,B,G), angle, outlineRect, PHOTO_FOV_DEG);
+    const want=outlineProject(outlineBase, orientBasis(A,B,G), angle, outlineRect,
+                              PHOTO_FOV_DEG, outlineSense());
     outlineAt = outlineAt
       ? { x: outlineAt.x + (want.x-outlineAt.x)*OUTLINE_SMOOTH,
           y: outlineAt.y + (want.y-outlineAt.y)*OUTLINE_SMOOTH }
@@ -5672,6 +5703,8 @@
   foldMapBtn.addEventListener('click', ()=>prefToggle('folds'));
   foldEvBtn.addEventListener('click', ()=>prefToggle('folds'));
   prefFolds.addEventListener('click', ()=>prefToggle('folds'));
+  prefOutlineAimX.addEventListener('click', ()=>prefToggle('outlineAimX'));
+  prefOutlineAimY.addEventListener('click', ()=>prefToggle('outlineAimY'));
   panelsMapBtn.addEventListener('click', ()=>prefToggle('inspector'));
   panelsEvBtn.addEventListener('click', ()=>prefToggle('inspector'));
   stripMapBtn.addEventListener('click', ()=>prefToggle('filmstrip'));

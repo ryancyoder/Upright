@@ -35,12 +35,8 @@ function lift(name) {
   return src.slice(at, end);
 }
 
-const SENSE = /const OUTLINE_INVERT_X = (-?\d+), OUTLINE_INVERT_Y = (-?\d+);/.exec(src);
-if (!SENSE) throw new Error('cannot find OUTLINE_INVERT_X/Y in index.html');
-
 const { orientBasis, outlineProject, dot3 } = new Function(
-  `const OUTLINE_INVERT_X = ${SENSE[1]}, OUTLINE_INVERT_Y = ${SENSE[2]};\n`
-  + lift('orientBasis')
+  lift('orientBasis')
   + '\nconst dot3=(a,b)=>a[0]*b[0]+a[1]*b[1]+a[2]*b[2];\n'
   + lift('outlineProject')
   + '\nreturn { orientBasis, outlineProject, dot3 };',
@@ -61,7 +57,10 @@ const CX = RECT.x + RECT.w / 2, CY = RECT.y + RECT.h / 2;
 const UP = { a: 0, b: 90, g: 0 };
 const at = (a, b, g) => orientBasis(a, b, g);
 const shot = at(UP.a, UP.b, UP.g);
-const put = (a, b, g, angle = 0) => outlineProject(shot, at(a, b, g), angle, RECT, FOV);
+// Following the aim on both axes: the default, and what Settings calls on.
+const FOLLOW = { x: 1, y: 1 };
+const put = (a, b, g, angle = 0, sense = FOLLOW) =>
+  outlineProject(shot, at(a, b, g), angle, RECT, FOV, sense);
 
 {
   // The basis has to be a basis, or every angle read off it is wrong.
@@ -87,11 +86,11 @@ const put = (a, b, g, angle = 0) => outlineProject(shot, at(a, b, g), angle, REC
 }
 
 {
-  // HORIZONTAL TRACKS THE SCENE. Swing the iPad right and the cross goes right,
-  // which is where the thing now being aimed at sits in the picture that was
-  // already taken. Alpha turns LEFT -- it is counter-clockwise about the up
-  // axis, which is why a heading elsewhere in index.html is 360 - alpha -- so
-  // adding to it runs the cross left.
+  // THE DEFAULT SENSE: the cross follows the aim on both axes. Swing the iPad
+  // right and it goes right, which is where the thing now being aimed at sits
+  // in the picture already taken. Alpha turns LEFT -- counter-clockwise about
+  // the up axis, which is why a heading elsewhere in index.html is 360 - alpha
+  // -- so adding to it runs the cross left.
   const half = put(UP.a + FOV / 2, UP.b, UP.g);
   ok('turning by half the field of view reaches the far edge',
      near(half.x, RECT.x, 0.5), `x=${half.x.toFixed(1)}`);
@@ -111,18 +110,49 @@ const put = (a, b, g, angle = 0) => outlineProject(shot, at(a, b, g), angle, REC
 }
 
 {
-  // VERTICAL IS INVERTED, and that is a preference rather than a mistake -- the
-  // inverted-Y a flight stick uses. Beta past 90 aims UP (below 90 the camera
-  // is tipped toward the ground), and the cross runs DOWN.
-  //
-  // One axis flipped and not the other is a MIRROR, not a half turn, which is
-  // why the sense is applied on screen axes rather than device ones: a mirror
-  // does not commute with the screen rotation.
+  // Beta past 90 aims UP -- below 90 the camera is tipped toward the ground --
+  // and by default the cross follows it up.
   const upward = put(UP.a, UP.b + 10, UP.g);
-  ok('aiming higher moves the cross down the picture', upward.y > CY + 20,
+  ok('aiming higher moves the cross up the picture', upward.y < CY - 20,
      `y=${upward.y.toFixed(1)} against a centre of ${CY}`);
   const downward = put(UP.a, UP.b - 10, UP.g);
-  ok('and aiming lower moves it up', downward.y < CY - 20);
+  ok('and aiming lower moves it down', downward.y > CY + 20);
+}
+
+{
+  // EITHER SENSE IS REACHABLE FROM SETTINGS, so both are pinned. Nobody could
+  // tell from the armchair which way round this should be -- it was guessed
+  // wrong twice, once each way, before anybody held it -- so the code must
+  // support both and the tests must say what each one does.
+  const flipX = { x: -1, y: 1 }, flipY = { x: 1, y: -1 }, flipBoth = { x: -1, y: -1 };
+
+  ok('inverting sideways sends a left turn the other way',
+     put(UP.a + FOV / 4, UP.b, UP.g, 0, flipX).x > CX,
+     'and by default the same turn runs it left');
+  ok('while leaving up and down alone',
+     put(UP.a, UP.b + 10, UP.g, 0, flipX).y < CY - 20);
+
+  ok('inverting up and down gives the flight-stick sense',
+     put(UP.a, UP.b + 10, UP.g, 0, flipY).y > CY + 20,
+     'aim higher, cross goes down');
+  ok('while leaving sideways alone',
+     put(UP.a + FOV / 4, UP.b, UP.g, 0, flipY).x < CX);
+
+  const both = put(UP.a + FOV / 4, UP.b + 10, UP.g, 0, flipBoth);
+  const none = put(UP.a + FOV / 4, UP.b + 10, UP.g);
+  ok('inverting both mirrors the default through the centre',
+     near(both.x - CX, -(none.x - CX), 1e-9) && near(both.y - CY, -(none.y - CY), 1e-9));
+
+  // A MIRROR DOES NOT COMMUTE WITH A ROTATION, which is why the sense is
+  // applied to screen axes rather than device ones. If it were applied before
+  // the rotation, inverting one axis on a turned screen would mirror a
+  // different axis than the one the switch names.
+  const turnedFlipY = put(UP.a + FOV / 4, UP.b, UP.g, 90, flipY);
+  const turnedPlain = put(UP.a + FOV / 4, UP.b, UP.g, 90);
+  ok('on a turned screen the up-down switch still mirrors up and down',
+     near(turnedFlipY.x, turnedPlain.x, 1e-9)
+     && near(turnedFlipY.y - CY, -(turnedPlain.y - CY), 1e-9),
+     'a device-space flip would have moved x instead');
 }
 
 {
@@ -134,14 +164,14 @@ const put = (a, b, g, angle = 0) => outlineProject(shot, at(a, b, g), angle, REC
   // together and cancelling, which is what the aim being unchanged means.
   const held = orientBasis(UP.a, UP.b, UP.g);
   for (const d of [-45, -30, -10, 10, 30, 45]) {
-    const p = outlineProject(held, at(UP.a + d, UP.b, UP.g - d), 0, RECT, FOV);
+    const p = outlineProject(held, at(UP.a + d, UP.b, UP.g - d), 0, RECT, FOV, FOLLOW);
     ok(`rolling ${d}° in the hand leaves the cross where it was`,
        near(p.x, CX, 1.5) && near(p.y, CY, 1.5),
        `landed ${p.x.toFixed(1)},${p.y.toFixed(1)}`);
   }
   // And the thing that is easy to confuse it with really does move it, so the
   // check above is not passing because nothing moves anything.
-  const yawed = outlineProject(held, at(UP.a, UP.b, UP.g + 10), 0, RECT, FOV);
+  const yawed = outlineProject(held, at(UP.a, UP.b, UP.g + 10), 0, RECT, FOV, FOLLOW);
   ok('while turning gamma alone -- a yaw, not a roll -- does move it',
      Math.abs(yawed.x - CX) > 50);
 }
@@ -152,7 +182,7 @@ const put = (a, b, g, angle = 0) => outlineProject(shot, at(a, b, g), angle, REC
   for (const off of [17, 90, -140, 250]) {
     const base = at(UP.a + off, UP.b, UP.g);
     const now = at(UP.a + off + 12, UP.b, UP.g);
-    const p = outlineProject(base, now, 0, RECT, FOV);
+    const p = outlineProject(base, now, 0, RECT, FOV, FOLLOW);
     const clean = put(UP.a + 12, UP.b, UP.g);
     ok(`a ${off}° compass error changes nothing`,
        near(p.x, clean.x, 1e-6) && near(p.y, clean.y, 1e-6));

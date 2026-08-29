@@ -214,26 +214,31 @@ that turn would have moved the camera. The projection is **pinhole, not
 linear**: a point 20° off axis is not two thirds of the way to the edge of a
 62° frame.
 
-**Horizontal tracks the scene; vertical is inverted.** Swing the iPad right and
-the cross goes right — that is where the thing now being aimed at sits in the
-picture already taken. Tip the top away from you, aiming *higher*, and the
-cross runs **down**: the inverted-Y a flight stick uses. The geometry has no
-opinion about which of the two is right, and the hand does.
+**Which way the cross runs is a PREFERENCE, one switch per axis in Settings,
+and that is the finding rather than a cop-out.** It was guessed wrong twice —
+once each way — before anybody held the thing. Following the aim (swing right,
+cross right, where that thing sits in the picture already taken) and dragging
+the picture under a fixed cross are both coherent; the geometry has no opinion,
+and which one a hand expects is a habit. `outlineAimX` / `outlineAimY` default
+to **on**, which is following the aim on both axes.
 
-**One axis and not the other is a MIRROR, not a rotation**, and that is worth
-recording because it settled an argument. When both axes read backwards the
-obvious suspect was the screen-orientation convention — an iPad's *natural*
-orientation is landscape, so held in portrait it reports an angle rather than
-zero and the correction turns the mapping by that much. That theory is dead:
-a rotation cannot flip one axis alone. The horizontal was right the whole time.
+The axes are **separate switches because they are separate habits** — inverted-Y
+with normal X is what a flight stick does, and was one of the combinations
+asked for along the way.
 
-Because it is a mirror, `OUTLINE_INVERT_X` / `_Y` are applied to the **screen**
-axes, after the rotation, rather than to the device offsets before it. A half
-turn commutes with a rotation and a mirror does not — flipping in device space
-would put the mirror on a different axis the moment the iPad was turned, and
-the preference is about what is on the screen. `test62.js` lifts both constants
-from the source, so changing either fails the direction checks rather than
-altering the feel of the tool silently.
+**One axis and not the other is a MIRROR, not a rotation**, and that killed a
+theory worth recording as dead. When both axes read backwards the obvious
+suspect was the screen-orientation convention — an iPad's *natural* orientation
+is landscape, so held in portrait it reports an angle rather than zero and the
+correction turns the mapping by that much. A rotation cannot flip one axis
+alone, so that was never it.
+
+Because a mirror is possible, the sense is applied to the **screen** axes,
+after the rotation, rather than to the device offsets before it: a half turn
+commutes with a rotation and a mirror does not, so a device-space flip would
+put the mirror on a different axis the moment the iPad was turned — while the
+switch names a direction on the screen. `test62.js` pins all four combinations
+and checks that one specifically, on a turned screen.
 
 **It is an annotation, not a measurement.** The ring is in image pixels and has
 no scale — nothing here knows how far away the bed is. Turning it into an area
@@ -640,6 +645,8 @@ preferences only show their effect from inside a view.
 - **Preview column** — the pin inspector, on the map and in every elevation view.
 - **Filmstrip** — likewise.
 - **Split screen in portrait** — see *Split screen: section over plan*.
+- **Outline cross follows the aim — sideways / up and down** — two switches, one
+  per axis. See *Outlining a bed by aiming the iPad*.
 - **Eye height when shooting grade** — the `h` in `d = h / tan|θ|`, used only to
   park a just-shot pin. The one preference here that is a number, not a switch.
 

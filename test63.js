@@ -148,6 +148,25 @@ const LEAFLET_STUB = `window.L = (function(){
   ok('and clears the overlay behind it', after.hudEmpty);
   ok('and the tiles return', after.tilesBack === 2);
 
+  // The two Settings switches exist and default to following the aim, which is
+  // what every direction check in test62 assumes.
+  // Opened at the END, and from the start screen's own gear: renderPrefs()
+  // only runs on openSettings(), so the switch classes are unset before that.
+  await page.evaluate(() => document.getElementById('settingsBtn').click());
+  await page.waitForTimeout(200);
+  const sense = await page.evaluate(() => {
+    const open = document.getElementById('prefOutlineAimX');
+    return open ? {
+      x: open.classList.contains('on'),
+      y: document.getElementById('prefOutlineAimY').classList.contains('on'),
+      xLabel: open.closest('.pref-row').querySelector('.pref-title').textContent,
+    } : null;
+  });
+  ok('the outline sense is a Settings switch per axis', !!sense);
+  ok('and both default to following the aim', sense && sense.x && sense.y);
+  ok('the sideways one names the axis it governs',
+     sense && /sideways/i.test(sense.xLabel), sense && sense.xLabel);
+
   ok('nothing threw along the way', errors.length === 0, errors.join(' / '));
 
   await browser.close();
