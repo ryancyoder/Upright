@@ -58,7 +58,7 @@ still nullable and still unused.
 
 ### Edge Function `upright-api`
 
-Endpoints under `/functions/v1/upright-api`, as of the v31 pull:
+Endpoints under `/functions/v1/upright-api`, as of v32:
 `POST /sessions`, `GET /sessions` (history list), `GET /sessions/:id`,
 `PATCH /sessions/:id` (assign property, set name), `GET /properties` (address picker),
 `POST /sessions/:id/audio|clips|photos|sketches|measures|plan`,
@@ -101,7 +101,8 @@ somebody pulls it back, so **pull before you edit, every time** — the endpoint
 list above is written from the source and is only as current as the last pull.
 A deploy must send **both** files: the tool takes the whole file set, so
 pushing `index.ts` alone deletes `proposal.ts` and every `/proposal` route with
-it. Currently **v31**.
+it. Currently **v32**, deployed from this vendored copy on 2026-08-29 and
+verified byte-identical to it afterwards.
 
 **Replacing an image writes a NEW storage path, never an upsert in place.**
 Storage public URLs are cached by the browser and by the CDN in front of the
