@@ -1724,13 +1724,15 @@
         </div>
         <div class="pref-row">
           <div class="pref-main">
-            <div class="pref-title">Show detected edges while outlining</div>
+            <div class="pref-title">Snap corners to detected edges</div>
             <div class="pref-sub">Draw the boundaries the camera can find over the frozen
-              picture, so there is a line to follow while placing corners. <b>It never moves a
-              corner</b> &mdash; it is something to look at, not a snap. The gradient is taken
-              across colour rather than brightness, since mulch against grass is often a big
-              colour difference and a small brightness one. Whether a real bed edge lights up
-              is the open question; turn it off if it is just clutter.</div>
+              picture, and pull the cross onto one when it comes within a thumb's width. The
+              cross <b>moves onto the edge</b> and turns its colour, so what the shutter is
+              about to mark is never in doubt, and where you are actually aiming stays on
+              screen as a small dot. Aim away and it lets go &mdash; nothing is ever placed
+              somewhere you cannot see. The gradient is taken across colour rather than
+              brightness, since mulch against grass is often a big colour difference and a
+              small brightness one.</div>
           </div>
           <button class="pref-switch" id="prefOutlineEdges" role="switch"><i></i></button>
         </div>
@@ -3165,10 +3167,20 @@
   // right in one photograph and wrong in the next -- flat light and hard
   // midday sun differ by more than any constant survives.
   const EDGE_SCALE = 0.5, EDGE_KEEP = 0.055, EDGE_TINT = [64, 214, 232];
+  /**
+   * How far the cross reaches for an edge, in screen pixels.
+   *
+   * About a thumb's wobble. Wider and it starts pulling corners onto edges you
+   * were not aiming at, which is the failure that makes a snap worse than
+   * nothing: a corner somewhere you did not put it, that you did not notice.
+   */
+  const EDGE_SNAP_PX = 24;
   let outlineEdgeSrc=null;              // offscreen RGBA at detection resolution
+  let outlineEdgeMap=null, outlineEdgeW=0, outlineEdgeH=0;   // strengths, for the snap
+  let outlineSnap=null;                 // where the cross has been pulled to, if anywhere
 
   function outlineEdgesBuild(){
-    outlineEdgeSrc=null;
+    outlineEdgeSrc=null; outlineEdgeMap=null;
     const img=outlineFrame;
     const iw=img.naturalWidth, ih=img.naturalHeight;
     if(!iw || !ih) return;
@@ -3217,7 +3229,44 @@
     }
     octx.putImageData(px, 0, 0);
     outlineEdgeSrc=out;
+    // Kept as a plain strength map as well: the overlay is for the eye, and
+    // reading pixels back off a canvas every frame to find a snap target would
+    // be a getImageData per frame for no reason.
+    const strength=new Uint8Array(w*h);
+    for(let i=0; i<mag.length; i++) strength[i]= mag[i]<thr ? 0 : Math.min(255, ((mag[i]-thr)/(peak-thr||1))*255+1);
+    outlineEdgeMap=strength; outlineEdgeW=w; outlineEdgeH=h;
   }
+
+  /**
+   * The edge the cross is reaching for, or null.
+   *
+   * STRONG *AND* NEAR. Scoring on strength alone would let a hard shadow line
+   * at the edge of the reach beat the bed edge under the cross, which is
+   * exactly the way a snap gets a reputation for fighting you. The distance
+   * term falls to zero at the limit, so nothing at the rim can win.
+   */
+  function outlineSnapAt(pt){
+    if(!outlineEdgeMap || !outlineRect || prefs.outlineEdges===false) return null;
+    const sx=outlineEdgeW/outlineRect.w, sy=outlineEdgeH/outlineRect.h;
+    const cx=(pt.x-outlineRect.x)*sx, cy=(pt.y-outlineRect.y)*sy;
+    const rx=EDGE_SNAP_PX*sx, ry=EDGE_SNAP_PX*sy, r=Math.max(rx, ry);
+    const x0=Math.max(0, Math.floor(cx-r)), x1=Math.min(outlineEdgeW-1, Math.ceil(cx+r));
+    const y0=Math.max(0, Math.floor(cy-r)), y1=Math.min(outlineEdgeH-1, Math.ceil(cy+r));
+    let best=0, bx=0, by=0;
+    for(let y=y0; y<=y1; y++) for(let x=x0; x<=x1; x++){
+      const v=outlineEdgeMap[y*outlineEdgeW+x];
+      if(!v) continue;
+      const d=Math.hypot((x-cx)/rx, (y-cy)/ry);
+      if(d>1) continue;
+      const score=v*(1-d);
+      if(score>best){ best=score; bx=x; by=y; }
+    }
+    if(!best) return null;
+    return { x: outlineRect.x+(bx+0.5)/sx, y: outlineRect.y+(by+0.5)/sy };
+  }
+
+  /** The point the shutter would mark: the edge if one is in reach, else the aim. */
+  function outlineMarkPoint(){ return outlineSnap || outlineAt; }
 
   /** Lay the detected edges over the picture, wherever it is currently drawn. */
   function outlineEdgesPaint(){
@@ -3369,32 +3418,53 @@
       outlineHint.textContent = outlinePts.length + ' corners \u00b7 saved to the photo';
       return;
     }
+    // WHAT WILL BE MARKED IS WHERE THE CROSS IS. The cross moves onto the edge
+    // rather than a second marker appearing beside it, so there is never a
+    // question of which of two things the shutter is about to take. Where you
+    // are actually aiming stays on screen as a small hollow dot, which is what
+    // explains the move -- otherwise the cross just feels like it drifts.
+    outlineSnap = outlineSnapAt(outlineAt);
+    const mark = outlineMarkPoint();
     const near = outlinePts.length>2 &&
-      Math.hypot(outlineAt.x-outlinePts[0].x, outlineAt.y-outlinePts[0].y) < OUTLINE_CLOSE_PX;
+      Math.hypot(mark.x-outlinePts[0].x, mark.y-outlinePts[0].y) < OUTLINE_CLOSE_PX;
     outlineNear = near;
     const ring = outlinePts.map(p=>p.x+','+p.y).join(' ');
     const live = outlinePts.length
-      ? '<polyline points="'+ring+' '+outlineAt.x+','+outlineAt.y+'" fill="rgba(90,122,99,0.22)" '
+      ? '<polyline points="'+ring+' '+mark.x+','+mark.y+'" fill="rgba(90,122,99,0.22)" '
         + 'stroke="#eae7de" stroke-width="2.5" stroke-linejoin="round"/>'
+      : '';
+    const aim = outlineSnap
+      ? '<circle cx="'+outlineAt.x+'" cy="'+outlineAt.y+'" r="3.5" fill="none" '
+        + 'stroke="rgba(234,231,222,0.55)" stroke-width="1.5"/>'
       : '';
     const dots = outlinePts.map((p,i)=>
       '<circle cx="'+p.x+'" cy="'+p.y+'" r="'+(i===0 && near ? 11 : 5)+'" '
       + 'fill="'+(i===0 && near ? '#5a7a63' : 'none')+'" stroke="#eae7de" stroke-width="2.5"/>'
     ).join('');
-    outlineHud.innerHTML = outlineLabelSvg() + live + dots
-      + '<circle cx="'+outlineAt.x+'" cy="'+outlineAt.y+'" r="13" fill="none" '
-      + 'stroke="'+TARGET_SIGHT+'" stroke-width="2.5"/>'
-      + '<line x1="'+(outlineAt.x-22)+'" y1="'+outlineAt.y+'" x2="'+(outlineAt.x-5)+'" y2="'+outlineAt.y+'" stroke="'+TARGET_SIGHT+'" stroke-width="2.5"/>'
-      + '<line x1="'+(outlineAt.x+5)+'" y1="'+outlineAt.y+'" x2="'+(outlineAt.x+22)+'" y2="'+outlineAt.y+'" stroke="'+TARGET_SIGHT+'" stroke-width="2.5"/>'
-      + '<line x1="'+outlineAt.x+'" y1="'+(outlineAt.y-22)+'" x2="'+outlineAt.x+'" y2="'+(outlineAt.y-5)+'" stroke="'+TARGET_SIGHT+'" stroke-width="2.5"/>'
-      + '<line x1="'+outlineAt.x+'" y1="'+(outlineAt.y+5)+'" x2="'+outlineAt.x+'" y2="'+(outlineAt.y+22)+'" stroke="'+TARGET_SIGHT+'" stroke-width="2.5"/>';
+    // The cross takes the edge's own colour when it is on one, so "this corner
+    // is on a detected edge" is readable at a glance rather than something you
+    // have to infer from the cross having moved.
+    const tint = outlineSnap ? 'rgb('+EDGE_TINT.join(',')+')' : TARGET_SIGHT;
+    outlineHud.innerHTML = outlineLabelSvg() + live + dots + aim
+      + '<circle cx="'+mark.x+'" cy="'+mark.y+'" r="'+(outlineSnap?9:13)+'" '
+      + (outlineSnap?'fill="rgba(64,214,232,0.30)"':'fill="none"')
+      + ' stroke="'+tint+'" stroke-width="2.5"/>'
+      + '<line x1="'+(mark.x-22)+'" y1="'+mark.y+'" x2="'+(mark.x-5)+'" y2="'+mark.y+'" stroke="'+tint+'" stroke-width="2.5"/>'
+      + '<line x1="'+(mark.x+5)+'" y1="'+mark.y+'" x2="'+(mark.x+22)+'" y2="'+mark.y+'" stroke="'+tint+'" stroke-width="2.5"/>'
+      + '<line x1="'+mark.x+'" y1="'+(mark.y-22)+'" x2="'+mark.x+'" y2="'+(mark.y-5)+'" stroke="'+tint+'" stroke-width="2.5"/>'
+      + '<line x1="'+mark.x+'" y1="'+(mark.y+5)+'" x2="'+mark.x+'" y2="'+(mark.y+22)+'" stroke="'+tint+'" stroke-width="2.5"/>';
     outlineUndoBtn.disabled = !outlinePts.length;
-    outlineHint.textContent = near
+    // The snap is APPENDED, never substituted. It engages most of the time when
+    // it is working, and losing the corner count and the hold prompt behind it
+    // would trade the two things somebody still needs for one the cross's own
+    // colour is already saying.
+    const base = near
       ? 'Shutter closes the outline'
       : outlinePts.length
         ? 'Shutter marks a corner \u00b7 hold it to finish here \u00b7 '
           + outlinePts.length + (outlinePts.length===1?' corner':' corners')
         : 'Aim the iPad to move the cross \u00b7 shutter marks each corner';
+    outlineHint.textContent = base + (outlineSnap && !near ? ' \u00b7 on an edge' : '');
   }
 
   function outlineStart(type){
@@ -3445,7 +3515,8 @@
   function outlineMark(){
     if(!outlineAt || outlineDone || outlineSettling) return;
     if(outlineNear){ outlineClose(); return; }
-    outlinePts.push({ x:outlineAt.x, y:outlineAt.y });
+    const m=outlineMarkPoint();
+    outlinePts.push({ x:m.x, y:m.y });
     outlineRender();
   }
 
@@ -3462,7 +3533,8 @@
    */
   function outlineFinishHere(){
     if(!outlineAt || outlineDone || outlineSettling) return;
-    outlinePts.push({ x:outlineAt.x, y:outlineAt.y });
+    const m=outlineMarkPoint();
+    outlinePts.push({ x:m.x, y:m.y });
     if(outlinePts.length<3){ outlineRender(); return; }
     outlineClose();
   }
@@ -3557,7 +3629,8 @@
     outlineBar.classList.remove('show');
     outlineHint.classList.remove('show');
     outlineHud.innerHTML='';
-    outlineEdgeSrc=null; outlineEdges.classList.remove('show');
+    outlineEdgeSrc=null; outlineEdgeMap=null; outlineSnap=null;
+    outlineEdges.classList.remove('show');
     outlineFrame.removeAttribute('src');
     assemblyBarSync();
     if(sessionActive) gradeBtn.classList.add('show');

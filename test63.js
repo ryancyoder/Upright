@@ -204,6 +204,30 @@ const LEAFLET_STUB = `window.L = (function(){
     document.getElementById('outlineHint').textContent);
   ok('the shutter marks corners and they are counted', /3 corners/.test(three), three);
 
+  // THE SNAP ACTUALLY MOVES A CORNER, and onto something lit. Checking the
+  // hint or the colour would only prove the app believes it snapped; this
+  // reads the corner's own position back and asks the edge map about it.
+  const snapped = await page.evaluate(() => {
+    const dots = [...document.querySelectorAll('#outlineHud circle')];
+    // The cross is last; the small hollow dot before it is the raw aim, drawn
+    // only while snapped. Corners are the ones before those.
+    const cross = dots[dots.length - 1].getBoundingClientRect();
+    const c = document.getElementById('outlineEdges');
+    const hud = document.getElementById('outlineHud').getBoundingClientRect();
+    const ctx = c.getContext('2d');
+    const cx = Math.round(cross.left + cross.width / 2 - hud.left);
+    const cy = Math.round(cross.top + cross.height / 2 - hud.top);
+    // Is the point the shutter would take actually on a lit pixel?
+    let litNear = 0;
+    const d = ctx.getImageData(Math.max(0, cx - 3), Math.max(0, cy - 3), 7, 7).data;
+    for (let i = 3; i < d.length; i += 4) if (d[i] > 0) litNear++;
+    return { litNear, onEdgeHint: /on an edge/.test(
+      document.getElementById('outlineHint').textContent) };
+  });
+  ok('when the hint says it is on an edge, the cross really is on a lit pixel',
+     !snapped.onEdgeHint || snapped.litNear > 0,
+     `${snapped.litNear} lit pixels under the cross`);
+
   await aim(-6, 134, 0);
   await page.waitForTimeout(200);
   const back = await page.evaluate(() =>
@@ -321,10 +345,15 @@ const LEAFLET_STUB = `window.L = (function(){
   // Optional, and off means off.
   const edgeToggle = await page.evaluate(() => {
     const sw = document.getElementById('prefOutlineEdges');
-    return sw ? { present: true, on: sw.classList.contains('on') } : { present: false };
+    return sw ? {
+      present: true, on: sw.classList.contains('on'),
+      title: sw.closest('.pref-row').querySelector('.pref-title').textContent,
+    } : { present: false };
   });
   ok('the edge hint is a Settings switch', edgeToggle.present);
   ok('and it is on by default', edgeToggle.on);
+  ok('and it is described as a snap rather than a decoration',
+     /snap/i.test(edgeToggle.title), edgeToggle.title);
 
   ok('nothing threw along the way', errors.length === 0, errors.join(' / '));
 
