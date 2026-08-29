@@ -163,9 +163,36 @@ and bare `video/mp4` stays last, so a device offering neither behaves exactly
 as it did before.
 
 **It costs bitrate.** H.264 is roughly a third fatter than HEVC for the same
-picture and these clips already run about 1.2 MB/s, which is a real cost on
-cellular under a fire-and-forget write model. A clip nobody can open is worth
-less than a big one.
+picture, which is a real cost on cellular under a fire-and-forget write model.
+A clip nobody can open is worth less than a big one — and the cap below took
+far more back than this gives away.
+
+### And the bitrate is capped at 2.5 Mbps
+
+`VIDEO_BITS_PER_SECOND` is a ceiling on the MediaRecorder, and the number it
+replaced was measured rather than assumed: across the 95 clips on file the
+**median is 9.5 Mbps** (p90 9.9), which is **71 MB for every minute** of
+silent 720p footage of a lawn. That rate is paid three times — uploaded from a
+yard on cellular, stored, and downloaded again *whole* by every desk-side
+review, since MasterDash fetches a clip before it plays it.
+
+2.5 Mbps is about 19 MB a minute, near four times smaller, and still ample for
+what this footage is for: establishing where things are, not shooting a film.
+It is a ceiling, not a target — a still shot of a bed encodes well under it.
+
+**The resolution half was already right.** `startCamera()` asks for
+1280×720, and the two together are what set the quality: raising the bitrate
+to suit a bigger capture without changing that says nothing. Note the camera
+stream is shared with photo pins and the crosshair snapshots, so its
+resolution is not the clips' to choose alone.
+
+**Beware the aggregate.** Total bytes ÷ total clip-window seconds says
+2.0 Mbps, which is wrong by 5×: four clips carry windows far longer than their
+own footage — 72 of the 92 recorded minutes sit in those four — and they drag
+the mean down. The median is the honest figure, the same reason `match.ts`
+takes a median of the pins. Those four windows are worth a look on their own
+account: a clip whose window overstates its footage runs out early in review
+and leaves a frozen frame.
 
 **Every clip recorded before this is still HEVC and always will be** — the
 ZIP export carries them too, so the same wall is waiting at the desk there.

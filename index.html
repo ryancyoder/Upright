@@ -2011,6 +2011,9 @@
   const OBS_SIGHT='#4fd07a', ANCHOR_SIGHT='#e8c33a', TARGET_SIGHT='#c4432b';
 
   // ---------- recording ----------
+  // The ceiling for a silent site clip at 720p. See startVideoClip() for what
+  // it was costing without one.
+  const VIDEO_BITS_PER_SECOND = 2500000;
   // ASK FOR H.264 BY NAME. Bare 'video/mp4' lets Safari choose, and on an iPad
   // it chooses HEVC -- the hardware encoder's own format. Safari plays that
   // back perfectly, so nothing looks wrong in the field or in this app; but
@@ -2095,8 +2098,29 @@
     currentClipChunks=[];
     currentClipStart = sessionT0 ? Date.now()-sessionT0 : 0;
     const mime=pickVideoMimeType();
-    try{ videoRecorder = mime ? new MediaRecorder(videoStream,{mimeType:mime}) : new MediaRecorder(videoStream); }
-    catch(e){ videoRecorder = new MediaRecorder(videoStream); }
+    // CAP THE BITRATE. Left to itself the iPad encodes these at a measured
+    // MEDIAN OF 9.5 Mbps -- 71 MB for every minute of footage, at 720p, for a
+    // silent clip of a lawn. That is a film-grade rate spent on establishing
+    // where things are, and it is paid three times over: uploaded from a yard
+    // on cellular under a fire-and-forget write model, stored, and downloaded
+    // again whole by every desk-side review.
+    //
+    // 2.5 Mbps at 720p is about 19 MB a minute -- near four times smaller --
+    // and is still a comfortable rate for this picture. It is a ceiling, not a
+    // target: a still shot of a bed encodes well under it.
+    //
+    // The stream is already asked for at 1280x720 in startCamera(), so this is
+    // the half that was missing. It must NOT be raised to suit a higher
+    // capture resolution without changing that too: the pair is what sets the
+    // quality, and a bitrate alone says nothing.
+    const opts = mime ? {mimeType:mime, videoBitsPerSecond:VIDEO_BITS_PER_SECOND}
+                      : {videoBitsPerSecond:VIDEO_BITS_PER_SECOND};
+    try{ videoRecorder = new MediaRecorder(videoStream, opts); }
+    catch(e){
+      // An engine that refuses the options object at all still has to record.
+      try{ videoRecorder = mime ? new MediaRecorder(videoStream,{mimeType:mime}) : new MediaRecorder(videoStream); }
+      catch(e2){ videoRecorder = new MediaRecorder(videoStream); }
+    }
     videoRecorder.ondataavailable = e => { if(e.data && e.data.size) currentClipChunks.push(e.data); };
     videoRecorder.onstop = ()=>{
       const endOffset = sessionT0 ? Date.now()-sessionT0 : currentClipStart;
