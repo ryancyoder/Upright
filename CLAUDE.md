@@ -204,9 +204,22 @@ and has not been built.
 
 An **alternative to the Apple Pencil**, not a replacement. Tap a take-off tile
 that carries it — `OUTLINE_ASSEMBLIES`, currently mulch alone — and the app
-takes the picture, holds it on screen, and hands you a crosshair. The **shutter
-drops a corner** each time; closing on the first corner draws the ring onto the
-photograph and returns to video.
+takes the picture, holds it on screen, and hands you a crosshair.
+
+**One button, three jobs.** Outside an outline the shutter takes a photograph.
+Inside one, a **tap drops a corner** and a **hold drops the last corner and
+closes the ring** — the final corner and the instruction to close are the same
+thought, and walking the cross back to the first corner is a second aim for no
+information. Coming back to the first corner still closes it, for anyone who
+prefers that; it swells and fills when the cross is within `OUTLINE_CLOSE_PX`.
+
+`SHUTTER_HOLD_MS` is 500, the same as MasterDash's tile grid and for the same
+reason: long enough not to fire on a firm tap through a work glove. Two details
+that are load-bearing rather than tidy — the `click` that follows a hold is
+**suppressed**, or a hold would close the ring and then drop a stray corner
+into the next one; and a hold with **fewer than three corners down just marks**,
+because `outlineClose()` treats a short ring as a cancel and would throw the
+outline away in the hands of somebody still learning the gesture.
 
 **The swing since the shot is projected through the lens's own field of view**
 (`PHOTO_FOV_DEG`, 62°), so a turn moves the cross by as much of the picture as

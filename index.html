@@ -3123,7 +3123,7 @@
     outlineHint.textContent = near
       ? 'Shutter closes the outline'
       : outlinePts.length
-        ? 'Aim to move the cross \u00b7 shutter marks a corner \u00b7 '
+        ? 'Shutter marks a corner \u00b7 hold it to finish here \u00b7 '
           + outlinePts.length + (outlinePts.length===1?' corner':' corners')
         : 'Aim the iPad to move the cross \u00b7 shutter marks each corner';
   }
@@ -3167,6 +3167,24 @@
     if(outlineNear){ outlineClose(); return; }
     outlinePts.push({ x:outlineAt.x, y:outlineAt.y });
     outlineRender();
+  }
+
+  /**
+   * Drop the corner under the cross and close on it.
+   *
+   * The last corner and the closing are ONE action, because a ring's final
+   * corner and the instruction to close it are the same thought -- walking the
+   * cross back to the first corner to close is a second aim for no information.
+   *
+   * Under three corners there is no ring to close, so this just marks: a hold
+   * that early is somebody learning the gesture, and outlineClose() would throw
+   * the outline away as a cancel.
+   */
+  function outlineFinishHere(){
+    if(!outlineAt) return;
+    outlinePts.push({ x:outlineAt.x, y:outlineAt.y });
+    if(outlinePts.length<3){ outlineRender(); return; }
+    outlineClose();
   }
 
   function outlineUndo(){
@@ -3292,10 +3310,37 @@
     });
     return pin;
   }
-  // ONE BUTTON, TWO JOBS. While an outline is open the shutter drops a corner
-  // instead of taking another photograph -- it is the thumb already in place,
-  // and a second button for it would be a second thing to find one-handed.
-  snapBtn.addEventListener('click', ()=>{ if(outlineOn) outlineMark(); else capturePin(); });
+  // ONE BUTTON, THREE JOBS. Outside an outline the shutter takes a photograph.
+  // Inside one a tap drops a corner and a HOLD drops the last corner and closes
+  // the ring -- it is the thumb already in place, and a second button for
+  // either would be a second thing to find one-handed.
+  //
+  // 500ms, the same as the tile grid's long press in MasterDash and for the
+  // same reason: long enough not to fire on a firm tap through a work glove.
+  const SHUTTER_HOLD_MS = 500;
+  let shutterHoldTimer = 0, shutterHeld = false;
+
+  function shutterHoldStart(){
+    if(!outlineOn) return;
+    shutterHeld = false;
+    clearTimeout(shutterHoldTimer);
+    shutterHoldTimer = setTimeout(()=>{
+      shutterHoldTimer = 0;
+      // The click that follows this pointerup must not ALSO drop a corner.
+      shutterHeld = true;
+      outlineFinishHere();
+    }, SHUTTER_HOLD_MS);
+  }
+  function shutterHoldEnd(){ clearTimeout(shutterHoldTimer); shutterHoldTimer = 0; }
+
+  snapBtn.addEventListener('pointerdown', shutterHoldStart);
+  snapBtn.addEventListener('pointerup', shutterHoldEnd);
+  snapBtn.addEventListener('pointercancel', shutterHoldEnd);
+  snapBtn.addEventListener('pointerleave', shutterHoldEnd);
+  snapBtn.addEventListener('click', ()=>{
+    if(shutterHeld){ shutterHeld = false; return; }   // the hold already acted
+    if(outlineOn) outlineMark(); else capturePin();
+  });
 
   function addPinMarker(pin){
     if(pin.lat===null) return;

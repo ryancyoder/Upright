@@ -148,6 +148,57 @@ const LEAFLET_STUB = `window.L = (function(){
   ok('and clears the overlay behind it', after.hudEmpty);
   ok('and the tiles return', after.tilesBack === 2);
 
+  // ---- closing by HOLDING the shutter, rather than walking back to the first
+  // corner. The last corner and the instruction to close are one thought.
+  await page.click('.asm-tile');
+  await page.waitForTimeout(300);
+  const hold = async (ms) => {
+    const box = await page.$eval('#snapBtn', (n) => {
+      const r = n.getBoundingClientRect();
+      return [r.left + r.width / 2, r.top + r.height / 2];
+    });
+    await page.mouse.move(box[0], box[1]);
+    await page.mouse.down();
+    await page.waitForTimeout(ms);
+    await page.mouse.up();
+  };
+
+  await aim(-5, 92, 0); await page.waitForTimeout(100);
+  await hold(120);                                  // a tap: marks one corner
+  await page.waitForTimeout(120);
+  const oneCorner = await page.evaluate(() =>
+    document.getElementById('outlineHint').textContent);
+  ok('a brief press still just marks a corner', /1 corner/.test(oneCorner), oneCorner);
+  ok('and the hint teaches the hold', /hold it to finish/i.test(oneCorner), oneCorner);
+
+  await aim(5, 92, 0); await page.waitForTimeout(100);
+  await hold(120);
+  await page.waitForTimeout(120);
+  const twoCorners = await page.evaluate(() =>
+    document.getElementById('outlineHint').textContent);
+  ok('two corners down', /2 corners/.test(twoCorners), twoCorners);
+
+  // A hold with only two corners down has no ring to close, so it marks a third
+  // rather than throwing the outline away as a cancel.
+  await aim(5, 84, 0); await page.waitForTimeout(100);
+  await hold(700);
+  await page.waitForTimeout(500);
+  const closed = await page.evaluate(() => ({
+    unfrozen: !document.getElementById('outlineFrame').classList.contains('show'),
+    hudEmpty: document.getElementById('outlineHud').innerHTML === '',
+    tiles: document.querySelectorAll('.asm-tile').length,
+  }));
+  ok('HOLDING the shutter drops the last corner and closes the ring',
+     closed.unfrozen && closed.hudEmpty);
+  ok('and the camera comes back with its tiles', closed.tiles === 2);
+
+  // The click that follows a hold must not ALSO drop a corner -- if it did, a
+  // hold would close the ring and then start a stray outline gesture.
+  const stray = await page.evaluate(() =>
+    document.getElementById('outlineFrame').classList.contains('show'));
+  ok('and the tap after the hold does not act again', !stray);
+
+
   // The two Settings switches exist and default to following the aim, which is
   // what every direction check in test62 assumes.
   // Opened at the END, and from the start screen's own gear: renderPrefs()
