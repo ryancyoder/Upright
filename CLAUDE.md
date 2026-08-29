@@ -80,7 +80,9 @@ position's sightings), `POST /elevation-points/:id/photo`,
 `GET|POST /sessions/:id/proposal` (extract from the transcript),
 `POST /sessions/:id/proposal-items`, `PATCH|DELETE /proposal-items/:id`,
 `GET|POST /catalog`,
-`GET /takeoff?property=&limit=` (MasterDash's drawn beds, rings pre-resolved).
+`GET /takeoff?property=&limit=` (MasterDash's drawn beds, rings pre-resolved),
+`GET|POST /sessions/:id/property-match` (which yard the visit was recorded at),
+`POST /properties/:id/coordinates` (backfill, refused if it already has some).
 
 Requires secrets `ASSEMBLYAI_API_KEY` and `ANTHROPIC_API_KEY` (set in Supabase → Edge Functions →
 Secrets — NOT Vault, and NOT Vercel env vars; neither reaches the function).
@@ -90,7 +92,8 @@ identity-linked — see *The proposal helper* below.
 If editing the function, pull current source with `Supabase:get_edge_function`
 rather than reconstructing it. The source is vendored at
 `supabase/functions/upright-api/` — **two files**, `index.ts` (routing) and
-`proposal.ts` (the proposal helper's logic) — so edits are diffable.
+`proposal.ts` (the proposal helper's logic) and `match.ts` (matching a session
+to a property by where it was recorded) — so edits are diffable.
 
 **The vendored copy had drifted 14 versions behind what was deployed** and was
 refreshed from the live function on 2026-08-29. It held 604 lines of a single
@@ -811,6 +814,51 @@ nothing about it — `test13` sat broken through two sweeps after Open stopped
 landing in Review, and the totals looked fine because its seventeen checks
 simply stopped existing. `runsweep.sh` now names every test that produced no
 checks and flags any that is not one of the known screenshot/probe scripts.
+
+## Matching a session to its property
+
+A visit happens AT a yard, so the session already knows which property it is —
+it has just never been asked. One session in a hundred carried a `property_id`,
+because tagging is something somebody has to remember afterwards and in a yard
+nobody does. `match.ts` derives it from where the session's pins are.
+
+**Every constant in it was set by the project's own data, not chosen.**
+
+- **A true match is ~50 m away, not ~5 m.** The two sessions tagged by hand that
+  can be checked sit **47 m and 50 m** from their property's stored coordinate.
+  That is not error: a property's coordinate is a geocoded street address and
+  the pins are spread around the yard behind it. A tight threshold would reject
+  every real match. `MATCH_M` is 75.
+- **But a threshold is essential.** 22 of the 71 sessions carrying pins are over
+  a kilometre from any property with coordinates — their yard is not in the
+  table with a position yet. Nearest-wins with no cutoff tags those to something
+  13 km away and says nothing.
+- **And nearest-wins alone is not enough.** `1580 Foulis Ct` is in `properties`
+  **twice at identical coordinates**, and `2651` and `2658 Naples Dr` are
+  different yards **20 m apart** — closer together than a true match's own
+  error. The runner-up is therefore consulted and the match stood down when the
+  two cannot be separated (`MARGIN_M`, 40).
+- **The median, not the mean.** One pin left on the Hebron fallback before the
+  first GPS fix drags a mean across the county; the median ignores it. The
+  spread is reported alongside, and past `SPREAD_M` (500) the middle of the pins
+  is a position no property is at, so no match is offered.
+
+**Only `confident` may be assigned without asking.** Everything else — the best
+guess, its distance, what it was confused with — is reported so a person can be
+shown the choice rather than a blank.
+
+**The reverse is what makes it work over time.** 49 properties have no
+coordinates, so they can never be matched *to*; but a session somebody tagged by
+hand is a surveyed fix for that yard. `backfillCandidate()` offers it, and
+`POST /properties/:id/coordinates` writes it — **only when the property has
+none**. An existing coordinate is a record somebody else entered, `properties`
+is shared with the Sales Board, and a session's median pin is not grounds for
+moving a yard somebody else relies on.
+
+`test61.js` pins all of it without a network call: the duplicate row and the
+20 m neighbours are both refused, a 47 m match is accepted, a stray pin is
+outvoted by the median but still reported in the spread, and a property that
+already has coordinates is never offered new ones.
 
 ## The proposal helper
 

@@ -4,6 +4,10 @@ import {
   buildProposalRows, extractProposalItems, measurableInventory,
   normaliseForQuote, type Segment,
 } from "./proposal.ts";
+import {
+  backfillCandidate, matchProperty, sessionPosition,
+  type PropertyPos,
+} from "./match.ts";
 
 // Upright site-session app API.
 // The client (a static HTML page) never talks to Postgres/Storage directly —
@@ -252,6 +256,130 @@ Deno.serve(async (req) => {
       const { data, error } = await query.order("address").limit(200);
       if (error) return err(error.message, 500);
       return json({ properties: data || [] });
+    }
+
+    // ---------- matching a session to the property it was recorded at ------
+    //
+    // A visit happens AT a yard, so the session already knows which property it
+    // is — it has just never been asked. The maths and every threshold live in
+    // match.ts, set by the project's own data; see the note at the top of it.
+
+    // GET /sessions/:id/property-match  -> what it would do, without doing it
+    // POST /sessions/:id/property-match -> do it
+    if (parts.length === 3 && parts[0] === "sessions" && parts[2] === "property-match"
+        && (req.method === "GET" || req.method === "POST")) {
+      const sessionId = parts[1];
+      const [{ data: session }, { data: photos }, { data: points }, { data: props }] =
+        await Promise.all([
+          supabase.from("upright_sessions").select("id, property_id").eq("id", sessionId).maybeSingle(),
+          supabase.from("upright_photos").select("lat, lng").eq("session_id", sessionId),
+          supabase.from("upright_elevation_points").select("lat, lng").eq("session_id", sessionId),
+          supabase.from("properties").select("id, address, latitude, longitude"),
+        ]);
+      if (!session) return err("session not found", 404);
+
+      const coords = [...(photos || []), ...(points || [])]
+        .map((r) => ({ lat: Number(r.lat), lng: Number(r.lng) }))
+        .filter((c) => Number.isFinite(c.lat) && Number.isFinite(c.lng));
+      const position = sessionPosition(coords);
+
+      const candidates: PropertyPos[] = (props || [])
+        .filter((p) => p.latitude !== null && p.longitude !== null)
+        .map((p) => ({
+          id: p.id as number,
+          address: (p.address as string) ?? null,
+          lat: Number(p.latitude),
+          lng: Number(p.longitude),
+        }));
+      const match = matchProperty(position, candidates);
+
+      // The reverse, and it is what makes this work over time: a property with
+      // no coordinates can never be matched TO, but a session already tagged to
+      // one is a surveyed fix for that yard. Offered, never applied here.
+      const tagged = session.property_id
+        ? (props || []).find((p) => p.id === session.property_id) ?? null
+        : null;
+      const backfill = backfillCandidate(
+        position,
+        tagged
+          ? {
+              id: tagged.id as number,
+              lat: tagged.latitude === null ? null : Number(tagged.latitude),
+              lng: tagged.longitude === null ? null : Number(tagged.longitude),
+            }
+          : null,
+      );
+
+      const report = {
+        position,
+        match: match.best && {
+          id: match.best.property.id,
+          address: match.best.property.address,
+          distanceM: Math.round(match.best.distanceM),
+        },
+        runnerUp: match.runnerUp && {
+          id: match.runnerUp.property.id,
+          address: match.runnerUp.property.address,
+          distanceM: Math.round(match.runnerUp.distanceM),
+        },
+        confident: match.confident,
+        reason: match.reason,
+        currentPropertyId: session.property_id ?? null,
+        backfill: backfill && {
+          propertyId: backfill.propertyId,
+          lat: backfill.at.lat,
+          lng: backfill.at.lng,
+          fromPoints: backfill.points,
+        },
+      };
+
+      if (req.method === "GET") return json(report);
+
+      // Applying. An explicit propertyId is a person choosing from the two the
+      // matcher could not separate, and is honoured whatever the geometry says.
+      const body = await req.json().catch(() => ({}));
+      const chosen = Number.isInteger(body?.propertyId) ? body.propertyId as number : null;
+      const toSet = chosen ?? (match.confident && match.best ? match.best.property.id : null);
+      if (toSet === null) return json({ ...report, applied: false });
+
+      // Never overwrite a tag somebody set, unless they are the one asking.
+      if (session.property_id && chosen === null) {
+        return json({ ...report, applied: false, skipped: "already tagged" });
+      }
+      const { error } = await supabase.from("upright_sessions")
+        .update({ property_id: toSet }).eq("id", sessionId);
+      if (error) return err(error.message, 500);
+      return json({ ...report, applied: true, propertyId: toSet });
+    }
+
+    // POST /properties/:id/coordinates { lat, lng }
+    //
+    // Writing a yard's position back from a session that was tagged to it. 49
+    // of the project's properties have none, which is why half of them can
+    // never be matched.
+    //
+    // ONLY WHEN IT HAS NONE. An existing coordinate is a record somebody else
+    // entered, and this table is shared with the Sales Board — a session's
+    // median pin is not grounds for moving a property somebody else relies on.
+    if (req.method === "POST" && parts.length === 3 && parts[0] === "properties"
+        && parts[2] === "coordinates") {
+      const propertyId = parseInt(parts[1], 10);
+      if (!Number.isInteger(propertyId)) return err("property id must be a number");
+      const body = await req.json();
+      const lat = Number(body?.lat), lng = Number(body?.lng);
+      if (!Number.isFinite(lat) || Math.abs(lat) > 90) return err("lat out of range");
+      if (!Number.isFinite(lng) || Math.abs(lng) > 180) return err("lng out of range");
+
+      const { data: prop } = await supabase.from("properties")
+        .select("id, latitude, longitude").eq("id", propertyId).maybeSingle();
+      if (!prop) return err("property not found", 404);
+      if (prop.latitude !== null || prop.longitude !== null) {
+        return json({ ok: false, skipped: "property already has coordinates" });
+      }
+      const { error } = await supabase.from("properties")
+        .update({ latitude: lat, longitude: lng }).eq("id", propertyId);
+      if (error) return err(error.message, 500);
+      return json({ ok: true, id: propertyId, lat, lng });
     }
 
     // GET /takeoff?property=&limit=
