@@ -1352,6 +1352,7 @@
     <svg class="outline-hud" id="outlineHud"></svg>
     <div class="outline-hint" id="outlineHint"></div>
     <div class="outline-bar" id="outlineBar">
+      <button type="button" id="outlineRecentreBtn">Re-centre</button>
       <button type="button" id="outlineUndoBtn">Undo</button>
       <button type="button" id="outlineCancelBtn">Cancel</button>
     </div>
@@ -2854,7 +2855,16 @@
   const asmCol = $('asmCol');
   const outlineFrame=$('outlineFrame'), outlineHud=$('outlineHud'),
         outlineBar=$('outlineBar'), outlineHint=$('outlineHint'),
-        outlineUndoBtn=$('outlineUndoBtn'), outlineCancelBtn=$('outlineCancelBtn');
+        outlineUndoBtn=$('outlineUndoBtn'), outlineCancelBtn=$('outlineCancelBtn'),
+        outlineRecentreBtn=$('outlineRecentreBtn');
+  // Re-centre puts the cross back in the middle wherever the iPad is being
+  // held now. It is how a posture that has crept, or a gyro that has drifted
+  // over a long outline, is put right without losing the corners already down.
+  outlineRecentreBtn.addEventListener('click', ()=>{
+    if(!outlineOn || outlineDone || !lastOrientEvt || lastOrientEvt.alpha==null) return;
+    outlineZero(orientBasis(lastOrientEvt.alpha, lastOrientEvt.beta||0, lastOrientEvt.gamma||0));
+    outlineRender();
+  });
   outlineUndoBtn.addEventListener('click', ()=>outlineUndo());
   outlineCancelBtn.addEventListener('click', ()=>outlineCancel());
   // The letterboxed image rect moves with the viewport, and every corner
@@ -2988,6 +2998,25 @@
    */
   const OUTLINE_HELD_MS = 500;
   /**
+   * Settling: where the cross takes its centre from.
+   *
+   * IT IS NOT THE POSE THE PICTURE WAS TAKEN AT, and that was the mistake. A
+   * photograph of a bed is taken with the iPad held up; nobody wants to keep
+   * holding it there to draw. So after the shutter the app waits, and the cross
+   * centres on whatever posture you have settled into -- lowered, tilted back,
+   * however it is comfortable.
+   *
+   * The grace period is what lets you start moving before it decides you have
+   * stopped. Hold still through it and the shot's own pose is used, which is
+   * the right answer for somebody who did not want to move.
+   *
+   * Looser than grade's STEADY_DEG (1.2 deg) on purpose: nothing here is being
+   * measured, and the hand is coming to rest rather than aiming.
+   */
+  const OUTLINE_SETTLE_DEG = 2.5;
+  const OUTLINE_SETTLE_MS = 500;
+  const OUTLINE_SETTLE_GRACE_MS = 700;
+  /**
    * Which way the crosshair runs, per SCREEN axis, from Settings.
    *
    * A PREFERENCE RATHER THAN A CONSTANT, because it turned out nobody can tell
@@ -3010,6 +3039,8 @@
   let outlineOn=false, outlinePin=null, outlinePts=[], outlineBase=null, outlineHintTimer=0;
   /** True while a finished ring is being shown, before the camera returns. */
   let outlineDone=false, outlineDoneTimer=0;
+  /** True between the shutter and the cross taking its centre. */
+  let outlineSettling=false, outlineSettleFrom=null, outlineSettleSince=0, outlineFrozenAt=0;
   let outlineAt=null, outlineRect=null, outlineRaf=0, outlineNear=false;
 
   /**
@@ -3096,11 +3127,47 @@
     };
   }
 
+  /**
+   * Take the cross's centre from where the iPad is being held now.
+   *
+   * Everything already marked stays exactly where it is -- the corners are
+   * screen positions, not aims -- so re-centring mid-outline is safe, and is
+   * the way out of gyro drift on a long one.
+   */
+  function outlineZero(basis){
+    outlineBase=basis;
+    outlineSettling=false; outlineSettleFrom=null;
+    outlineAt=null;                       // no smoothing from the old centre
+  }
+
+  /**
+   * Wait for the hand to come to rest, then zero there.
+   *
+   * Steadiness is measured on the CAMERA AXIS alone, so rolling the iPad in
+   * your hands does not read as movement -- which is consistent, since a roll
+   * does not move the cross either.
+   */
+  function outlineSettleStep(now){
+    const t=Date.now();
+    if(!outlineSettleFrom){ outlineSettleFrom=now; outlineSettleSince=t; }
+    const moved=Math.acos(Math.max(-1, Math.min(1, dot3(now.cam, outlineSettleFrom.cam))))*180/Math.PI;
+    if(moved>OUTLINE_SETTLE_DEG){ outlineSettleFrom=now; outlineSettleSince=t; return; }
+    if(t-outlineFrozenAt < OUTLINE_SETTLE_GRACE_MS) return;
+    if(t-outlineSettleSince < OUTLINE_SETTLE_MS) return;
+    outlineZero(now);
+  }
+
   function outlineFeed(A, B, G){
-    if(!outlineOn || outlineDone || !outlineBase || !outlineRect) return;
+    if(!outlineOn || outlineDone || !outlineRect) return;
     if(A==null || B==null || G==null) return;
+    const now=orientBasis(A, B, G);
+    if(outlineSettling){
+      outlineSettleStep(now);
+      if(outlineSettling){ outlineRender(); return; }
+    }
+    if(!outlineBase) return;
     const angle=(screen.orientation && screen.orientation.angle) || window.orientation || 0;
-    const want=outlineProject(outlineBase, orientBasis(A,B,G), angle, outlineRect,
+    const want=outlineProject(outlineBase, now, angle, outlineRect,
                               PHOTO_FOV_DEG, outlineSense());
     outlineAt = outlineAt
       ? { x: outlineAt.x + (want.x-outlineAt.x)*OUTLINE_SMOOTH,
@@ -3110,7 +3177,17 @@
   }
 
   function outlineRender(){
-    if(!outlineOn || !outlineAt) return;
+    if(!outlineOn) return;
+    // SETTLING: the picture is up, the cross is not. Showing one before it has
+    // a centre would invite somebody to start marking against a reference that
+    // is about to move under them.
+    if(outlineSettling){
+      outlineHud.innerHTML='';
+      outlineUndoBtn.disabled=true;
+      outlineHint.textContent='Get comfortable \u2014 the cross centres where you hold still';
+      return;
+    }
+    if(!outlineAt) return;
     // FINISHED: the closed ring on its own, with no crosshair. The aiming is
     // over, and a cross still sitting on a completed outline reads as though
     // there is another corner to place.
@@ -3172,7 +3249,12 @@
     const pin = capturePin();
     if(!pin){ armedAssembly=null; return; }
     outlinePin=pin; outlinePts=[]; outlineAt=null; outlineNear=false;
-    outlineBase=orientBasis(lastOrientEvt.alpha, lastOrientEvt.beta||0, lastOrientEvt.gamma||0);
+    // The reference pose is NOT taken here. The picture was shot with the iPad
+    // held up and nobody wants to keep holding it there to draw, so the cross
+    // takes its centre from wherever the hand comes to rest -- see
+    // outlineSettleStep().
+    outlineBase=null; outlineSettling=true; outlineSettleFrom=null;
+    outlineFrozenAt=Date.now();
     outlineFrame.onload=()=>{ outlineLayout(); outlineAt=null; outlineRender(); };
     outlineFrame.src=pin.photo;
     outlineOn=true;
@@ -3187,7 +3269,7 @@
   }
 
   function outlineMark(){
-    if(!outlineAt || outlineDone) return;
+    if(!outlineAt || outlineDone || outlineSettling) return;
     if(outlineNear){ outlineClose(); return; }
     outlinePts.push({ x:outlineAt.x, y:outlineAt.y });
     outlineRender();
@@ -3205,7 +3287,7 @@
    * the outline away as a cancel.
    */
   function outlineFinishHere(){
-    if(!outlineAt || outlineDone) return;
+    if(!outlineAt || outlineDone || outlineSettling) return;
     outlinePts.push({ x:outlineAt.x, y:outlineAt.y });
     if(outlinePts.length<3){ outlineRender(); return; }
     outlineClose();
@@ -3279,6 +3361,7 @@
   function outlineExit(){
     clearTimeout(outlineDoneTimer); outlineDoneTimer=0; outlineDone=false;
     outlineOn=false; outlinePin=null; outlinePts=[]; outlineBase=null; outlineAt=null;
+    outlineSettling=false; outlineSettleFrom=null;
     outlineFrame.classList.remove('show');
     outlineHud.classList.remove('show');
     outlineBar.classList.remove('show');
@@ -3353,7 +3436,7 @@
   let shutterHoldTimer = 0, shutterHeld = false;
 
   function shutterHoldStart(){
-    if(!outlineOn || outlineDone) return;
+    if(!outlineOn || outlineDone || outlineSettling) return;
     shutterHeld = false;
     clearTimeout(shutterHoldTimer);
     shutterHoldTimer = setTimeout(()=>{

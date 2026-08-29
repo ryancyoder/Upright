@@ -90,8 +90,47 @@ const LEAFLET_STUB = `window.L = (function(){
   ok('the tiles are labelled short enough for a thumb', view.tiles[0] === 'Mulch Bed');
 
   await page.click('.asm-tile');           // Mulch: the one that outlines
-  await page.waitForTimeout(300);
-  await aim(-6, 92, 0);
+  await page.waitForTimeout(200);
+
+  // SETTLING. The reference pose is not the one the picture was shot at: the
+  // iPad was held up for that and nobody wants to keep holding it there. So
+  // the cross waits, and centres wherever the hand comes to rest.
+  const settling = await page.evaluate(() => ({
+    frozen: document.getElementById('outlineFrame').classList.contains('show'),
+    cross: document.querySelectorAll('#outlineHud circle').length,
+    hint: document.getElementById('outlineHint').textContent,
+  }));
+  ok('the picture freezes immediately', settling.frozen);
+  ok('but no cross appears until it has a centre', settling.cross === 0);
+  ok('and it says to get comfortable first',
+     /comfortable/i.test(settling.hint), settling.hint);
+
+  // Move the way somebody lowering the iPad would, then hold.
+  for (const b of [92, 100, 112, 124, 132]) { await aim(0, b, 0, 3); await page.waitForTimeout(70); }
+  const midMove = await page.evaluate(() =>
+    document.querySelectorAll('#outlineHud circle').length);
+  ok('moving does not centre it -- it waits for the hand to stop', midMove === 0);
+
+  // Come to rest at the lowered posture and let the settle window run.
+  for (let i = 0; i < 12; i++) { await aim(0, 132, 0, 2); await page.waitForTimeout(70); }
+  const settled = await page.evaluate(() => {
+    const c = document.querySelectorAll('#outlineHud circle');
+    const cross = c[c.length - 1];
+    const h = document.getElementById('outlineHud').getBoundingClientRect();
+    const b = cross ? cross.getBoundingClientRect() : null;
+    return {
+      cross: c.length,
+      centred: b ? (Math.abs(b.left + b.width / 2 - (h.left + h.width / 2)) < 6
+                    && Math.abs(b.top + b.height / 2 - (h.top + h.height / 2)) < 6) : false,
+      hint: document.getElementById('outlineHint').textContent,
+    };
+  });
+  ok('holding still brings the cross out', settled.cross > 0, settled.hint);
+  ok('AND IT CENTRES AT THE NEW POSTURE, not the one the shot was taken at',
+     settled.centred,
+     'the iPad was tipped 42 degrees back after the shutter');
+
+  await aim(-6, 134, 0);
   await page.waitForTimeout(150);
 
   const frozen = await page.evaluate(() => {
@@ -120,7 +159,7 @@ const LEAFLET_STUB = `window.L = (function(){
      frozen.inside);
   ok('the tiles stand down while an outline is open', frozen.tilesGone);
 
-  for (const [a, b] of [[-6, 92], [6, 92], [6, 84]]) {
+  for (const [a, b] of [[-6, 134], [6, 134], [6, 126]]) {
     await aim(a, b, 0);
     await page.waitForTimeout(100);
     await page.click('#snapBtn');
@@ -130,7 +169,7 @@ const LEAFLET_STUB = `window.L = (function(){
     document.getElementById('outlineHint').textContent);
   ok('the shutter marks corners and they are counted', /3 corners/.test(three), three);
 
-  await aim(-6, 92, 0);
+  await aim(-6, 134, 0);
   await page.waitForTimeout(200);
   const back = await page.evaluate(() =>
     document.getElementById('outlineHint').textContent);
@@ -166,7 +205,8 @@ const LEAFLET_STUB = `window.L = (function(){
   // ---- closing by HOLDING the shutter, rather than walking back to the first
   // corner. The last corner and the instruction to close are one thought.
   await page.click('.asm-tile');
-  await page.waitForTimeout(300);
+  await page.waitForTimeout(200);
+  for (let i = 0; i < 14; i++) { await aim(0, 120, 0, 2); await page.waitForTimeout(70); }
   const hold = async (ms) => {
     const box = await page.$eval('#snapBtn', (n) => {
       const r = n.getBoundingClientRect();
@@ -178,7 +218,7 @@ const LEAFLET_STUB = `window.L = (function(){
     await page.mouse.up();
   };
 
-  await aim(-5, 92, 0); await page.waitForTimeout(100);
+  await aim(-5, 120, 0); await page.waitForTimeout(100);
   await hold(120);                                  // a tap: marks one corner
   await page.waitForTimeout(120);
   const oneCorner = await page.evaluate(() =>
@@ -186,7 +226,7 @@ const LEAFLET_STUB = `window.L = (function(){
   ok('a brief press still just marks a corner', /1 corner/.test(oneCorner), oneCorner);
   ok('and the hint teaches the hold', /hold it to finish/i.test(oneCorner), oneCorner);
 
-  await aim(5, 92, 0); await page.waitForTimeout(100);
+  await aim(5, 120, 0); await page.waitForTimeout(100);
   await hold(120);
   await page.waitForTimeout(120);
   const twoCorners = await page.evaluate(() =>
@@ -195,7 +235,7 @@ const LEAFLET_STUB = `window.L = (function(){
 
   // A hold with only two corners down has no ring to close, so it marks a third
   // rather than throwing the outline away as a cancel.
-  await aim(5, 84, 0); await page.waitForTimeout(100);
+  await aim(5, 112, 0); await page.waitForTimeout(100);
   await hold(700);
   await page.waitForTimeout(900);      // the hold-up, then the exit
   const closed = await page.evaluate(() => ({

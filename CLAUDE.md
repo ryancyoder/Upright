@@ -230,6 +230,32 @@ into the next one; and a hold with **fewer than three corners down just marks**,
 because `outlineClose()` treats a short ring as a cancel and would throw the
 outline away in the hands of somebody still learning the gesture.
 
+**The cross does NOT take its centre from the pose the picture was shot at**,
+and that was the first design's mistake. A bed is photographed with the iPad
+held up; nobody wants to keep holding it there to draw. After the shutter the
+app waits, and the cross centres on whatever posture the hand comes to rest in
+— lowered, tipped back, however it is comfortable. Until then there is no cross
+at all and nothing can be marked: showing one before it has a centre would
+invite somebody to start marking against a reference about to move under them.
+
+`OUTLINE_SETTLE_GRACE_MS` (700) is what lets you start moving before it decides
+you have stopped; hold still through it and the shot's own pose is used, which
+is the right answer for somebody who did not want to move. `OUTLINE_SETTLE_DEG`
+is 2.5° — looser than grade's `STEADY_DEG` of 1.2° on purpose, since nothing is
+being measured and the hand is coming to rest rather than aiming. Steadiness is
+read from the **camera axis alone**, so rolling the iPad in your hands does not
+count as movement — consistent, because a roll does not move the cross either.
+
+**Re-centre**, in the outline's own bar, does the same thing on demand:
+everything already marked stays exactly where it is (corners are screen
+positions, not aims), so it is safe mid-outline and is the way out of both a
+posture that has crept and a gyro that has drifted over a long ring.
+
+**What that costs, stated plainly:** the *aim at a real corner and the cross
+lands on it* property only holds while the posture matches the shot. Settle
+somewhere else and the cross becomes a relative pointer from that rest pose —
+which is the trade the hand asked for.
+
 **The swing since the shot is projected through the lens's own field of view**
 (`PHOTO_FOV_DEG`, 62°), so a turn moves the cross by as much of the picture as
 that turn would have moved the camera. The projection is **pinhole, not
