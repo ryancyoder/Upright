@@ -47,7 +47,7 @@ still nullable and still unused.
 
 ### Edge Function `upright-api`
 
-Endpoints under `/functions/v1/upright-api`:
+Endpoints under `/functions/v1/upright-api`, as of the v31 pull:
 `POST /sessions`, `GET /sessions` (history list), `GET /sessions/:id`,
 `PATCH /sessions/:id` (assign property, set name), `GET /properties` (address picker),
 `POST /sessions/:id/audio|clips|photos|sketches|measures|plan`,
@@ -76,10 +76,20 @@ Secrets — NOT Vault, and NOT Vercel env vars; neither reaches the function).
 identity-linked — see *The proposal helper* below.
 
 If editing the function, pull current source with `Supabase:get_edge_function`
-rather than reconstructing it. The source is now vendored at
-`supabase/functions/upright-api/index.ts` so edits are diffable; keep it in
-step with what is deployed. Currently **v31**, and it is now two files:
-`index.ts` (routing) and `proposal.ts` (the proposal helper's logic).
+rather than reconstructing it. The source is vendored at
+`supabase/functions/upright-api/` — **two files**, `index.ts` (routing) and
+`proposal.ts` (the proposal helper's logic) — so edits are diffable.
+
+**The vendored copy had drifted 14 versions behind what was deployed** and was
+refreshed from the live function on 2026-08-29. It held 604 lines of a single
+file against a deployed 995 + 393; deploying from it would have destroyed the
+whole of `proposal.ts`, the elevation-cut fields and `purgeSessionStorage`.
+Anything deployed from the dashboard or from another session lands here only if
+somebody pulls it back, so **pull before you edit, every time** — the endpoint
+list above is written from the source and is only as current as the last pull.
+A deploy must send **both** files: the tool takes the whole file set, so
+pushing `index.ts` alone deletes `proposal.ts` and every `/proposal` route with
+it. Currently **v31**.
 
 **Replacing an image writes a NEW storage path, never an upsert in place.**
 Storage public URLs are cached by the browser and by the CDN in front of the
