@@ -2136,7 +2136,7 @@
     if(archiveMode) exitArchive();
     audioChunks=[]; clips=[]; currentClipChunks=[]; currentClipStart=null;
     sessionId=uuid(); sessionStartedAt=new Date().toISOString(); sessionWallMs=null;
-    liveSessionName=null;
+    liveSessionName=null; liveSessionAddress=null;
     sessionT0=Date.now();
     apiPost('/sessions', { id: sessionId, startedAt: sessionStartedAt });
 
@@ -2226,6 +2226,22 @@
     showSessionScreen();
     endBtn.classList.remove('show'); clockEl.classList.remove('show');
     setState('Ready');
+    // Which yard was this? Asked once, at the end, when every pin that is
+    // going to exist exists. Deliberately after showSessionScreen(), so the
+    // panel is already up and the answer lands in its status line rather than
+    // holding the screen back on a round trip.
+    if(sessionId){
+      const sid = sessionId;
+      autoTagSession(sid).then(async rep => {
+        if(!rep || sid !== sessionId) return;   // a new session has started
+        doneStatus.textContent = matchLine(rep);
+        if(rep.applied){
+          liveSessionAddress = rep.match.address;
+          showSessionScreen();
+          doneStatus.textContent = matchLine(rep);
+        }
+      });
+    }
     if(wakeLock){ wakeLock.release().catch(()=>{}); wakeLock=null; }
   }
 
@@ -2239,6 +2255,9 @@
   // only on the tail of a live visit, so a past session could not be exported
   // at all.
   let liveDoneSub='', liveSessionName=null;
+  // Set when the just-ended session matched a property by itself, so the panel
+  // can say where the visit was rather than only that it finished.
+  let liveSessionAddress=null;
   function sessionHasAudio(){ return !!(finalAudioBlob || archiveAudioUrl); }
   function sessionHasAnything(){
     return !!(pins.length || sketches.length || measures.length || clips.length
@@ -2314,8 +2333,9 @@
     doneTitle.textContent = arch
       ? sessionTitleOf(archiveMeta && archiveMeta.name, archiveMeta && archiveMeta.address)
       : (liveSessionName || 'Session complete');
-    const addr = arch && archiveMeta && archiveMeta.name && archiveMeta.address
-      ? archiveMeta.address + ' · ' : '';
+    const addr = arch
+      ? (archiveMeta && archiveMeta.name && archiveMeta.address ? archiveMeta.address + ' · ' : '')
+      : (liveSessionAddress ? liveSessionAddress + ' · ' : '');
     doneSub.textContent = addr + (arch ? archiveSummary() : liveDoneSub);
     doneStatus.textContent=''; doneStatus.classList.remove('err');
     // Review is driven by the master audio: without it there is nothing to
@@ -3215,6 +3235,58 @@
       });
       actions.appendChild(delBtn);
 
+      // Which yard was this?
+      //
+      // Offered on every row rather than only the untagged ones, because a
+      // tagged session is the other half of the job: it is the one that can
+      // give its property a map location, and half of them have none.
+      const matchBtn=document.createElement('button');
+      matchBtn.className='hist-btn';
+      matchBtn.textContent = s.propertyAddress ? 'Location' : 'Match';
+      matchBtn.addEventListener('click', async ()=>{
+        matchBtn.disabled=true; matchBtn.textContent='Checking\u2026';
+        // GET first: nothing is assigned until the answer is known and, where
+        // it is not clear-cut, until somebody has picked.
+        const rep = await apiGet('/sessions/'+s.id+'/property-match');
+        matchBtn.disabled=false;
+        matchBtn.textContent = s.propertyAddress ? 'Location' : 'Match';
+        if(!rep){ histStatus.classList.add('err'); histStatus.textContent='Could not check that session.'; return; }
+        histStatus.classList.remove('err');
+
+        // A tagged session whose property has no location: offer to give it one.
+        if(rep.backfill){
+          const saved = await offerBackfill(rep, s.propertyAddress || 'this property');
+          histStatus.textContent = saved
+            ? 'Saved the location of ' + (s.propertyAddress || 'the property') + '. Later visits there will match by themselves.'
+            : matchLine(rep);
+          if(saved) return;
+        }
+
+        if(s.propertyAddress){ histStatus.textContent = matchLine(rep); return; }
+
+        if(rep.confident){
+          const applied = await apiPost('/sessions/'+s.id+'/property-match', {});
+          histStatus.textContent = matchLine(applied || rep);
+          loadHistory();
+          return;
+        }
+        // Not clear-cut. Where it is a choice between two, put the choice to
+        // the person rather than guessing on their behalf.
+        if(rep.reason==='ambiguous' && rep.match && rep.runnerUp){
+          const pick = confirm(matchLine(rep) + '\n\nOK for ' + rep.match.address +
+                               ', or Cancel for ' + rep.runnerUp.address + '.')
+            ? rep.match.id : rep.runnerUp.id;
+          const applied = await apiPost('/sessions/'+s.id+'/property-match', { propertyId: pick });
+          histStatus.textContent = applied && applied.applied
+            ? 'Tagged to ' + (pick===rep.match.id ? rep.match.address : rep.runnerUp.address) + '.'
+            : 'Could not tag that session.';
+          loadHistory();
+          return;
+        }
+        histStatus.textContent = matchLine(rep);
+      });
+      actions.appendChild(matchBtn);
+
       row.appendChild(actions);
       histList.appendChild(row);
     });
@@ -3641,6 +3713,70 @@
   // punch list -- and an address alone cannot tell them apart. Either can
   // stand alone, so they are separate fields and separate controls.
   let nameTargetId=null, nameReturn=null;
+  // ---------- which yard was this? ----------
+  //
+  // A visit happens AT a property, so the session already knows which one it
+  // is. It has just never been asked: one session in a hundred carried a tag,
+  // because tagging is something somebody has to remember afterwards and in a
+  // yard nobody does.
+  //
+  // The maths and every threshold live server-side in the Edge Function's
+  // match.ts, set by the project's own data, so this app and MasterDash read
+  // ONE answer rather than each deciding what "near" means.
+
+  /** How a match reads to a person. Distances in feet: this is a yard tool. */
+  function matchLine(rep){
+    if(!rep) return 'Could not check the location.';
+    const ft = m => Math.round(m * 3.28084).toLocaleString();
+    if(rep.applied) return 'Tagged to ' + rep.match.address + ' \u2014 ' + ft(rep.match.distanceM) + ' ft away.';
+    switch(rep.reason){
+      case 'ambiguous':
+        return 'Two yards are too close to tell apart: ' + rep.match.address +
+               ' and ' + rep.runnerUp.address + '. Tag it by hand.';
+      case 'too-far':
+        return 'No property on file is near here' +
+               (rep.match ? ' \u2014 nearest is ' + rep.match.address + ', ' + ft(rep.match.distanceM) + ' ft away' : '') + '.';
+      case 'no-position':      return 'Nothing on the map yet, so there is nothing to match on.';
+      case 'pins-too-spread':  return 'The pins are spread too far apart to say where this visit was.';
+      case 'no-properties-with-coordinates': return 'No property on file has a location yet.';
+      default: return rep.match ? 'Looks like ' + rep.match.address + ' \u2014 ' + ft(rep.match.distanceM) + ' ft away.' : '';
+    }
+  }
+
+  /**
+   * Ask the server to tag a session, and report what it did.
+   *
+   * The server assigns only when it is sure; anything else comes back
+   * unapplied with the reason, which is what the caller shows. It never
+   * overwrites a tag somebody set by hand.
+   */
+  async function autoTagSession(sid){
+    return await apiPost('/sessions/' + sid + '/property-match', {});
+  }
+
+  /**
+   * Offer to give a property the location of a visit that was tagged to it.
+   *
+   * Half the properties on file have no coordinates, which is exactly why half
+   * of them can never be matched. A session somebody tagged by hand is a
+   * surveyed fix for that yard, so writing it back is what makes every later
+   * visit there tag itself.
+   *
+   * Asked, never assumed: `properties` is shared with the office side, and a
+   * yard's position is not something to change behind somebody's back. The
+   * server refuses outright if it already has one.
+   */
+  async function offerBackfill(rep, label){
+    if(!rep || !rep.backfill) return false;
+    const where = label || 'this property';
+    if(!confirm('Set the map location of ' + where + ' from this visit?\n\n' +
+                'It has none on file, so nothing here can be matched to it automatically. ' +
+                'Using the middle of this visit\u2019s ' + rep.backfill.fromPoints + ' pins.')) return false;
+    const res = await apiPost('/properties/' + rep.backfill.propertyId + '/coordinates',
+                              { lat: rep.backfill.lat, lng: rep.backfill.lng });
+    return !!(res && res.ok);
+  }
+
   function sessionTitleOf(name, address){
     return name || address || 'Untagged session';
   }

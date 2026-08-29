@@ -855,6 +855,22 @@ none**. An existing coordinate is a record somebody else entered, `properties`
 is shared with the Sales Board, and a session's median pin is not grounds for
 moving a yard somebody else relies on.
 
+**Where it appears.** A session asks once when it ends, and the done panel says
+what happened (`Tagged to 665 S. Baums Bridge Rd. — 154 ft away.`). Every
+history row carries a second button: **Match** on an untagged session, and
+**Location** on a tagged one, because a tagged session is the other half of the
+job — it is the one that can give its property a position. Where the matcher
+cannot separate two candidates the row puts the choice to the person rather
+than guessing.
+
+**Worth knowing before running it over the existing data: all 48 sessions that
+currently match resolve to ONE address**, 665 S. Baums Bridge Rd., at 18–65 m.
+That is the shop, and those are test sessions recorded there. The tag is
+correct — that really is where they happened — but it is not 48 customer
+visits being recovered, and the feature's value is in the visits still to come.
+23 more sessions are refused as too far because their yard has no coordinates
+on file, which is what the backfill is for.
+
 `test61.js` pins all of it without a network call: the duplicate row and the
 20 m neighbours are both refused, a 47 m match is accepted, a stray pin is
 outvoted by the median but still reported in the spread, and a property that
