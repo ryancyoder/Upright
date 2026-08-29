@@ -9256,7 +9256,7 @@
   // Read-only, and quieter than a pin on purpose. This is the desk's drawing
   // shown on site for reference; the survey and the photos are what this app
   // is for, and a bed fill that competed with them would be in the way.
-  let takeoffLayer=null, takeoffOn=false, takeoffData=null, takeoffLoading=false;
+  let takeoffLayer=null, takeoffOn=false, takeoffData=null, takeoffLoading=false, takeoffStale=false;
 
   function takeoffLabel(s){
     const n = Math.round(s.measurement||0).toLocaleString();
@@ -9301,27 +9301,43 @@
       takeoffBtn.classList.remove('active');
       return;
     }
-    if(!takeoffData && !takeoffLoading){
+    // Re-read on every switch-on, not once per page load. The estimator is a
+    // desk tool and this is a field one: the whole point of the layer is to
+    // carry a bed drawn minutes ago out to the yard, and a session left open
+    // on an iPad would otherwise hold whatever it fetched the first time --
+    // showing a bed at the position it has since been moved away from, which
+    // is worse than showing none. Toggling off and on is the refresh.
+    if(!takeoffLoading){
       takeoffLoading = true;
       takeoffBtn.textContent = 'Loading\u2026';
       const res = await apiGet('/takeoff?limit=20');
       takeoffLoading = false;
       takeoffBtn.textContent = 'Take-off';
       // apiGet warns and returns null; no take-offs and no signal look the
-      // same to the button, so say which.
-      if(!res){ modeMsg.innerHTML='<b>Could not reach the estimator</b> \u2014 take-offs need signal'; return; }
-      takeoffData = Array.isArray(res.takeoffs) ? res.takeoffs : [];
+      // same to the button, so say which. A refresh that fails falls back to
+      // what is already held rather than blanking the layer -- but says so,
+      // since stale beds passed off as current is the failure that matters.
+      if(!res){
+        if(!takeoffData){ modeMsg.innerHTML='<b>Could not reach the estimator</b> \u2014 take-offs need signal'; return; }
+        takeoffStale = true;
+      } else {
+        takeoffData = Array.isArray(res.takeoffs) ? res.takeoffs : [];
+        takeoffStale = false;
+      }
     }
     takeoffOn = true;
     takeoffBtn.classList.add('active');
     bindTakeoffPan();
     const shown = drawTakeoffs();
+    // A stale layer must say so wherever it lands, so the note is appended to
+    // whichever message is written rather than being one of them.
+    const stale = takeoffStale ? ' \u2014 <b>last loaded, could not refresh</b>' : '';
     if(shown === 0){
-      modeMsg.innerHTML = takeoffData.length
+      modeMsg.innerHTML = (takeoffData.length
         ? '<b>No take-off on this yard</b> \u2014 '+takeoffData.length+' drawn elsewhere'
-        : '<b>Nothing drawn yet</b> \u2014 draw a bed in the estimator first';
+        : '<b>Nothing drawn yet</b> \u2014 draw a bed in the estimator first') + stale;
     } else {
-      modeMsg.textContent = shown+' shape'+(shown===1?'':'s')+' from the estimator';
+      modeMsg.innerHTML = shown+' shape'+(shown===1?'':'s')+' from the estimator' + stale;
     }
   }
 
