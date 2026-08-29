@@ -2271,6 +2271,39 @@ the same trap that once made elevation reference photos unreachable on the map. 
 
 ### Session history
 
+**Two views, and the tile one is a map of the yard.** A visit is recognised by
+the *place*, not by a line of text, so **Tiles** in the history header draws
+each session as a satellite preview of its property, captioned with the title,
+the date and the counts. Tapping one opens the session. The **list** keeps
+Name, Tag, Open, Delete and Match: a tile cannot hold five buttons and still be
+a picture, so tiles are for *finding* a session and the list is for managing
+one. `prefs.historyTiles` remembers the choice — it is the one preference here
+that defaults **off**, since the list is what was already there.
+
+**The coordinates are joined client-side.** `GET /sessions` does not return
+lat/lng, but `GET /properties` does and the address picker already fetches it —
+a hundred rows, once, cached. That was worth more than a schema-shaped change
+to a deployed function for two numbers it can already hand over another way.
+
+**The imagery is the same Esri World Imagery the map draws**, addressed as
+plain tiles, so a yard looks in a preview exactly as it looks on the map. No
+key and no second provider. `mapPreviewInto()` is a little slippy map with no
+Leaflet in it: it works out which tiles a box actually shows and positions them
+so the property is at the **centre** rather than wherever it happens to fall in
+one tile — a yard on the edge of its own preview is not a preview. Images are
+`loading="lazy"`, which is what stops a list of fifty firing hundreds of
+requests at once.
+
+**Nowhere to show is two different problems and gets two different sentences**:
+a property with no coordinates on file, and a session tagged to no property at
+all. The first is what the backfill exists to fix; the second is what the
+matcher does. Saying "no map" for both would hide which one you are looking at.
+
+`test64.js` drives it in a real browser with Supabase and Esri stubbed: that
+the imagery covers the tile on all four sides (the centring check), that each
+of those two empty cases says the right thing, that a session with no audio is
+flagged, and that the view survives closing the panel. 17 checks.
+
 **Past sessions** (start screen and session screen) lists every session
 newest-first from `GET /sessions`, labelled by its property address. Tapping
 Open rehydrates the session and lands on the **session screen** — see *A session

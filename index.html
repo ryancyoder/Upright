@@ -570,6 +570,40 @@
   .grade-btn.show{display:block;}
   .grade-btn:active{transform:scale(0.92);}
   .grade-btn.on{background:rgba(196,67,43,0.92); border-color:#fff;}
+  /* Past sessions as tiles: a map of the yard, which is how somebody actually
+     recognises a visit. The list view keeps the management buttons -- a tile
+     cannot hold five of them and still be a picture. */
+  .hist-grid{
+    display:grid; gap:10px; padding:12px;
+    grid-template-columns:repeat(auto-fill, minmax(150px, 1fr));
+  }
+  .hist-tile{
+    position:relative; aspect-ratio:4/3; overflow:hidden;
+    border-radius:14px; border:1px solid rgba(234,231,222,0.16);
+    background:#161a17; text-align:left; padding:0; color:inherit;
+  }
+  .hist-tile:active{transform:scale(0.98);}
+  .hist-tile .map{position:absolute; inset:0; overflow:hidden;}
+  .hist-tile .map img{position:absolute; width:256px; height:256px; display:block;}
+  .hist-tile .nomap{
+    position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+    font-size:11px; color:rgba(234,231,222,0.4); padding:0 14px; text-align:center;
+  }
+  /* The caption has to be legible over satellite, which is bright turf in
+     summer and grey mud in spring. A scrim, not a heavier font. */
+  .hist-tile .cap{
+    position:absolute; left:0; right:0; bottom:0; padding:7px 9px;
+    background:linear-gradient(to top, rgba(0,0,0,0.82), rgba(0,0,0,0.0));
+    color:#eae7de;
+  }
+  .hist-tile .cap .t{font-size:12px; font-weight:700; line-height:1.2;}
+  .hist-tile .cap .t.untagged{color:rgba(234,231,222,0.55); font-weight:600;}
+  .hist-tile .cap .w{font-size:10px; opacity:0.8; margin-top:1px;}
+  .hist-tile .warnpip{
+    position:absolute; top:7px; right:7px; font-size:9px; font-weight:700;
+    background:rgba(196,67,43,0.92); color:#fff; padding:2px 6px; border-radius:6px;
+  }
+
   /* ---------- outlining a bed by aiming the iPad ----------
      The frozen picture sits ABOVE the video and BELOW the shutter (z-index 6),
      so the shutter draws over it and stays tappable without any of the
@@ -1585,12 +1619,14 @@
       <div class="review-head">
         <span class="title">Past sessions</span>
         <div class="review-head-actions">
+          <button class="review-swap" id="historyView">List</button>
           <button class="review-swap" id="historyRefresh">Refresh</button>
           <button class="review-close" id="historyClose">Close</button>
         </div>
       </div>
       <div class="hist-status" id="histStatus"></div>
       <div class="hist-list" id="histList"></div>
+      <div class="hist-grid" id="histGrid" style="display:none"></div>
     </div>
 
     <div class="prop-panel" id="propPanel">
@@ -1915,6 +1951,7 @@
         historyPanel=$('historyPanel'), historyBtn=$('historyBtn'), historyBtn2=$('historyBtn2'),
         historyClose=$('historyClose'), historyRefresh=$('historyRefresh'),
         histStatus=$('histStatus'), histList=$('histList'),
+        histGrid=$('histGrid'), historyView=$('historyView'),
         propPanel=$('propPanel'), propSearch=$('propSearch'), propList=$('propList'),
         propStatus=$('propStatus'), propClose=$('propClose'), propClear=$('propClear'),
         pinInspector=$('pinInspector'), piTitle=$('piTitle'), piClose=$('piClose'),
@@ -4204,7 +4241,143 @@
     }
     if(!res.sessions.length){ histStatus.textContent='No sessions recorded yet.'; return; }
     histStatus.textContent = res.sessions.length+' session'+(res.sessions.length===1?'':'s');
+    historyRows = res.sessions;
     renderHistory(res.sessions);
+    historyViewSync();
+    if(prefs.historyTiles) renderHistoryTiles(res.sessions);
+  }
+
+  // ---------- past sessions as map tiles ----------
+  //
+  // A visit is recognised by the YARD, not by a line of text. The list view
+  // says everything and looks like every other row; a picture of the property
+  // is what somebody actually scans for.
+  //
+  // The coordinates are joined CLIENT-SIDE from GET /properties rather than
+  // added to the history endpoint. That list is a hundred rows, it is fetched
+  // once, and the address picker already pulls it -- so the alternative was a
+  // schema-shaped change to a deployed function for two numbers it can already
+  // hand over another way.
+  //
+  // The imagery is the same Esri World Imagery the map draws, addressed as
+  // plain tiles. No key, no second provider, and a yard looks in a tile
+  // exactly as it looks on the map.
+  /** The rows as last loaded, so switching view needs no round trip. */
+  let historyRows = [];
+  const HIST_TILE_Z = 18;          // ~0.45 m/px: a house, its yard and the neighbours
+  const HIST_MOSAIC_W = 320, HIST_MOSAIC_H = 240;
+  let propertyPosCache = null;
+
+  async function propertyPositions(){
+    if(propertyPosCache) return propertyPosCache;
+    const map = new Map();
+    try{
+      const r = await apiGet('/properties');
+      for(const p of (r && r.properties) || []){
+        if(p.latitude==null || p.longitude==null) continue;
+        map.set(p.id, { lat:+p.latitude, lng:+p.longitude });
+      }
+    }catch(e){ console.warn('property positions unavailable', e); }
+    propertyPosCache = map;
+    return map;
+  }
+
+  /** Web Mercator: where a coordinate falls, in tiles, at this zoom. */
+  function tileXY(lat, lng, z){
+    const n=Math.pow(2, z);
+    const r=lat*Math.PI/180;
+    return {
+      x: (lng+180)/360*n,
+      y: (1 - Math.log(Math.tan(r) + 1/Math.cos(r))/Math.PI)/2*n,
+    };
+  }
+
+  /**
+   * A little slippy map with no Leaflet in it.
+   *
+   * Only the tiles the box actually shows, positioned so the property is at
+   * the centre rather than wherever it happens to fall in one tile -- a yard on
+   * the edge of its own preview is not a preview. `loading="lazy"` is what
+   * keeps a list of fifty from firing three hundred requests at once.
+   */
+  function mapPreviewInto(box, lat, lng){
+    const px=tileXY(lat, lng, HIST_TILE_Z).x*256, py=tileXY(lat, lng, HIST_TILE_Z).y*256;
+    const left=px-HIST_MOSAIC_W/2, top=py-HIST_MOSAIC_H/2;
+    const n=Math.pow(2, HIST_TILE_Z);
+    for(let ty=Math.floor(top/256); ty<=Math.floor((top+HIST_MOSAIC_H-1)/256); ty++){
+      for(let tx=Math.floor(left/256); tx<=Math.floor((left+HIST_MOSAIC_W-1)/256); tx++){
+        if(ty<0 || ty>=n) continue;
+        const wrapped=((tx%n)+n)%n;          // the world wraps east-west
+        const img=document.createElement('img');
+        img.loading='lazy'; img.decoding='async'; img.alt='';
+        img.src='https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/'
+              + HIST_TILE_Z + '/' + ty + '/' + wrapped;
+        // Centred in the box, so a box smaller than the mosaic crops rather
+        // than leaving a gap at the edge.
+        img.style.left=(tx*256-left-(HIST_MOSAIC_W-box.clientWidth)/2)+'px';
+        img.style.top=(ty*256-top-(HIST_MOSAIC_H-box.clientHeight)/2)+'px';
+        box.appendChild(img);
+      }
+    }
+  }
+
+  async function renderHistoryTiles(list){
+    histGrid.innerHTML='';
+    const positions=await propertyPositions();
+    list.forEach(s=>{
+      const tile=document.createElement('button');
+      tile.className='hist-tile';
+      tile.type='button';
+
+      const at = s.propertyId!=null ? positions.get(s.propertyId) : null;
+      if(at){
+        const box=document.createElement('div'); box.className='map';
+        tile.appendChild(box);
+        // After it is in the grid, so clientWidth is the real one.
+        requestAnimationFrame(()=>mapPreviewInto(box, at.lat, at.lng));
+      } else {
+        const none=document.createElement('div'); none.className='nomap';
+        none.textContent = s.propertyId!=null
+          ? 'This property has no map location yet'
+          : 'Not tagged to a property';
+        tile.appendChild(none);
+      }
+
+      if(!s.hasAudio){
+        const pip=document.createElement('div'); pip.className='warnpip';
+        pip.textContent='no audio';
+        tile.appendChild(pip);
+      }
+
+      const cap=document.createElement('div'); cap.className='cap';
+      const t=document.createElement('div');
+      t.className='t'+((s.name||s.propertyAddress)?'':' untagged');
+      t.textContent=sessionTitleOf(s.name, s.propertyAddress);
+      const w=document.createElement('div'); w.className='w';
+      const bits=[fmtWhen(s.startedAt)];
+      const dur=fmtDur(s.durationSeconds);
+      if(dur) bits.push(dur);
+      if(s.photoCount) bits.push(s.photoCount+'\u00a0photo'+(s.photoCount===1?'':'s'));
+      w.textContent=bits.join(' \u00b7 ');
+      cap.append(t, w);
+      tile.appendChild(cap);
+
+      tile.addEventListener('click', ()=>openArchivedSession(s.id, tile));
+      histGrid.appendChild(tile);
+    });
+  }
+
+  /**
+   * Which view. A preference, so it survives closing the panel -- somebody who
+   * thinks in pictures should not have to say so every time.
+   */
+  function historyViewSync(){
+    const tiles = prefs.historyTiles===true;
+    histList.style.display = tiles ? 'none' : '';
+    histGrid.style.display = tiles ? '' : 'none';
+    // The button says what it will SWITCH TO, which is the convention the rest
+    // of this app's swap buttons follow.
+    historyView.textContent = tiles ? 'List' : 'Tiles';
   }
 
   function renderHistory(list){
@@ -5393,6 +5566,14 @@
   historyBtn2.addEventListener('click', openHistory);
   historyClose.addEventListener('click', closeHistory);
   historyRefresh.addEventListener('click', loadHistory);
+  historyView.addEventListener('click', ()=>{
+    prefs.historyTiles = prefs.historyTiles!==true;
+    savePrefs();
+    historyViewSync();
+    // Tiles are built lazily: the list is rendered on every load, the grid only
+    // when it is going to be looked at.
+    if(prefs.historyTiles) renderHistoryTiles(historyRows);
+  });
   propClose.addEventListener('click', closePropertyPicker);
   propClear.addEventListener('click', ()=> assignProperty(null));
   let propSearchTimer=null;
