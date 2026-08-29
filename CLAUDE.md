@@ -1094,7 +1094,9 @@ and keeps what was typed.
 **Deleting is reachable wherever a session is** — the history list, the session
 screen, the map view and Review — because that is where you are when you decide
 a session was a false start. `deleteLoadedSession()` is one function behind the
-last three; the history row passes its own counts instead.
+last three; the history row passes its own counts instead. The **tile view can
+delete several at once** — see *Deleting several at once* under *Session
+history* below, which keeps both rules and asks once for the batch.
 
 Two things make it safe rather than merely confirmed:
 
@@ -2299,10 +2301,64 @@ a property with no coordinates on file, and a session tagged to no property at
 all. The first is what the backfill exists to fix; the second is what the
 matcher does. Saying "no map" for both would hide which one you are looking at.
 
-`test64.js` drives it in a real browser with Supabase and Esri stubbed: that
-the imagery covers the tile on all four sides (the centring check), that each
-of those two empty cases says the right thing, that a session with no audio is
-flagged, and that the view survives closing the panel. 17 checks.
+#### Deleting several at once
+
+Clearing out a run of false starts one tile at a time is four taps and two
+confirmations each, and 48 of the sessions on file are test runs recorded at
+the shop. **Select** in the history header arms a mode; tapping tiles chooses
+them; **Delete N** takes the lot.
+
+**It is a mode, not a permanent row of checkboxes.** A tile's job is to get
+back into a visit, and a checkbox on every one of them all the time says the
+screen is a list of things to tick. **Tiles only**, too: the list view already
+carries five buttons a row and has nowhere to put a sixth, and a tile is what
+somebody scanning for the visits to bin is looking at anyway. The mode is put
+down by Cancel, by switching to the list, and by closing the panel — a Delete
+button holding a number nobody remembers choosing is worse than choosing again.
+
+**A hold is the other way in**, at `HIST_HOLD_MS` (500, the same as the shutter
+and MasterDash's tile grid), arming the mode on the tile held. The **click that
+follows a hold is suppressed**, exactly as the outline shutter suppresses its
+own — without it the hold arms the mode and the click immediately un-chooses
+the tile it armed on. `test64.js` pins that specifically, and mutation-testing
+it turns two checks red.
+
+**A tap in the mode must not open the session.** That is the whole risk of a
+mode — the gesture is the same one, and landing in a visit you meant to tick is
+a long way back — so it is a check of its own.
+
+**ONE pair of confirmations for the batch, not a pair per session.** Forty
+modal dialogs is not a question anybody reads, it is a thing they hold their
+thumb on. So the first ask **names the sessions** (up to eight, then *…and N
+more*) and totals what goes with them, which is the same rule the single delete
+already follows: *"7 sessions" is not something you can check.*
+
+**The requests go out one at a time.** There is no batch endpoint, and forty
+concurrent DELETEs from a yard on cellular is how half of them fail for reasons
+that have nothing to do with the server. The status line counts through them.
+
+**What failed is named and stays chosen**, so a retry is one tap rather than a
+hunt back through the grid for which ones did not go — and the mode stays open
+around it. Everywhere else in this app a failed write is a console warning;
+that is the right trade for a pin dropped mid-visit, and the wrong one for a
+delete somebody watched and believed had happened. Same reasoning as naming a
+session.
+
+**Arming the mode paints the checks onto the tiles already on screen**
+(`histPaintPicks()`) rather than re-rendering. `renderHistoryTiles()` rebuilds
+every preview, which throws away fifty `<img>` and asks for them all again — so
+arming would blink the whole grid, and the tile a hold had just chosen would be
+replaced under the finger before the tick appeared on it. A refresh does prune
+the selection against what came back, since a chosen session may have gone
+from another device.
+
+`test64.js` drives all of it in a real browser with Supabase and Esri stubbed:
+that the imagery covers the tile on all four sides (the centring check), that
+each of those two empty cases says the right thing, that a session with no
+audio is flagged, that the view survives closing the panel — and, for the
+multi-select, that a tap chooses rather than opens, that **exactly** the chosen
+ids are DELETEd and no others, that backing out of the first confirmation
+deletes nothing, and that a refusal is named and left chosen. 44 checks.
 
 **Past sessions** (start screen and session screen) lists every session
 newest-first from `GET /sessions`, labelled by its property address. Tapping

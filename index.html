@@ -604,6 +604,40 @@
     background:rgba(196,67,43,0.92); color:#fff; padding:2px 6px; border-radius:6px;
   }
 
+  /* Choosing several sessions at once.
+     The check sits TOP LEFT, opposite the no-audio pip, and is only in the
+     DOM while the mode is on: a permanent checkbox on every tile says the
+     screen is a list of things to tick, when what it is is a way back into a
+     visit. A chosen tile is dimmed and ringed rather than merely ticked --
+     at arm's length in sun a 22px circle is not enough signal on its own. */
+  .hist-grid.picking .hist-tile{cursor:default;}
+  .hist-tile .pick{
+    position:absolute; top:7px; left:7px; width:26px; height:26px; border-radius:50%;
+    border:2px solid rgba(255,255,255,0.9); background:rgba(0,0,0,0.35);
+    display:flex; align-items:center; justify-content:center;
+    font-size:15px; font-weight:800; color:#0d0f0e; line-height:1;
+    box-shadow:0 2px 8px rgba(0,0,0,0.55); z-index:23;
+  }
+  .hist-tile.picked{border-color:#c4432b; box-shadow:0 0 0 2px #c4432b inset;}
+  .hist-tile.picked .pick{background:#c4432b; border-color:#fff; color:#fff;}
+  .hist-tile.picked .map, .hist-tile.picked .nomap{opacity:0.55;}
+
+  /* The bar only exists while the mode is on, so the header keeps its own
+     three buttons and this never competes with them for the row. */
+  .hist-bar{
+    display:none; align-items:center; gap:8px; flex-wrap:wrap;
+    padding:8px 12px; border-bottom:1px solid rgba(234,231,222,0.12);
+    background:rgba(20,24,21,0.92);
+  }
+  .hist-bar.show{display:flex;}
+  .hist-bar .count{font-size:12px; font-weight:700; margin-right:auto;}
+  .hist-bar button{
+    border:1px solid rgba(234,231,222,0.22); background:rgba(234,231,222,0.08);
+    color:#eae7de; font-size:12px; font-weight:700; padding:7px 12px; border-radius:9px;
+  }
+  .hist-bar button.danger{background:rgba(196,67,43,0.92); border-color:transparent; color:#fff;}
+  .hist-bar button:disabled{opacity:0.4;}
+
   /* ---------- outlining a bed by aiming the iPad ----------
      The frozen picture sits ABOVE the video and BELOW the shutter (z-index 6),
      so the shutter draws over it and stays tappable without any of the
@@ -1619,10 +1653,17 @@
       <div class="review-head">
         <span class="title">Past sessions</span>
         <div class="review-head-actions">
+          <button class="review-swap" id="historySelect" style="display:none">Select</button>
           <button class="review-swap" id="historyView">List</button>
           <button class="review-swap" id="historyRefresh">Refresh</button>
           <button class="review-close" id="historyClose">Close</button>
         </div>
+      </div>
+      <div class="hist-bar" id="histBar">
+        <span class="count" id="histPickCount">None chosen</span>
+        <button id="histPickAll">Select all</button>
+        <button class="danger" id="histPickDelete" disabled>Delete</button>
+        <button id="histPickCancel">Cancel</button>
       </div>
       <div class="hist-status" id="histStatus"></div>
       <div class="hist-list" id="histList"></div>
@@ -1952,6 +1993,9 @@
         historyClose=$('historyClose'), historyRefresh=$('historyRefresh'),
         histStatus=$('histStatus'), histList=$('histList'),
         histGrid=$('histGrid'), historyView=$('historyView'),
+        historySelect=$('historySelect'), histBar=$('histBar'),
+        histPickCount=$('histPickCount'), histPickAll=$('histPickAll'),
+        histPickDelete=$('histPickDelete'), histPickCancel=$('histPickCancel'),
         propPanel=$('propPanel'), propSearch=$('propSearch'), propList=$('propList'),
         propStatus=$('propStatus'), propClose=$('propClose'), propClear=$('propClear'),
         pinInspector=$('pinInspector'), piTitle=$('piTitle'), piClose=$('piClose'),
@@ -4218,6 +4262,10 @@
     loadHistory();
   }
   function closeHistory(){
+    // A selection is about a decision being made right now. Leaving it armed
+    // behind a closed panel means coming back to a Delete button already
+    // holding a number nobody remembers choosing.
+    histSetPicking(false);
     historyPanel.classList.remove('show');
     if(historyFromSession){ donePanel.classList.add('show'); return; }
     // Only return to the start screen if there's nothing else to go back to.
@@ -4242,6 +4290,11 @@
     if(!res.sessions.length){ histStatus.textContent='No sessions recorded yet.'; return; }
     histStatus.textContent = res.sessions.length+' session'+(res.sessions.length===1?'':'s');
     historyRows = res.sessions;
+    // A session chosen before a refresh may be gone -- deleted here, or from
+    // another device. Dropping it keeps the count on the bar equal to the
+    // number of tiles actually wearing a tick.
+    const live = new Set(res.sessions.map(s=>s.id));
+    for(const id of Array.from(histPicked)) if(!live.has(id)) histPicked.delete(id);
     renderHistory(res.sessions);
     historyViewSync();
     if(prefs.historyTiles) renderHistoryTiles(res.sessions);
@@ -4362,10 +4415,235 @@
       cap.append(t, w);
       tile.appendChild(cap);
 
-      tile.addEventListener('click', ()=>openArchivedSession(s.id, tile));
+      if(histPicking){
+        const pick=document.createElement('div'); pick.className='pick';
+        pick.textContent='\u2713';
+        tile.appendChild(pick);
+        if(histPicked.has(s.id)) tile.classList.add('picked');
+      }
+
+      tile.dataset.session=s.id;
+      tile.addEventListener('click', ()=>{
+        // Suppressed after a long press, or the hold that armed the mode would
+        // immediately toggle the tile it armed on back off again. Same rule
+        // the outline shutter follows.
+        if(histHoldFired){ histHoldFired=false; return; }
+        if(histPicking){ histPickToggle(s.id); return; }
+        openArchivedSession(s.id, tile);
+      });
+      // A hold arms the mode ON THE TILE HELD, which is the gesture anyone who
+      // has tidied up a phone's photo roll already knows. The Select button is
+      // still there, because a gesture nothing advertises is a gesture nobody
+      // finds.
+      let holdTimer=null;
+      const holdOff=()=>{ if(holdTimer){ clearTimeout(holdTimer); holdTimer=null; } };
+      tile.addEventListener('pointerdown', ()=>{
+        if(histPicking) return;
+        holdOff();
+        holdTimer=setTimeout(()=>{
+          holdTimer=null; histHoldFired=true;
+          histSetPicking(true);
+          histPickToggle(s.id);
+        }, HIST_HOLD_MS);
+      });
+      ['pointerup','pointercancel','pointerleave','pointermove'].forEach(ev=>
+        tile.addEventListener(ev, holdOff));
+
       histGrid.appendChild(tile);
     });
   }
+
+  // ---------- choosing several sessions at once ----------
+  //
+  // Clearing out a run of false starts one tile at a time is four taps and two
+  // confirmations each; there are 48 test sessions recorded at the shop alone.
+  //
+  // It is a MODE, not a permanent row of checkboxes. A tile's job is to get
+  // back into a visit, and a checkbox on every one of them all the time says
+  // the screen is a list of things to tick. Tiles only -- the list view already
+  // carries five buttons a row and has nowhere to put a sixth, and a tile is
+  // what somebody scanning for the visits to bin is looking at anyway.
+  const HIST_HOLD_MS = 500;   // as the shutter and MasterDash's tiles use
+  let histPicking = false;
+  const histPicked = new Set();
+  /** Set by a hold so the click that follows it does not undo the hold. */
+  let histHoldFired = false;
+  let histDeleting = false;
+
+  function histSetPicking(on){
+    if(histPicking===on) return;
+    histPicking = on;
+    if(!on) histPicked.clear();
+    histPaintPicks();
+    histSelectSync();
+  }
+
+  /**
+   * Put the checks on the tiles already on screen, or take them off.
+   *
+   * NOT a re-render. renderHistoryTiles() rebuilds every preview, which throws
+   * away fifty <img> and asks for them all again -- so arming the mode would
+   * blink the whole grid, and the tile a hold had just chosen would be
+   * replaced under the finger before the tick appeared on it.
+   */
+  function histPaintPicks(){
+    histGrid.querySelectorAll('.hist-tile').forEach(tile=>{
+      const id=tile.dataset.session;
+      let pick=tile.querySelector('.pick');
+      if(histPicking && !pick){
+        pick=document.createElement('div'); pick.className='pick';
+        pick.textContent='\u2713';
+        tile.appendChild(pick);
+      } else if(!histPicking && pick){
+        pick.remove();
+      }
+      tile.classList.toggle('picked', histPicking && histPicked.has(id));
+    });
+  }
+
+  function histPickToggle(id){
+    if(histDeleting) return;
+    if(!histPicked.delete(id)) histPicked.add(id);
+    // Only the tile that changed, so a grid of fifty previews is not thrown
+    // away and re-fetched on every tap.
+    const tile = histGrid.querySelector('.hist-tile[data-session="'+CSS.escape(id)+'"]');
+    if(tile) tile.classList.toggle('picked', histPicked.has(id));
+    histSelectSync();
+  }
+
+  function histSelectSync(){
+    const tiles = prefs.historyTiles===true;
+    historySelect.style.display = tiles && !histPicking ? '' : 'none';
+    histBar.classList.toggle('show', histPicking);
+    histGrid.classList.toggle('picking', histPicking);
+    const n = histPicked.size;
+    histPickCount.textContent = n
+      ? n+' chosen'
+      : (historyRows.length ? 'Choose the sessions to delete' : 'Nothing to choose');
+    histPickDelete.disabled = n===0 || histDeleting;
+    histPickDelete.textContent = n ? 'Delete '+n : 'Delete';
+    const all = historyRows.length>0 && n===historyRows.length;
+    histPickAll.textContent = all ? 'Select none' : 'Select all';
+    histPickAll.disabled = histDeleting || historyRows.length===0;
+    histPickCancel.disabled = histDeleting;
+  }
+
+  /**
+   * Delete everything chosen.
+   *
+   * ONE pair of confirmations for the batch, not a pair per session: forty
+   * modal dialogs is not a question anybody reads, it is a thing they hold
+   * their thumb on. So the first ask NAMES the sessions -- "7 sessions" is not
+   * something you can check -- and totals what goes with them, which is the
+   * same rule the single delete follows.
+   *
+   * The requests go out ONE AT A TIME. There is no batch endpoint, and forty
+   * concurrent DELETEs from a yard on cellular is how half of them fail for
+   * reasons that have nothing to do with the server.
+   *
+   * WHAT FAILED IS NAMED AND STAYS CHOSEN, so a retry is one tap rather than
+   * a hunt back through the grid for which ones did not go. Everywhere else in
+   * this app a failed write is a console warning; a delete somebody watched
+   * and believed had happened is not.
+   */
+  async function histDeleteChosen(){
+    if(histDeleting || !histPicked.size) return;
+    const rows = historyRows.filter(s=>histPicked.has(s.id));
+    if(!rows.length) return;
+
+    const names = rows.slice(0, 8).map(s=>'\u2022 '+sessionTitleOf(s.name, s.propertyAddress));
+    if(rows.length > names.length) names.push('\u2022 \u2026and '+(rows.length-names.length)+' more');
+    const tot = { audio:0, photos:0, clips:0, survey:0, sketches:0, measures:0 };
+    rows.forEach(s=>{
+      if(s.hasAudio) tot.audio++;
+      tot.photos += s.photoCount||0;
+      tot.clips += s.clipCount||0;
+      tot.survey += s.elevationPointCount||0;
+      tot.sketches += s.sketchCount||0;
+      tot.measures += s.measureCount||0;
+    });
+    const what=[];
+    if(tot.audio) what.push(tot.audio+' audio recording'+(tot.audio===1?'':'s'));
+    if(tot.photos) what.push(tot.photos+' photo pin'+(tot.photos===1?'':'s'));
+    if(tot.clips) what.push(tot.clips+' video clip'+(tot.clips===1?'':'s'));
+    if(tot.survey) what.push(tot.survey+' survey point'+(tot.survey===1?'':'s'));
+    if(tot.sketches) what.push(tot.sketches+' sketch'+(tot.sketches===1?'':'es'));
+    if(tot.measures) what.push(tot.measures+' measure'+(tot.measures===1?'':'s'));
+
+    const first = 'Delete '+rows.length+' session'+(rows.length===1?'':'s')+'?\n\n'
+      + names.join('\n') + '\n\nThis permanently removes '
+      + (what.length ? what.join(', ') : 'everything in them')
+      + ', and their transcripts. It cannot be undone.';
+    if(!confirm(first)) return;
+    if(!confirm('Last check \u2014 delete '+rows.length+' session'
+                +(rows.length===1?'':'s')+' for good?')) return;
+
+    histDeleting = true;
+    histSelectSync();
+    histStatus.classList.remove('err');
+    const failed=[];
+    let done=0, loadedWentWithIt=false;
+    for(const s of rows){
+      histStatus.textContent='Deleting '+(done+1)+' of '+rows.length+'\u2026';
+      const res = await apiDelete('/sessions/'+s.id);
+      if(res){
+        done++;
+        histPicked.delete(s.id);
+        if(sessionId===s.id && archiveMode) loadedWentWithIt=true;
+      } else {
+        failed.push(sessionTitleOf(s.name, s.propertyAddress));
+      }
+    }
+    histDeleting = false;
+
+    // Same rule as the single delete: if the session that went is the one on
+    // screen, put it down rather than carrying on showing rows that are gone.
+    if(loadedWentWithIt){
+      closeReview(); exitArchive();
+      donePanel.classList.remove('show');
+    }
+
+    if(failed.length){
+      histStatus.classList.add('err');
+      histStatus.textContent = done
+        ? ('Deleted '+done+'. '+failed.length+' could not be deleted and '
+           +(failed.length===1?'is':'are')+' still chosen: '+failed.join(', '))
+        : ('Could not delete '+(failed.length===1?'that session':'those sessions')
+           +'. Check the connection and try again.');
+    }
+    // A refresh either way: the grid must not keep showing rows that are gone,
+    // and it re-reads what is really there rather than trusting this loop.
+    await loadHistory();
+    if(failed.length && done===0){
+      // loadHistory() rewrote the status line with a count. The failure is
+      // worth more than the count.
+      histStatus.classList.add('err');
+      histStatus.textContent='Could not delete '+(failed.length===1?'that session':'those sessions')
+        +'. Check the connection and try again.';
+    } else if(failed.length){
+      histStatus.classList.add('err');
+      histStatus.textContent = 'Deleted '+done+'. '+failed.length+' could not be deleted and '
+        +(failed.length===1?'is':'are')+' still chosen: '+failed.join(', ');
+    } else if(done){
+      histStatus.textContent = 'Deleted '+done+' session'+(done===1?'':'s')+'.';
+    }
+    // Anything that failed stays chosen, so the mode stays open around it.
+    // loadHistory() has already redrawn the grid with whatever is still
+    // chosen, so there is nothing left to paint -- only the bar to update.
+    if(!histPicked.size) histSetPicking(false);
+    else histSelectSync();
+  }
+
+  historySelect.addEventListener('click', ()=>histSetPicking(true));
+  histPickCancel.addEventListener('click', ()=>histSetPicking(false));
+  histPickDelete.addEventListener('click', histDeleteChosen);
+  histPickAll.addEventListener('click', ()=>{
+    if(histDeleting) return;
+    if(histPicked.size===historyRows.length) histPicked.clear();
+    else historyRows.forEach(s=>histPicked.add(s.id));
+    histPaintPicks();
+    histSelectSync();
+  });
 
   /**
    * Which view. A preference, so it survives closing the panel -- somebody who
@@ -4373,8 +4651,12 @@
    */
   function historyViewSync(){
     const tiles = prefs.historyTiles===true;
+    // Choosing is a tile-view mode, so switching to the list puts it down
+    // rather than leaving a hidden selection armed behind the rows.
+    if(!tiles && histPicking){ histPicking=false; histPicked.clear(); }
     histList.style.display = tiles ? 'none' : '';
     histGrid.style.display = tiles ? '' : 'none';
+    histSelectSync();
     // The button says what it will SWITCH TO, which is the convention the rest
     // of this app's swap buttons follow.
     historyView.textContent = tiles ? 'List' : 'Tiles';
