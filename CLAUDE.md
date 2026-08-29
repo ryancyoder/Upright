@@ -144,6 +144,35 @@ The pan handler is bound on **first use, not at load**. `map` is null until
 everything declared after it — which is most of the app. That is not
 hypothetical: the first version of this did exactly that.
 
+## The clips are H.264, by name
+
+`pickVideoMimeType()` asks for `video/mp4;codecs=avc1.42E01E` before it asks
+for bare `video/mp4`, and that ordering is the whole point.
+
+**Bare `video/mp4` lets the device choose, and an iPad chooses HEVC** — its
+hardware encoder's own format. Nothing looks wrong for a long time: Safari
+decodes HEVC everywhere, so the clips play in the field, in this app, and in
+Review. Then somebody opens the same session at a desk in Chrome or Firefox,
+neither of which will decode HEVC, and every clip is a black rectangle
+refused with `MEDIA_ERR_SRC_NOT_SUPPORTED`. That is exactly how it surfaced —
+in MasterDash's review screen, with the master audio playing perfectly
+underneath, because `audio/mp4` is AAC and everything plays AAC.
+
+The specific profile goes first because Safari is fussy about the short form,
+and bare `video/mp4` stays last, so a device offering neither behaves exactly
+as it did before.
+
+**It costs bitrate.** H.264 is roughly a third fatter than HEVC for the same
+picture and these clips already run about 1.2 MB/s, which is a real cost on
+cellular under a fire-and-forget write model. A clip nobody can open is worth
+less than a big one.
+
+**Every clip recorded before this is still HEVC and always will be** — the
+ZIP export carries them too, so the same wall is waiting at the desk there.
+MasterDash names the case rather than saying "unsupported format", and points
+at Safari. Re-encoding the back catalogue would need a server-side transcode
+and has not been built.
+
 ## Recording mode
 
 Audio and video are **two independent switches**, chosen on the start screen
