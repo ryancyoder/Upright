@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!--
+    The target sight, which is what this app is for: the crosshair you hold on
+    a point to shoot grade. Same mark and same red as `TARGET_SIGHT` in
+    index.html, on the app's own ground colour — a thing should look the same
+    everywhere it appears, and the home screen is where it appears first.
+
+    Scaled to about 70% of the tile rather than the near-full-bleed the map
+    glyph uses: iOS rounds the corners off a home screen icon, and a crosshair
+    whose arms run to the edge loses its tips to the mask.
+  -->
+  <rect width="64" height="64" rx="14" fill="#14140f"/>
+  <g fill="none" stroke="#c4432b" stroke-width="4" stroke-linecap="round">
+    <circle cx="32" cy="32" r="13"/>
+    <path d="M32 11 L32 19 M32 45 L32 53 M11 32 L19 32 M45 32 L53 32"/>
+  </g>
+  <circle cx="32" cy="32" r="3.5" fill="#c4432b"/>
+</svg>

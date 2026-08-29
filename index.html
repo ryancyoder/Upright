@@ -4,6 +4,19 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <title>Upright — Site Session</title>
+<!--
+  The target sight, same mark and same red as the crosshair the app shoots
+  grade with. Without these Safari invents a letter tile from the title, which
+  is where the plain "U" came from.
+
+  Three of them because they are read by different things: the SVG is what
+  desktop browsers prefer, the 32px PNG is the fallback for those that do not
+  take SVG, and iOS ignores both for Add to Home Screen and wants
+  apple-touch-icon as a raster.
+-->
+<link rel="icon" type="image/svg+xml" href="/icon.svg">
+<link rel="icon" type="image/png" sizes="32x32" href="/icon-32.png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <style>
   :root{

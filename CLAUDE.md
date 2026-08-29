@@ -1,7 +1,18 @@
 # Upright — Site Session
 
-iPad field tool for Ricci's Landscape Management (Hebron, IN). Single-file
-web app: `index.html` (~88KB, no build step).
+iPad field tool for Ricci's Landscape Management (Hebron, IN). One
+`index.html` (~210KB, no build step) plus the icons beside it —
+`icon.svg`, `icon-32.png` and `apple-touch-icon.png`, which is the target
+sight in `TARGET_SIGHT` red on the app's own ground. Three files because
+different things read different ones: desktop browsers prefer the SVG, the
+32px PNG is the fallback for those that will not take it, and iOS ignores
+both for Add to Home Screen and wants `apple-touch-icon` as a raster. With
+none of them Safari invents a letter tile from the title, which is where the
+plain "U" came from.
+
+The home screen LABEL still comes from `<title>`, so it reads "Upright — Site
+Session" truncated. `apple-mobile-web-app-title` would shorten it; not set,
+because that changes what the app is called rather than how it looks.
 
 ## Core concept
 
