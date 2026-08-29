@@ -137,7 +137,22 @@ const LEAFLET_STUB = `window.L = (function(){
   ok('coming back to the first corner offers to close', /closes/.test(back), back);
 
   await page.click('#snapBtn');
-  await page.waitForTimeout(500);
+  // The finished ring is held up before the camera comes back, so what is on
+  // screen a moment after closing is the outline, not a live preview.
+  await page.waitForTimeout(180);
+  const held = await page.evaluate(() => ({
+    stillShowing: document.getElementById('outlineFrame').classList.contains('show'),
+    closedRing: !!document.querySelector('#outlineHud polygon'),
+    crossGone: document.querySelectorAll('#outlineHud line').length === 0,
+    hint: document.getElementById('outlineHint').textContent,
+  }));
+  ok('the finished ring is held on screen rather than vanishing', held.stillShowing);
+  ok('and it is drawn CLOSED, as a ring rather than a trail', held.closedRing);
+  ok('with the crosshair gone, since there is nothing left to aim',
+     held.crossGone);
+  ok('and it says the outline was saved', /saved/i.test(held.hint), held.hint);
+
+  await page.waitForTimeout(600);
   const after = await page.evaluate(() => ({
     unfrozen: !document.getElementById('outlineFrame').classList.contains('show'),
     hudEmpty: document.getElementById('outlineHud').innerHTML === '',
@@ -182,7 +197,7 @@ const LEAFLET_STUB = `window.L = (function(){
   // rather than throwing the outline away as a cancel.
   await aim(5, 84, 0); await page.waitForTimeout(100);
   await hold(700);
-  await page.waitForTimeout(500);
+  await page.waitForTimeout(900);      // the hold-up, then the exit
   const closed = await page.evaluate(() => ({
     unfrozen: !document.getElementById('outlineFrame').classList.contains('show'),
     hudEmpty: document.getElementById('outlineHud').innerHTML === '',

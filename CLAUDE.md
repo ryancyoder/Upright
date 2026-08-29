@@ -213,6 +213,15 @@ thought, and walking the cross back to the first corner is a second aim for no
 information. Coming back to the first corner still closes it, for anyone who
 prefers that; it swells and fills when the cross is within `OUTLINE_CLOSE_PX`.
 
+**The finished ring is held on screen for half a second** (`OUTLINE_HELD_MS`)
+before the camera comes back. Closing straight to a live preview gives you
+nothing to check against: the one moment the outline is worth seeing whole is
+the moment it is finished, and by then it was already gone. It is redrawn
+**closed**, as a filled ring rather than the open trail that was being built,
+and the crosshair goes — a cross still sitting on a completed outline reads as
+though there is another corner to place. Every input is refused for that half
+second, so a second tap cannot start marking into a ring that is already saved.
+
 `SHUTTER_HOLD_MS` is 500, the same as MasterDash's tile grid and for the same
 reason: long enough not to fire on a firm tap through a work glove. Two details
 that are load-bearing rather than tidy — the `click` that follows a hold is

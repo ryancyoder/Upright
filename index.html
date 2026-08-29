@@ -2979,6 +2979,15 @@
   /** Low-pass on the crosshair. A hand shakes; the sensor reports every tremor. */
   const OUTLINE_SMOOTH = 0.28;
   /**
+   * How long the finished ring is held on screen before the camera comes back.
+   *
+   * A closing gesture that cuts straight to a live preview gives you nothing to
+   * check against: the one moment the ring is worth seeing whole is the moment
+   * it is finished, and by then it is already gone. Half a second is long
+   * enough to read and short enough not to feel like a wait.
+   */
+  const OUTLINE_HELD_MS = 500;
+  /**
    * Which way the crosshair runs, per SCREEN axis, from Settings.
    *
    * A PREFERENCE RATHER THAN A CONSTANT, because it turned out nobody can tell
@@ -2999,6 +3008,8 @@
   }
 
   let outlineOn=false, outlinePin=null, outlinePts=[], outlineBase=null, outlineHintTimer=0;
+  /** True while a finished ring is being shown, before the camera returns. */
+  let outlineDone=false, outlineDoneTimer=0;
   let outlineAt=null, outlineRect=null, outlineRaf=0, outlineNear=false;
 
   /**
@@ -3086,7 +3097,7 @@
   }
 
   function outlineFeed(A, B, G){
-    if(!outlineOn || !outlineBase || !outlineRect) return;
+    if(!outlineOn || outlineDone || !outlineBase || !outlineRect) return;
     if(A==null || B==null || G==null) return;
     const angle=(screen.orientation && screen.orientation.angle) || window.orientation || 0;
     const want=outlineProject(outlineBase, orientBasis(A,B,G), angle, outlineRect,
@@ -3100,6 +3111,19 @@
 
   function outlineRender(){
     if(!outlineOn || !outlineAt) return;
+    // FINISHED: the closed ring on its own, with no crosshair. The aiming is
+    // over, and a cross still sitting on a completed outline reads as though
+    // there is another corner to place.
+    if(outlineDone){
+      outlineHud.innerHTML =
+        '<polygon points="'+outlinePts.map(p=>p.x+','+p.y).join(' ')+'" '
+        + 'fill="rgba(90,122,99,0.28)" stroke="#eae7de" stroke-width="3" stroke-linejoin="round"/>'
+        + outlinePts.map(p=>'<circle cx="'+p.x+'" cy="'+p.y+'" r="5" fill="none" '
+          + 'stroke="#eae7de" stroke-width="2.5"/>').join('');
+      outlineUndoBtn.disabled = true;
+      outlineHint.textContent = outlinePts.length + ' corners \u00b7 saved to the photo';
+      return;
+    }
     const near = outlinePts.length>2 &&
       Math.hypot(outlineAt.x-outlinePts[0].x, outlineAt.y-outlinePts[0].y) < OUTLINE_CLOSE_PX;
     outlineNear = near;
@@ -3163,7 +3187,7 @@
   }
 
   function outlineMark(){
-    if(!outlineAt) return;
+    if(!outlineAt || outlineDone) return;
     if(outlineNear){ outlineClose(); return; }
     outlinePts.push({ x:outlineAt.x, y:outlineAt.y });
     outlineRender();
@@ -3181,13 +3205,14 @@
    * the outline away as a cancel.
    */
   function outlineFinishHere(){
-    if(!outlineAt) return;
+    if(!outlineAt || outlineDone) return;
     outlinePts.push({ x:outlineAt.x, y:outlineAt.y });
     if(outlinePts.length<3){ outlineRender(); return; }
     outlineClose();
   }
 
   function outlineUndo(){
+    if(outlineDone) return;
     outlinePts.pop();
     outlineRender();
   }
@@ -3235,7 +3260,13 @@
     // The bed is finished: one tap of the tile, one outline, one bed. Leaving
     // it armed would put the next photograph in the same bed by default.
     armedAssembly=null;
-    outlineExit();
+    // Hold the finished ring up for a moment before the camera comes back. See
+    // OUTLINE_HELD_MS: the one moment the outline is worth seeing whole is the
+    // moment it is closed.
+    outlineDone=true;
+    outlineRender();
+    clearTimeout(outlineDoneTimer);
+    outlineDoneTimer=setTimeout(outlineExit, OUTLINE_HELD_MS);
   }
 
   function outlineCancel(){
@@ -3246,6 +3277,7 @@
   }
 
   function outlineExit(){
+    clearTimeout(outlineDoneTimer); outlineDoneTimer=0; outlineDone=false;
     outlineOn=false; outlinePin=null; outlinePts=[]; outlineBase=null; outlineAt=null;
     outlineFrame.classList.remove('show');
     outlineHud.classList.remove('show');
@@ -3321,7 +3353,7 @@
   let shutterHoldTimer = 0, shutterHeld = false;
 
   function shutterHoldStart(){
-    if(!outlineOn) return;
+    if(!outlineOn || outlineDone) return;
     shutterHeld = false;
     clearTimeout(shutterHoldTimer);
     shutterHoldTimer = setTimeout(()=>{
