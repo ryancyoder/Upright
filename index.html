@@ -1632,11 +1632,17 @@
     <div class="done-panel" id="donePanel">
       <div class="done-title" id="doneTitle">Session complete</div>
       <div class="done-sub" id="doneSub"></div>
+      <!-- The audio's fate gets a line of its OWN rather than sharing
+           doneStatus with the property match: the two write at different
+           moments, and a lost recording must not be overwritten by a tagging
+           report a second later. -->
+      <div class="done-status" id="doneAudio"></div>
       <div class="done-status" id="doneStatus"></div>
       <div id="doneModeSlot"></div>
       <div class="done-actions">
         <button class="dl-btn" id="openMapBtn">Open on map</button>
         <button class="dl-btn secondary" id="proposalBtn">Proposal from this visit</button>
+        <button class="dl-btn" id="retryAudioBtn">Retry saving the audio</button>
         <button class="dl-btn" id="reviewBtn">Review session</button>
         <button class="dl-btn secondary" id="dlVideo">Download audio recording</button>
         <button class="dl-btn secondary" id="dlPins">Download session (ZIP): audio + clips + pins</button>
@@ -1939,6 +1945,7 @@
         endBtn=$('endBtn'), snapBtn=$('snapBtn'), snapFlash=$('snapFlash'), pinCount=$('pinCount'),
         mapwrap=$('mapwrap'), donePanel=$('donePanel'), doneSub=$('doneSub'),
         doneTitle=$('doneTitle'), doneStatus=$('doneStatus'), doneClose=$('doneClose'),
+        doneAudio=$('doneAudio'), retryAudioBtn=$('retryAudioBtn'),
         openMapBtn=$('openMapBtn'), archiveMapDone=$('archiveMapDone'),
         stageToast=$('stageToast'),
         proposalPanel=$('proposalPanel'), proposalList=$('proposalList'),
@@ -2168,6 +2175,163 @@
     }).then(r=> r.ok ? r.json() : Promise.reject(new Error('HTTP '+r.status)))
       .catch(e=>{ console.warn('[upright-api] upload '+path+' failed', e); return null; });
   }
+  // ---------- the local outbox ----------
+  // The audio is written to disk AS IT IS RECORDED, not at the end of the
+  // visit. Until this existed the only copy of a recording was the RAM of one
+  // Safari tab, so a reload, a crash, a tab eviction or an upload that failed
+  // lost the whole thing -- and on 31 Aug exactly that happened: a 20-minute
+  // recording was perfect in Review and its single upload never reached the
+  // server, with nothing to fall back on.
+  //
+  // MediaRecorder is already running on a 1s timeslice, so this is one small
+  // write per second and the worst case becomes losing the last second rather
+  // than the visit.
+  //
+  // Four things here are load-bearing rather than tidy:
+  //
+  //   ARRAYBUFFER, NOT BLOB. Safari has a long history of failing to store
+  //   Blobs in IndexedDB. The bytes are read out once and stored raw.
+  //   THE SEQUENCE NUMBER IS TAKEN SYNCHRONOUSLY, before the async read to an
+  //   ArrayBuffer, or two chunks in flight could land out of order. These
+  //   chunks are fragments of ONE stream, not standalone files -- only the
+  //   concatenation from the first is a playable recording -- so order is not
+  //   a nicety, it is the whole thing.
+  //   EVERY CALL IS WRAPPED and resolves rather than rejects. Safari throws on
+  //   storage in private browsing, and a storage failure must never be able to
+  //   stop a recording that is otherwise working.
+  //   IT IS A STAGING BUFFER, NOT AN ARCHIVE. iOS evicts site data under
+  //   pressure and after a stretch of disuse, so a session is dropped the
+  //   moment its upload succeeds and nothing here is treated as durable.
+  const OUTBOX_DB='upright-outbox', OUTBOX_VER=1;
+  const OB_CHUNKS='chunks', OB_SESSIONS='sessions';
+  let outboxDb=null, outboxDead=false, outboxSeq=0;
+
+  function outboxOpen(){
+    if(outboxDead) return Promise.resolve(null);
+    if(outboxDb) return Promise.resolve(outboxDb);
+    return new Promise(resolve=>{
+      let req;
+      try{ req = indexedDB.open(OUTBOX_DB, OUTBOX_VER); }
+      catch(e){ outboxDead=true; console.warn('outbox open threw', e); return resolve(null); }
+      req.onupgradeneeded = ()=>{
+        const db=req.result;
+        if(!db.objectStoreNames.contains(OB_CHUNKS)){
+          const st=db.createObjectStore(OB_CHUNKS, {keyPath:'k', autoIncrement:true});
+          // Read back by session and sort by seq in JS: a compound key range
+          // needs an upper bound and there is no honest "largest number" key.
+          st.createIndex('session','session',{unique:false});
+        }
+        if(!db.objectStoreNames.contains(OB_SESSIONS)) db.createObjectStore(OB_SESSIONS, {keyPath:'id'});
+      };
+      req.onsuccess = ()=>{ outboxDb=req.result; resolve(outboxDb); };
+      req.onerror   = ()=>{ outboxDead=true; console.warn('outbox open failed', req.error); resolve(null); };
+    });
+  }
+  function outboxTx(store, mode, fn){
+    return outboxOpen().then(db=> db ? new Promise(resolve=>{
+      let tx;
+      try{ tx = db.transaction(store, mode); }
+      catch(e){ console.warn('outbox tx threw', e); return resolve(null); }
+      const out = fn(tx.objectStore(store));
+      tx.oncomplete = ()=> resolve(out && out.result !== undefined ? out.result : out);
+      tx.onerror    = ()=>{ console.warn('outbox tx failed', tx.error); resolve(null); };
+      tx.onabort    = ()=>{ console.warn('outbox tx aborted', tx.error); resolve(null); };
+    }) : null).catch(e=>{ console.warn('outbox', e); return null; });
+  }
+  function outboxStart(sid, startedAt){
+    outboxSeq = 0;
+    return outboxTx(OB_SESSIONS,'readwrite', st=> st.put({id:sid, startedAt, mime:null, seconds:null}));
+  }
+  // Called once a second while recording. The seq is taken here, synchronously.
+  function outboxPutChunk(sid, blob){
+    const seq = outboxSeq++;
+    if(!sid) return Promise.resolve(null);
+    return blob.arrayBuffer()
+      .then(buf=> outboxTx(OB_CHUNKS,'readwrite', st=> st.put({session:sid, seq, buf})))
+      .then(()=> seq===0
+        ? outboxTx(OB_SESSIONS,'readwrite', st=> st.put({id:sid, startedAt:sessionStartedAt, mime:blob.type, seconds:null}))
+        : null)
+      .catch(e=>{ console.warn('outbox chunk failed', e); return null; });
+  }
+  // The real duration, once the session knows it. A session recovered from a
+  // crash mid-visit has no such number and falls back to the chunk count,
+  // which the 1s timeslice makes a good enough estimate for a display figure.
+  function outboxSetSeconds(sid, secs){
+    return outboxTx(OB_SESSIONS,'readonly', st=> st.get(sid)).then(rec=>
+      outboxTx(OB_SESSIONS,'readwrite', st=> st.put(Object.assign({id:sid}, rec||{}, {seconds:secs}))));
+  }
+  function outboxDrop(sid){
+    if(!sid) return Promise.resolve(null);
+    return outboxTx(OB_CHUNKS,'readwrite', st=>{
+      const idx=st.index('session'); const rq=idx.openCursor(IDBKeyRange.only(sid));
+      rq.onsuccess = ()=>{ const c=rq.result; if(c){ c.delete(); c.continue(); } };
+      return null;
+    }).then(()=> outboxTx(OB_SESSIONS,'readwrite', st=> st.delete(sid)));
+  }
+  function outboxSessions(){
+    return outboxTx(OB_SESSIONS,'readonly', st=>{
+      const rq=st.getAll(); return rq;
+    }).then(r=> Array.isArray(r) ? r : []);
+  }
+  // Concatenated in seq order, which is the only order that plays.
+  function outboxAssemble(sid, mime){
+    return outboxTx(OB_CHUNKS,'readonly', st=>{
+      const rq=st.index('session').getAll(IDBKeyRange.only(sid)); return rq;
+    }).then(rows=>{
+      if(!Array.isArray(rows) || !rows.length) return null;
+      rows.sort((a,b)=> a.seq-b.seq);
+      return { blob:new Blob(rows.map(r=>r.buf), {type:mime||'audio/mp4'}), count:rows.length };
+    }).catch(e=>{ console.warn('outbox assemble failed', e); return null; });
+  }
+
+  // On app open, anything a previous visit left behind goes up. Silent when
+  // there is nothing pending -- which is the normal case -- because a banner
+  // that appears every launch stops being read.
+  async function recoverOutbox(){
+    let recs=[];
+    try{ recs = await outboxSessions(); }catch(e){ return; }
+    if(!recs.length) return;
+    let saved=0, failed=0, empty=0;
+    for(const rec of recs){
+      if(!rec || !rec.id) continue;
+      if(sessionActive && rec.id===sessionId) continue;   // the visit in progress owns its own chunks
+      const got = await outboxAssemble(rec.id, rec.mime);
+      if(!got){ await outboxDrop(rec.id); empty++; continue; }
+      const secs = rec.seconds != null ? rec.seconds : got.count;
+      const ok = await apiUploadRetry('/sessions/'+rec.id+'/audio', got.blob, {durationSeconds:secs}, 2);
+      if(ok){ saved++; await outboxDrop(rec.id); apiPostVerbose('/sessions/'+rec.id+'/transcribe', {}); }
+      else failed++;
+    }
+    if(!saved && !failed) return;
+    const bits=[];
+    if(saved)  bits.push('Recovered the audio from '+saved+' earlier session'+(saved>1?'s':'')+'.');
+    if(failed) bits.push(failed+' still unsaved \u2014 kept on this iPad, will try again next time.');
+    errorMsg.textContent = bits.join(' ');
+    errorMsg.classList.toggle('err', !!failed);
+  }
+
+  // The audio is the ONE artefact of a visit that cannot be recreated, so it is
+  // the one write here that is not fire-and-forget. Everything else warns to
+  // the console and moves on, which is the right trade for a pin dropped
+  // mid-visit; a recording is the visit.
+  //
+  // Measured against the failure this was written for: on 31 Aug a 20-minute
+  // recording was lost because its single upload never reached the server,
+  // while every other request in that same second returned 200. One retry
+  // would very likely have saved it.
+  const AUDIO_UPLOAD_TRIES = 4;
+  async function apiUploadRetry(path, file, metaObj, tries){
+    const n = tries || AUDIO_UPLOAD_TRIES;
+    for(let i=0;i<n;i++){
+      // 0s, 2s, 4s, 8s -- long enough to ride out a lift going past, short
+      // enough that nobody has walked away from the iPad.
+      if(i) await new Promise(r=>setTimeout(r, 2000*Math.pow(2,i-1)));
+      const res = await apiUpload(path, file, metaObj);
+      if(res) return res;
+      console.warn('[upright-api] upload '+path+' attempt '+(i+1)+' of '+n+' failed');
+    }
+    return null;
+  }
   function dataUrlToBlob(dataUrl){
     const [header, b64] = dataUrl.split(',');
     const mime = (header.match(/data:(.*?);base64/)||[])[1] || 'image/jpeg';
@@ -2384,7 +2548,13 @@
     const amime=pickAudioMimeType();
     try{ audioRecorder = amime ? new MediaRecorder(audioStream,{mimeType:amime}) : new MediaRecorder(audioStream); }
     catch(e){ audioRecorder = new MediaRecorder(audioStream); }
-    audioRecorder.ondataavailable = e => { if(e.data && e.data.size) audioChunks.push(e.data); };
+    audioRecorder.ondataavailable = e => {
+      if(!(e.data && e.data.size)) return;
+      audioChunks.push(e.data);
+      // ...and straight to disk. RAM is still what the session plays from; this
+      // is the copy that survives a reload, a crash, or an upload that fails.
+      outboxPutChunk(sessionId, e.data);
+    };
     // Stopping mid-session must NOT finalise the session -- endSession clears
     // sessionActive before it stops the recorder, and that is the only stop
     // that means the visit is over.
@@ -2412,6 +2582,8 @@
     if(archiveMode) exitArchive();
     audioChunks=[]; clips=[]; currentClipChunks=[]; currentClipStart=null;
     sessionId=uuid(); sessionStartedAt=new Date().toISOString(); sessionWallMs=null;
+    audioSaveState='none'; audioSaveSid=null; audioSaveBlob=null;
+    outboxStart(sessionId, sessionStartedAt);
     liveSessionName=null; liveSessionAddress=null;
     // Tags belong to a visit: a tile left armed at the end of one must not
     // silently tag the next yard's photographs.
@@ -2483,20 +2655,63 @@
     if(!isPausedFlat){ stopVideoClip(finishAudio); }
     else { finishAudio(); }
   }
+  // 'none' | 'saving' | 'saved' | 'failed'. Held per session, because an upload
+  // can still be in flight when the next visit is started.
+  let audioSaveState='none', audioSaveSid=null, audioSaveBlob=null, audioSaveSecs=0;
+
+  async function saveAudio(sid, blob, secs){
+    audioSaveBlob = blob; audioSaveSecs = secs;
+    const ok = await apiUploadRetry('/sessions/'+sid+'/audio', blob, { durationSeconds: secs });
+    if(ok){
+      if(audioSaveSid===sid) audioSaveState='saved';
+      await outboxDrop(sid);
+      // Only NOW is there anything to transcribe. Asking to transcribe audio
+      // that failed to upload is what disguised a lost recording as a
+      // transcription problem: the 400 that comes back says "session has no
+      // audio yet", which reads as a transcript fault and is not one.
+      const res = await apiPostVerbose('/sessions/'+sid+'/transcribe', {});
+      if(res && !res.ok){
+        lastTranscribeError = (res.body && res.body.error) || ('HTTP '+res.status);
+        console.warn('[upright-api] transcribe kick-off failed:', lastTranscribeError);
+      }
+    } else {
+      if(audioSaveSid===sid) audioSaveState='failed';
+      console.warn('[upright-api] AUDIO UPLOAD FAILED for session', sid);
+    }
+    if(audioSaveSid===sid) renderAudioSave();
+  }
+
+  // What the panel says about the recording. A visit whose audio did not save
+  // has to SAY so, in as many words: the done panel used to report "17:23 of
+  // continuous audio" whether or not a byte of it reached the server, which is
+  // how a lost recording goes unnoticed until somebody looks for it days later.
+  function renderAudioSave(){
+    if(!doneAudio) return;
+    const live = !archiveMode;
+    let msg='', bad=false, retry=false;
+    if(live && audioSaveState==='saving'){ msg='Saving the audio recording\u2026'; }
+    else if(live && audioSaveState==='failed'){
+      bad=true; retry=true;
+      msg='The audio recording did NOT save. It is still on this iPad \u2014 '
+        + 'retry below, or download the session ZIP now, which is the only '
+        + 'copy that does not depend on the network.';
+    } else if(live && audioSaveState==='saved'){ msg='Audio recording saved.'; }
+    doneAudio.textContent = msg;
+    doneAudio.classList.toggle('err', bad);
+    doneAudio.style.display = msg ? '' : 'none';
+    retryAudioBtn.style.display = retry ? 'block' : 'none';
+  }
+
   function finalizeSession(){
     const atype=(audioChunks[0] && audioChunks[0].type) || 'audio/webm';
     finalAudioBlob = audioChunks.length ? new Blob(audioChunks,{type:atype}) : null;
+    audioSaveState = finalAudioBlob ? 'saving' : 'none';
+    audioSaveSid = finalAudioBlob ? sessionId : null;
     if(finalAudioBlob){
       const sid = sessionId; // capture: sessionId is reused if a new session starts
-      apiUpload('/sessions/'+sid+'/audio', finalAudioBlob, { durationSeconds: Math.round(sessionDurationMs()/1000) })
-        .then(()=> apiPostVerbose('/sessions/'+sid+'/transcribe', {}))
-        .then(res=>{
-          if(!res || res.ok) return;
-          // Remember why it failed so Review can show it rather than silently
-          // rendering an empty panel.
-          lastTranscribeError = (res.body && res.body.error) || ('HTTP '+res.status);
-          console.warn('[upright-api] transcribe kick-off failed:', lastTranscribeError);
-        });
+      const secs = Math.round(sessionDurationMs()/1000);
+      outboxSetSeconds(sid, secs);
+      saveAudio(sid, finalAudioBlob, secs);
     }
     const audioSecs=Math.round(sessionDurationMs()/1000);
     const clipSecs=Math.round(recordedMs/1000);
@@ -2625,6 +2840,7 @@
       : (liveSessionAddress ? liveSessionAddress + ' · ' : '');
     doneSub.textContent = addr + (arch ? archiveSummary() : liveDoneSub);
     doneStatus.textContent=''; doneStatus.classList.remove('err');
+    renderAudioSave();
     // Review is driven by the master audio: without it there is nothing to
     // replay, which is not the same as there being nothing to export.
     reviewBtn.style.display = sessionHasAudio() ? 'block' : 'none';
@@ -11586,7 +11802,22 @@
   });
   mountModePicker('start');
 
+  // Retry by hand, for the case the automatic retries could not fix -- walked
+  // out of signal, say. The blob is still in hand, so this is the same upload
+  // again rather than anything clever.
+  retryAudioBtn.addEventListener('click', ()=>{
+    if(!audioSaveBlob || !audioSaveSid) return;
+    audioSaveState='saving'; renderAudioSave();
+    saveAudio(audioSaveSid, audioSaveBlob, audioSaveSecs);
+  });
+
   enableBtn.addEventListener('click', enable);
+
+  // Anything a previous visit left on disk goes up now. Called LAST, after
+  // every declaration above it: read from the top level this would be a
+  // temporal dead zone throw, and that takes the whole script with it -- the
+  // same trap syncGridBtns() and objRefBuild() each hit.
+  recoverOutbox();
 })();
 </script>
 </body>

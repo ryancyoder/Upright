@@ -1326,17 +1326,79 @@ soak test already on the needs-testing list.
 
 ## Data durability — important
 
-All Supabase writes are **fire-and-forget**. Failures are `console.warn`'d,
+Most Supabase writes are **fire-and-forget**. Failures are `console.warn`'d,
 never surfaced, never retried. In-memory arrays (`pins`, `clips`, `sketches`,
 `measures`) plus blobs are the source of truth for the *current* session —
-but that's RAM only. No IndexedDB, no service worker, and no session
-data in localStorage — the one thing stored locally is the **Settings**
-preferences blob (see below), which is UI state and nothing else.
+RAM only. There is still no service worker and no session data in
+localStorage; the one thing kept there is the **Settings** preferences blob,
+which is UI state and nothing else.
 
-Consequence: reload/crash/tab-eviction mid-session loses anything not yet
-uploaded. The **ZIP export is the only offline-durable copy** and is built
-entirely client-side. Transcription does require the round trip, since
-AssemblyAI fetches the audio from Storage.
+Consequence, still true for everything except the audio: reload/crash/
+tab-eviction mid-session loses anything not yet uploaded, and the **ZIP export
+is the only offline-durable copy** of the rest. Transcription needs the round
+trip either way, since AssemblyAI fetches the audio from Storage.
+
+### The audio is the exception, and it is written to disk as it records
+
+**This reverses the "no IndexedDB" rule above, on purpose, because the rule
+cost a real visit.** On 31 Aug a 20-minute recording was lost: the audio was
+captured perfectly and played back in Review, and its single upload at the end
+never reached the server. Everything else in that same second returned 200 and
+31 MB of clips had already gone up during the visit, so it was not the network.
+
+Three things hid it, and all three are fixed:
+
+- `apiUpload()` swallowed the failure into a `console.warn` and returned
+  `null`. Because `null` is not a rejection, **the chain carried on and asked
+  the server to transcribe audio that had just failed to upload.** The 400 that
+  came back — *"session has no audio yet"* — was stored as `lastTranscribeError`,
+  a **transcription** error. So a lost recording was reported to the user as a
+  failed transcript, which reads as a bad connection. `saveAudio()` now only
+  reaches the transcribe call when the upload actually succeeded.
+- There was no retry. `apiUploadRetry()` gives the audio four attempts at
+  0/2/4/8s — it is the one artefact of a visit that cannot be recreated, so it
+  is the one write here that is not fire-and-forget, the same reasoning as
+  naming a session.
+- The done panel said *"17:23 of continuous audio"* whether or not a byte of it
+  saved. `renderAudioSave()` writes the recording's actual fate to `#doneAudio`
+  — its own line, not shared with `doneStatus`, because the property-match
+  report lands there a second later and would overwrite it.
+
+**The outbox.** `audioRecorder.start(1000)` was already producing a chunk a
+second, so each one is now written to IndexedDB as it arrives — one small write
+per second, and the worst case becomes losing the **last second** rather than
+the visit. `recoverOutbox()` runs at app open and sends anything a previous
+visit stranded. Four things in it are load-bearing:
+
+- **ArrayBuffer, not Blob.** Safari has a long history of failing to store
+  Blobs in IndexedDB.
+- **The seq is taken synchronously**, before the async read to an ArrayBuffer.
+  These chunks are fragments of one stream, not standalone files — only the
+  concatenation from the first is playable — so ordering is the whole thing.
+- **Every call is wrapped and resolves rather than rejects.** Safari throws on
+  storage in private browsing, and a storage failure must never be able to stop
+  a recording that is otherwise working. `test65.js` covers exactly that: with
+  `indexedDB` throwing on access, the session still records and uploads.
+- **It is a staging buffer, not an archive.** iOS evicts site data under
+  pressure and after disuse, so a session is dropped the moment its upload
+  succeeds and nothing here is treated as durable.
+
+`recoverOutbox()` is called at the very END of the script, after every
+declaration — read from the top level it is a temporal dead zone throw that
+takes the whole script with it, the same trap `syncGridBtns()` and
+`objRefBuild()` each hit.
+
+`test65.js` drives a real session with fake media devices, real MediaRecorder
+and real IndexedDB, stubbing only the network: chunks reach disk while
+recording, a failed upload says so and does **not** request a transcript, the
+recording survives on disk, a hand retry saves it and only then transcribes,
+and a stranded session is recovered on the next open. 26 checks. Two mutations
+are pinned: restoring the unconditional transcribe turns 4 red, and removing
+the per-chunk disk write turns 2 red.
+
+**Not yet extended to photos and clips.** They are individually replaceable in
+a way the master recording is not, and each already uploads during the visit
+rather than in one lump at the end. The outbox is shaped so they could join it.
 
 ## Settled — don't re-litigate
 
@@ -2557,7 +2619,9 @@ fixtures.
   Distort plus Tip / Turn / Straighten); the map's plan overlay still only
   pinches, twists and drags.
 - ZIP **import** to view old sessions offline. The ZIP already contains everything needed (audio, clips + offsets, photos + offsets, GeoJSON) — except the transcript, which lives only in Supabase. Consider adding `transcript.json` to the export.
-- Retry logic / sync-later indicator for failed uploads.
+- Retry logic / sync-later indicator for failed uploads **of photos, clips and
+  the survey**. The audio has both now — see *Data durability* — and the outbox
+  is shaped so the rest could join it.
 - Client-facing deliverable (PDF or web page vs raw GeoJSON/ZIP).
 - Text labels on the map; richer desk-side annotation editor; reference-object photo measuring.
 
